@@ -4,7 +4,7 @@ import SwiftData
 /// 主界面：ChatGPT 风格的侧栏 + 对话区。
 struct MainView: View {
     @EnvironmentObject var credentials: CredentialStore
-    @State private var selectedExpertId: String = ExpertCatalog.general.id
+    @State private var selectedExpertId: String? = ExpertCatalog.general.id
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
@@ -12,8 +12,8 @@ struct MainView: View {
             SidebarView(selectedExpertId: $selectedExpertId)
                 .navigationTitle("Boss AI")
         } detail: {
-            ChatContainerView(expert: ExpertCatalog.find(selectedExpertId))
-                .id(selectedExpertId) // 切换专家时重建对话视图
+            ChatContainerView(expert: ExpertCatalog.find(selectedExpertId ?? ExpertCatalog.general.id))
+                .id(selectedExpertId ?? ExpertCatalog.general.id) // 切换专家时重建对话视图
         }
         .navigationSplitViewStyle(.balanced)
     }
@@ -21,13 +21,13 @@ struct MainView: View {
 
 /// 侧栏：普通对话 + 10 个专家入口
 struct SidebarView: View {
-    @Binding var selectedExpertId: String
+    @Binding var selectedExpertId: String?
 
     var body: some View {
         List(selection: $selectedExpertId) {
             Section {
                 Label(ExpertCatalog.general.name, systemImage: ExpertCatalog.general.symbol)
-                    .tag(ExpertCatalog.general.id)
+                    .tag(String?.some(ExpertCatalog.general.id))
             }
             Section("专家顾问") {
                 ForEach(ExpertCatalog.experts) { expert in
@@ -42,7 +42,7 @@ struct SidebarView: View {
                         Image(systemName: expert.symbol)
                             .foregroundStyle(Color.accentColor)
                     }
-                    .tag(expert.id)
+                    .tag(String?.some(expert.id))
                 }
             }
         }
