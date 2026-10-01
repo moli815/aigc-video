@@ -1,0 +1,10 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/
+!project.yml
+.DS_Store
+Payload/
+*.ipa
