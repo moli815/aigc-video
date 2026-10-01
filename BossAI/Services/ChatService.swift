@@ -113,7 +113,7 @@ final class ChatService {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
-        })
+        }
     }
 
     /// 工具定义：内置联网搜索 + 自定义生图
