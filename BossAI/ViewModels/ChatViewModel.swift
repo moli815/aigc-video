@@ -29,9 +29,11 @@ final class ChatViewModel: ObservableObject {
         self.conversation = conversation
         self.expert = expert
         self.modelContext = modelContext
-        self.chatService = ChatService(apiKeyProvider: chatKey)
-        self.imageService = ImageService(apiKeyProvider: imageKey)
-        self.memoryService = MemoryService(apiKeyProvider: chatKey)
+        let chatProfile = ProviderCatalog.currentChat()
+        let imageProfile = ProviderCatalog.currentImage()
+        self.chatService = ChatService(profile: chatProfile, apiKeyProvider: chatKey)
+        self.imageService = ImageService(profile: imageProfile, apiKeyProvider: imageKey)
+        self.memoryService = MemoryService(profile: chatProfile, apiKeyProvider: chatKey)
     }
 
     var sortedMessages: [Message] {
