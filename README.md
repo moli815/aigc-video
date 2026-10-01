@@ -8,12 +8,25 @@
 
 ### 第 1 步：申请两个 API Key（约 10 分钟）
 
-| Key | 申请地址 | 说明 |
-|---|---|---|
-| 对话 Key | https://platform.moonshot.cn （Moonshot 开放平台） | 注册 → 实名 → 「API Key 管理」→ 新建 |
-| 作图 Key | https://console.volcengine.com/ark （火山引擎方舟） | 注册 → 开通「模型服务」→ 创建 API Key，确认 Seedream 4.0 已开通 |
+**对话 Key（五选一，粘贴后 App 自动识别厂商）：**
 
-两个平台都需充值少量金额（各充 10~20 元够用很久）。
+| 厂商 | 申请地址 | 特点 |
+|---|---|---|
+| Kimi（推荐） | https://platform.moonshot.cn | 内置联网搜索，agent 能力强 |
+| 豆包/火山方舟（省事） | https://console.volcengine.com/ark | **与作图 Key 可以是同一个**，内置搜索 |
+| DeepSeek | https://platform.deepseek.com | 最便宜、推理强，但**无联网搜索** |
+| 智谱 GLM | https://open.bigmodel.cn | 内置搜索，工具调用稳定 |
+| 通义千问 | https://bailian.console.aliyun.com | 1M 长上下文，支持搜索 |
+
+**作图 Key（二选一，自动识别）：**
+
+| 厂商 | 申请地址 | 特点 |
+|---|---|---|
+| 火山引擎 Seedream 4.0（推荐） | https://console.volcengine.com/ark | 中文文字渲染最强，支持多轮改图 |
+| 智谱 CogView | https://open.bigmodel.cn | 备选，不支持改图 |
+
+> 最省事组合：火山方舟一个 Key 同时填两个框（对话用豆包 + 作图用 Seedream）。
+> 各平台需实名认证并充值少量金额（10~20 元够用很久）。
 
 ### 第 2 步：下载编译好的安装包（IPA）
 
@@ -72,15 +85,15 @@
 
 | 模块 | 实现 |
 |---|---|
-| 对话模型 | Kimi K2（Moonshot，内置 `$web_search` 联网搜索），OpenAI 兼容协议，国内直连 |
-| 图像生成 | 字节 Seedream 4.0（火山引擎），自定义 `generate_image` function calling 智能调用 |
+| 对话模型 | 按 Key 自动识别：Kimi / DeepSeek / 智谱 / 通义 / 豆包，OpenAI 兼容协议，国内直连 |
+| 联网搜索 | 按厂商自动适配（Kimi 内置工具 / 智谱 web_search / 通义 enable_search / 火山 web_search；DeepSeek 无搜索） |
+| 图像生成 | 按 Key 自动识别：火山 Seedream 4.0 / 智谱 CogView，自定义 `generate_image` function calling 智能调用 |
 | 语音输入 | Apple Speech 框架（zh-CN） |
 | 记忆 | SwiftData 本地存储 + 后台自动抽取（每 3 轮对话） |
 | 界面 | SwiftUI，iOS 17+ |
-| 编译 | GitHub Actions（macos-14）→ XcodeGen → xcodebuild 未签名 IPA |
+| 编译 | GitHub Actions（macos-14 + Xcode 16.2）→ XcodeGen → xcodebuild 未签名 IPA |
 
-切换对话模型：编辑 `BossAI/Config/AppConfig.swift`（如改 DeepSeek：`https://api.deepseek.cn/v1`，
-注意 DeepSeek 官方 API 无内置联网搜索，搜索功能将不可用）。
+服务商档案与识别逻辑见 `BossAI/Services/ProviderProfiles.swift`，要加新厂商在候选数组里加一条即可。
 
 ## 目录结构
 
