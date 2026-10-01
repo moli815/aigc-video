@@ -6,7 +6,8 @@ struct SetupView: View {
     @EnvironmentObject var credentials: CredentialStore
     @State private var chatKey = ""
     @State private var imageKey = ""
-    @State private var showError = false
+    @State private var isDetecting = false
+    @State private var detectError: String?
 
     var body: some View {
         VStack(spacing: 32) {
@@ -34,7 +35,7 @@ struct SetupView: View {
                     Text("对话 API Key")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
-                    SecureField("Kimi / DeepSeek 的 API Key", text: $chatKey)
+                    SecureField("Kimi / DeepSeek / 智谱 / 通义 / 豆包 均可", text: $chatKey)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.password)
                         .autocorrectionDisabled()
@@ -44,13 +45,13 @@ struct SetupView: View {
                     Text("作图 API Key")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
-                    SecureField("火山引擎（Seedream）的 API Key", text: $imageKey)
+                    SecureField("火山引擎 Seedream / 智谱 CogView 均可", text: $imageKey)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.password)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
-                Text("Key 仅保存在本机钥匙串，不会上传。首次配置后此页面不再出现。")
+                Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。首次配置后此页面不再出现。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -58,29 +59,67 @@ struct SetupView: View {
             .padding(.horizontal, 32)
 
             Button {
-                let c = chatKey.trimmingCharacters(in: .whitespaces)
-                let i = imageKey.trimmingCharacters(in: .whitespaces)
-                if c.isEmpty || i.isEmpty {
-                    showError = true
-                } else {
-                    credentials.save(chatKey: c, imageKey: i)
-                }
+                start()
             } label: {
-                Text("开始使用")
-                    .font(.headline)
+                if isDetecting {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small).tint(.white)
+                        Text("正在识别服务商…")
+                            .font(.headline)
+                    }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
+                } else {
+                    Text("开始使用")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(isDetecting)
             .padding(.horizontal, 32)
-            .alert("请填写两个 API Key", isPresented: $showError) {
-                Button("好", role: .cancel) {}
+
+            if let detectError {
+                Text(detectError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
             }
 
             Spacer()
             Spacer()
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private func start() {
+        let c = chatKey.trimmingCharacters(in: .whitespaces)
+        let i = imageKey.trimmingCharacters(in: .whitespaces)
+        guard !c.isEmpty, !i.isEmpty else {
+            detectError = "请填写两个 API Key"
+            return
+        }
+        detectError = nil
+        isDetecting = true
+        Task {
+            async let chatProfile = ProviderDetector.detectChat(key: c)
+            async let imageProfile = ProviderDetector.detectImage(key: i)
+            let (chat, image) = await (chatProfile, imageProfile)
+            isDetecting = false
+            guard let chat else {
+                detectError = "对话 Key 无法识别：请确认 Key 正确且对应平台已充值开通"
+                return
+            }
+            guard let image else {
+                detectError = "作图 Key 无法识别：请确认 Key 正确且已开通生图模型"
+                return
+            }
+            ProviderCatalog.saveChatProvider(chat.id)
+            ProviderCatalog.saveImageProvider(image.id)
+            credentials.save(chatKey: c, imageKey: i)
+        }
     }
 }
