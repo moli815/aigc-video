@@ -1,7 +1,7 @@
 import Foundation
 
-/// 图像服务：火山引擎 Seedream 4.0（OpenAI 兼容 images/generations）。
-/// 支持文生图与参考图编辑（Seedream 4.0 原生支持）。
+/// 图像服务：按识别到的服务商档案调用（火山 Seedream 4.0 / 智谱 CogView）。
+/// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）。
 final class ImageService {
     enum ImageError: LocalizedError {
         case missingKey, badResponse(Int, String), noImage
@@ -14,31 +14,40 @@ final class ImageService {
         }
     }
 
+    private let profile: ImageProfile
     private let apiKeyProvider: () -> String?
-    init(apiKeyProvider: @escaping () -> String?) {
+    init(profile: ImageProfile, apiKeyProvider: @escaping () -> String?) {
+        self.profile = profile
         self.apiKeyProvider = apiKeyProvider
     }
 
-    /// 生成图片；reference 非空时为参考图编辑（多轮改图）。
+    /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
+    /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     func generate(prompt: String, reference: Data? = nil) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
 
-        var request = URLRequest(url: URL(string: "\(AppConfig.imageBaseURL)/images/generations")!)
+        var request = URLRequest(url: URL(string: "\(profile.baseURL)/images/generations")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 180
 
         var body: [String: Any] = [
-            "model": AppConfig.imageModel,
+            "model": profile.model,
             "prompt": prompt,
-            "size": "2K",
-            "response_format": "b64_json",
-            "watermark": false,
         ]
-        if let reference {
-            // 火山方舟 Seedream 4.0 参考图：base64 data URI
-            body["image"] = "data:image/png;base64,\(reference.base64EncodedString())"
+        switch profile.style {
+        case .volc:
+            body["size"] = "2K"
+            body["response_format"] = "b64_json"
+            body["watermark"] = false
+            if let reference {
+                // 火山方舟 Seedream 4.0 参考图：base64 data URI
+                body["image"] = "data:image/png;base64,\(reference.base64EncodedString())"
+            }
+        case .zhipu:
+            // CogView：仅文生图，返回 URL
+            break
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
