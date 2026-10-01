@@ -117,31 +117,35 @@ final class ChatService {
     }
 
     /// 工具定义：内置联网搜索 + 自定义生图
-    static let toolsDefinition: [[String: Any]] = [
-        [
-            "type": "builtin_function",
-            "function": ["name": "$web_search"],
-        ],
-        [
-            "type": "function",
-            "function": [
-                "name": "generate_image",
-                "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。返回后图片会自动展示给用户，你只需补充简短说明。",
-                "parameters": [
-                    "type": "object",
-                    "properties": [
-                        "prompt": [
-                            "type": "string",
-                            "description": "详细的图像描述（中文），包含主体、风格、构图、文字内容等",
-                        ],
-                        "edit_last_image": [
-                            "type": "boolean",
-                            "description": "是否基于对话中最近一张生成的图片进行编辑修改",
-                        ],
-                    ] as [String: Any],
-                    "required": ["prompt"],
-                ] as [String: Any],
-            ] as [String: Any],
-        ],
-    ]
+    static let toolsDefinition: [[String: Any]] = {
+        let generateImageParameters: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "prompt": [
+                    "type": "string",
+                    "description": "详细的图像描述（中文），包含主体、风格、构图、文字内容等",
+                ],
+                "edit_last_image": [
+                    "type": "boolean",
+                    "description": "是否基于对话中最近一张生成的图片进行编辑修改",
+                ],
+            ],
+            "required": ["prompt"],
+        ]
+        let generateImageFunction: [String: Any] = [
+            "name": "generate_image",
+            "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。返回后图片会自动展示给用户，你只需补充简短说明。",
+            "parameters": generateImageParameters,
+        ]
+        return [
+            [
+                "type": "builtin_function",
+                "function": ["name": "$web_search"],
+            ],
+            [
+                "type": "function",
+                "function": generateImageFunction,
+            ],
+        ]
+    }()
 }
