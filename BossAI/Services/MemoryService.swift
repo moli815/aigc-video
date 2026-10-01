@@ -5,8 +5,10 @@ import SwiftData
 /// 注入时拼进 system prompt，效果对齐 ChatGPT 记忆。
 @MainActor
 final class MemoryService {
+    private let profile: ChatProfile
     private let apiKeyProvider: () -> String?
-    init(apiKeyProvider: @escaping () -> String?) {
+    init(profile: ChatProfile, apiKeyProvider: @escaping () -> String?) {
+        self.profile = profile
         self.apiKeyProvider = apiKeyProvider
     }
 
@@ -45,13 +47,13 @@ final class MemoryService {
         \(recentDialogue)
         """
 
-        var request = URLRequest(url: URL(string: "\(AppConfig.chatBaseURL)/chat/completions")!)
+        var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 60
         let body: [String: Any] = [
-            "model": AppConfig.memoryModel,
+            "model": profile.memoryModel,
             "messages": [["role": "user", "content": prompt]],
             "temperature": 0.1,
         ]
