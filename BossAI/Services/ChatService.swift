@@ -27,8 +27,10 @@ final class ChatService {
         }
     }
 
+    private let profile: ChatProfile
     private let apiKeyProvider: () -> String?
-    init(apiKeyProvider: @escaping () -> String?) {
+    init(profile: ChatProfile, apiKeyProvider: @escaping () -> String?) {
+        self.profile = profile
         self.apiKeyProvider = apiKeyProvider
     }
 
@@ -38,20 +40,20 @@ final class ChatService {
             let task = Task {
                 do {
                     guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ChatError.missingKey }
-                    var request = URLRequest(url: URL(string: "\(AppConfig.chatBaseURL)/chat/completions")!)
+                    var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
                     request.httpMethod = "POST"
                     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     request.timeoutInterval = 120
 
                     var body: [String: Any] = [
-                        "model": AppConfig.chatModel,
+                        "model": profile.model,
                         "messages": messages,
                         "stream": true,
                         "temperature": 0.6,
                     ]
                     if enableTools {
-                        body["tools"] = Self.toolsDefinition
+                        applyTools(to: &body)
                     }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -116,8 +118,40 @@ final class ChatService {
         }
     }
 
-    /// 工具定义：内置联网搜索 + 自定义生图
-    static let toolsDefinition: [[String: Any]] = {
+    /// 按服务商适配工具挂载方式
+    private func applyTools(to body: inout [String: Any]) {
+        switch profile.searchStyle {
+        case .kimiBuiltin:
+            // Kimi 内置搜索工具 + 自定义生图
+            body["tools"] = [
+                ["type": "builtin_function", "function": ["name": "$web_search"]],
+                ["type": "function", "function": Self.generateImageFunction],
+            ]
+        case .zhipuTool:
+            body["tools"] = [
+                ["type": "web_search", "web_search": ["enable": true]],
+                ["type": "function", "function": Self.generateImageFunction],
+            ]
+        case .volcTool:
+            body["tools"] = [
+                ["type": "web_search"],
+                ["type": "function", "function": Self.generateImageFunction],
+            ]
+        case .dashscopeParam:
+            // 阿里通义：搜索是请求参数而非工具
+            body["enable_search"] = true
+            body["tools"] = [
+                ["type": "function", "function": Self.generateImageFunction],
+            ]
+        case .none:
+            body["tools"] = [
+                ["type": "function", "function": Self.generateImageFunction],
+            ]
+        }
+    }
+
+    /// 自定义生图工具定义
+    static let generateImageFunction: [String: Any] = {
         let generateImageParameters: [String: Any] = [
             "type": "object",
             "properties": [
@@ -132,20 +166,11 @@ final class ChatService {
             ],
             "required": ["prompt"],
         ]
-        let generateImageFunction: [String: Any] = [
+        let functionDefinition: [String: Any] = [
             "name": "generate_image",
             "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。返回后图片会自动展示给用户，你只需补充简短说明。",
             "parameters": generateImageParameters,
         ]
-        return [
-            [
-                "type": "builtin_function",
-                "function": ["name": "$web_search"],
-            ],
-            [
-                "type": "function",
-                "function": generateImageFunction,
-            ],
-        ]
+        return functionDefinition
     }()
 }
