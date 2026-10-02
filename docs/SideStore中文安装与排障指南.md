@@ -98,6 +98,15 @@ SideStore 也打不开了：回电脑用 iLoader 重装一遍（数据不丢）�
 3. iPad 上重新点「信任此电脑」
 4. 换 USB 口（优先机箱后置 USB 2.0 口，避开 Hub）
 
+### FAQ-8b iLoader 报错「Failed to enable wifi debugging: MissingValue」
+社区高频错误，按顺序处理：
+1. **iPad 必须已设置锁屏密码**（没密码设备会拒绝开 WiFi 调试，正是此错）
+2. 操作全程 iPad 保持**解锁亮屏停在主屏幕**（临时把"自动锁定"改成"永不"）
+3. 重插数据线，重新点「信任此电脑」，重启 iLoader
+4. 打开官网版 iTunes → 设备 → 摘要 → 勾选**「通过 Wi-Fi 与此 iPad 同步」**→ 应用，再回 iLoader 重试
+5. Win+R → `services.msc` → 重启 **Apple Mobile Device Service**，电脑和 iPad 都重启
+6. 仍不行：换线/换 USB 口，确认 iTunes/iCloud 是官网桌面版
+
 ### FAQ-9 装完 Boss AI 过段时间提示"证书过期/无法验证"
 说明 SideStore 这轮没自动续上（iOS 后台调度偶尔不准时）。
 打开 SideStore 点一次 **Refresh All** 立刻恢复，聊天记录和记忆都在。
