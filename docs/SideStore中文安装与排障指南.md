@@ -107,6 +107,12 @@ SideStore 也打不开了：回电脑用 iLoader 重装一遍（数据不丢）�
 5. Win+R → `services.msc` → 重启 **Apple Mobile Device Service**，电脑和 iPad 都重启
 6. 仍不行：换线/换 USB 口，确认 iTunes/iCloud 是官网桌面版
 
+### FAQ-8c Apple Mobile Device Service「启动后停止」
+services.msc 里启动该服务时提示"服务启动后停止……"＝**苹果服务组件残缺**（常见于没装过官网版 iTunes、只装过零散苹果组件的电脑）。
+唯一可靠解法：从 https://www.apple.com/itunes/download/win64 下载 **Windows exe 安装包**
+（注意别被引导去微软商店，商店版驱动不全），安装时选「修复」，装完**重启电脑**。
+之后服务即可正常运行。切勿只装微软商店版 iTunes/iCloud。
+
 ### FAQ-9 装完 Boss AI 过段时间提示"证书过期/无法验证"
 说明 SideStore 这轮没自动续上（iOS 后台调度偶尔不准时）。
 打开 SideStore 点一次 **Refresh All** 立刻恢复，聊天记录和记忆都在。
