@@ -78,10 +78,19 @@ SideStore 也打不开了：回电脑用 iLoader 重装一遍（数据不丢）�
 4. SideStore 设置里换一个 Anisette 服务器（默认服务器偶尔抽风）
 5. 都不行 → 重新生成配对文件（见 FAQ-5）
 
-### FAQ-5 配对文件报错（invalid / expired / 不是本设备）
-配对文件和设备是一一绑定的，换设备、还原系统、用别人的文件都会报这个错。
-解决：回电脑用 iLoader 重新生成并导入。
-**社区经验：配对文件约两周~一个月可能自然失效一次，失效了重新生成即可，属正常现象。**
+### FAQ-5 配对文件报错（pairing REQUIRED / invalid / expired / 不是本设备）
+表现为 SideStore 里显示 **「Pairing Required: without a valid pairing file」**。
+配对文件和设备一一绑定，换设备、还原系统、用别人的文件、或 iLoader 未自动放置都会报此错。
+
+**用 iLoader 重新放置（官方标准做法）：**
+1. iPad 连电脑（解锁亮屏）
+2. iLoader 点 **「Delete Stored Pairing」** 清掉旧文件
+3. 设备列表点选你的 iPad，iPad 上点「信任」
+4. 点 **「Manage Pairing File」**，在 **SideStore** 行右侧点 **「Place」**
+5. 出现绿色提示 **「Pairing file placed successfully!」** 即成功
+6. 仍报错 → **iPad 和电脑各重启一次**，重复上述步骤
+
+**社区经验：配对文件约 2~4 周可能自然失效一次（苹果的问题），失效后重新「Place」一次即可，属正常现象，不是配置错误。**
 
 ### FAQ-6 设备未注册 / UDID 报错 / 一直 processing
 苹果第一次见这台设备，注册需要 **24~72 小时**，不是坏了。
