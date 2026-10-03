@@ -12,7 +12,20 @@ final class CredentialStore: ObservableObject {
     }
 
     init() {
+        seedBakedKeys()
         reload()
+    }
+
+    /// 首次启动：把内置 Key 写入钥匙串（之后仍可在隐藏设置中修改）
+    private func seedBakedKeys() {
+        if KeychainHelper.read(service: AppConfig.keychainService, account: AppConfig.chatKeyAccount) == nil,
+           !AppConfig.bakedChatKey.isEmpty {
+            KeychainHelper.save(AppConfig.bakedChatKey, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
+        }
+        if KeychainHelper.read(service: AppConfig.keychainService, account: AppConfig.imageKeyAccount) == nil,
+           !AppConfig.bakedImageKey.isEmpty {
+            KeychainHelper.save(AppConfig.bakedImageKey, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+        }
     }
 
     func reload() {
@@ -26,7 +39,7 @@ final class CredentialStore: ObservableObject {
         reload()
     }
 
-    /// 隐藏入口：长按 Logo 5 秒重新打开配置页时调用（只读当前值回填，不删除）
+    /// 隐藏入口：连点标题进入配置页时可调用（清空当前 Key，用于换号）
     func clear() {
         KeychainHelper.delete(service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
         KeychainHelper.delete(service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
