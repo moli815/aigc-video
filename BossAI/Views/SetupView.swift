@@ -105,6 +105,15 @@ struct SetupView: View {
                     .padding(.vertical, 4)
                 }
                 .font(.subheadline)
+                if isModal {
+                    Button {
+                        credentials.resetToBaked()
+                        prefill()
+                    } label: {
+                        Label("恢复内置 Key", systemImage: "arrow.counterclockwise")
+                            .font(.footnote)
+                    }
+                }
                 Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
