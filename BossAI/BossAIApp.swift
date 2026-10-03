@@ -8,11 +8,10 @@ struct BossAIApp: App {
     var body: some Scene {
         WindowGroup {
             if credentials.isConfigured {
-                MainView()
+                MainView().environmentObject(credentials)
             } else {
-                SetupView()
+                SetupView().environmentObject(credentials)
             }
-            .environmentObject(credentials)
         }
         .modelContainer(for: [Conversation.self, Message.self, MemoryItem.self])
     }
