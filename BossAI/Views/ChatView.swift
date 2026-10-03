@@ -33,11 +33,12 @@ struct ChatContainerView: View {
 
     var body: some View {
         Group {
-            if let vm = viewModelHolder.vm {
+            if let vm = viewModelHolder.vm, vm.expert.id == expert.id {
                 ChatView(viewModel: vm, expert: expert)
             } else {
-                ProgressView()
-                    .onAppear {
+                Color.clear
+                    .task(id: expert.id) {
+                        // 切换专家时重建会话逻辑（修复来回切换无响应）
                         viewModelHolder.vm = ChatViewModel(
                             conversation: conversation,
                             expert: expert,
