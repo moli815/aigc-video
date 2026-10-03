@@ -13,9 +13,11 @@ final class ChatViewModel: ObservableObject {
     let conversation: Conversation
     let expert: Expert
 
-    private let chatService: ChatService
-    private let imageService: ImageService
-    private let memoryService: MemoryService
+    private var chatService: ChatService { ChatService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
+    private var imageService: ImageService { ImageService(profile: ProviderCatalog.currentImage(), apiKeyProvider: imageKey) }
+    private var memoryService: MemoryService { MemoryService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
+    private let chatKey: () -> String?
+    private let imageKey: () -> String?
     private let modelContext: ModelContext
 
     /// 距上次记忆抽取的轮数
@@ -29,11 +31,8 @@ final class ChatViewModel: ObservableObject {
         self.conversation = conversation
         self.expert = expert
         self.modelContext = modelContext
-        let chatProfile = ProviderCatalog.currentChat()
-        let imageProfile = ProviderCatalog.currentImage()
-        self.chatService = ChatService(profile: chatProfile, apiKeyProvider: chatKey)
-        self.imageService = ImageService(profile: imageProfile, apiKeyProvider: imageKey)
-        self.memoryService = MemoryService(profile: chatProfile, apiKeyProvider: chatKey)
+        self.chatKey = chatKey
+        self.imageKey = imageKey
     }
 
     var sortedMessages: [Message] {
