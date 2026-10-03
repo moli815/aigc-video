@@ -8,8 +8,18 @@ struct SetupView: View {
     @State private var imageKey = ""
     @State private var chatModelOverride = ""
     @State private var imageModelOverride = ""
+    @State private var budgetLimit = ""
     @State private var isDetecting = false
     @State private var detectError: String?
+
+    private func prefill() {
+        chatKey = credentials.chatKey ?? ""
+        imageKey = credentials.imageKey ?? ""
+        chatModelOverride = ProviderCatalog.chatModelOverride()
+        imageModelOverride = ProviderCatalog.imageModelOverride()
+        let l = BudgetTracker.limit()
+        budgetLimit = l > 0 ? String(format: "%.0f", l) : ""
+    }
 
     var body: some View {
         VStack(spacing: 32) {
@@ -53,8 +63,12 @@ struct SetupView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
-                DisclosureGroup("高级设置（模型报 404 时才需要填）") {
+                DisclosureGroup("高级设置（预算 / 模型报 404 时才需要填）") {
                     VStack(alignment: .leading, spacing: 6) {
+                        Text("每月预算上限（元，0 = 不限）").font(.footnote).foregroundStyle(.secondary)
+                        TextField("0", text: $budgetLimit)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.decimalPad)
                         Text("自定义对话模型 ID").font(.footnote).foregroundStyle(.secondary)
                         TextField("留空使用默认", text: $chatModelOverride)
                             .textFieldStyle(.roundedBorder)
@@ -114,6 +128,7 @@ struct SetupView: View {
             Spacer()
         }
         .accessibilityElement(children: .contain)
+        .onAppear { prefill() }
     }
 
     private func start() {
@@ -125,7 +140,9 @@ struct SetupView: View {
         }
         detectError = nil
         isDetecting = true
-        // 保存模型覆盖（留空即恢复默认）
+        // 保存预算与模型覆盖（留空即恢复默认/不限）
+        let budgetText = budgetLimit.trimmingCharacters(in: .whitespaces)
+        BudgetTracker.setLimit(Double(budgetText) ?? 0)
         ProviderCatalog.saveChatModelOverride(chatModelOverride.trimmingCharacters(in: .whitespaces))
         ProviderCatalog.saveImageModelOverride(imageModelOverride.trimmingCharacters(in: .whitespaces))
         Task {
