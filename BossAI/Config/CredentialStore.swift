@@ -17,15 +17,17 @@ final class CredentialStore: ObservableObject {
     }
 
     /// 首次启动：把内置 Key 写入钥匙串（之后仍可在隐藏设置中修改）
+    /// v2：本版本起强制覆盖一次——修复旧版本残留的无效 Key 导致 401
     private func seedBakedKeys() {
-        if KeychainHelper.read(service: AppConfig.keychainService, account: AppConfig.chatKeyAccount) == nil,
-           !AppConfig.bakedChatKey.isEmpty {
+        let flag = "bossai.baked_seed_v2"
+        if UserDefaults.standard.bool(forKey: flag) { return }
+        if !AppConfig.bakedChatKey.isEmpty {
             KeychainHelper.save(AppConfig.bakedChatKey, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
         }
-        if KeychainHelper.read(service: AppConfig.keychainService, account: AppConfig.imageKeyAccount) == nil,
-           !AppConfig.bakedImageKey.isEmpty {
+        if !AppConfig.bakedImageKey.isEmpty {
             KeychainHelper.save(AppConfig.bakedImageKey, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
         }
+        UserDefaults.standard.set(true, forKey: flag)
     }
 
     func reload() {
@@ -36,6 +38,17 @@ final class CredentialStore: ObservableObject {
     func save(chatKey: String, imageKey: String) {
         KeychainHelper.save(chatKey, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
         KeychainHelper.save(imageKey, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+        reload()
+    }
+
+    /// 一键恢复为内置 Key（隐藏设置里用）
+    func resetToBaked() {
+        if !AppConfig.bakedChatKey.isEmpty {
+            KeychainHelper.save(AppConfig.bakedChatKey, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
+        }
+        if !AppConfig.bakedImageKey.isEmpty {
+            KeychainHelper.save(AppConfig.bakedImageKey, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+        }
         reload()
     }
 
