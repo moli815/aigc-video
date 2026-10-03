@@ -16,10 +16,15 @@ struct MainView: View {
                 showPinEntry = true
             }
         } detail: {
+            // .id 强制切换专家时整个容器重建，确保状态彻底隔离
             ChatContainerView(expert: ExpertCatalog.find(selectedExpertId ?? ExpertCatalog.general.id))
+                .id(selectedExpertId ?? ExpertCatalog.general.id)
         }
         .navigationSplitViewStyle(.balanced)
         .task { ensureProvidersDetected() }
+        .onReceive(NotificationCenter.default.publisher(for: .bossAIKeysChanged)) { _ in
+            ensureProvidersDetected()
+        }
         .sheet(isPresented: $showPinEntry) {
             HiddenPinGate {
                 // 先收起密码页，再弹出设置页（避免两个 sheet 同时切换）
