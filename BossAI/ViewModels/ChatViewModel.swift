@@ -41,6 +41,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     func send() {
+        // 月度预算硬闸
+        if BudgetTracker.isExceeded() {
+            errorMessage = String(format: "已达本月预算上限（¥%.0f，本月已用约 ¥%.2f）。长按侧栏 Boss AI 图标进入设置可调整预算。", BudgetTracker.limit(), BudgetTracker.spent())
+            return
+        }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isStreaming else { return }
         inputText = ""
@@ -163,6 +168,14 @@ final class ChatViewModel: ObservableObject {
         }
 
         try? modelContext.save()
+
+        // 记账：预算追踪（按字符数粗估 token）
+        let promptTokens = BudgetTracker.estimateTokens(userText)
+        let completionTokens = BudgetTracker.estimateTokens(
+            sortedMessages.suffix(2).map { $0.text }.joined()
+        )
+        BudgetTracker.add(promptTokens: promptTokens, completionTokens: completionTokens,
+                          providerId: ProviderCatalog.currentChat().id)
 
         // 后台记忆抽取（每 3 轮一次，不阻塞 UI）
         roundsSinceExtraction += 1
