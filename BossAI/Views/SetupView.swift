@@ -4,6 +4,9 @@ import SwiftUI
 /// 成功后写入 Keychain，页面从导航栈彻底移除，App 内不再出现任何登录入口。
 struct SetupView: View {
     @EnvironmentObject var credentials: CredentialStore
+    @Environment(\.dismiss) private var dismiss
+    /// 从隐藏入口以 sheet 打开时显示关闭按钮，保存成功后自动收起
+    var isModal = false
     @State private var chatKey = ""
     @State private var imageKey = ""
     @State private var chatModelOverride = ""
@@ -11,6 +14,7 @@ struct SetupView: View {
     @State private var budgetLimit = ""
     @State private var isDetecting = false
     @State private var detectError: String?
+    @State private var saved = false
 
     private func prefill() {
         chatKey = credentials.chatKey ?? ""
@@ -23,6 +27,18 @@ struct SetupView: View {
 
     var body: some View {
         VStack(spacing: 32) {
+            if isModal {
+                HStack {
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.trailing, 20)
+                }
+            }
             Spacer()
 
             // Boss AI Logo
@@ -69,6 +85,9 @@ struct SetupView: View {
                         TextField("0", text: $budgetLimit)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
+                        Text("本月已用约 ¥\(String(format: "%.2f", BudgetTracker.spent()))，每月 1 日自动清零")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         Text("自定义对话模型 ID").font(.footnote).foregroundStyle(.secondary)
                         TextField("留空使用默认", text: $chatModelOverride)
                             .textFieldStyle(.roundedBorder)
@@ -86,7 +105,7 @@ struct SetupView: View {
                     .padding(.vertical, 4)
                 }
                 .font(.subheadline)
-                Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。首次配置后此页面不再出现。")
+                Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -105,7 +124,7 @@ struct SetupView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                 } else {
-                    Text("开始使用")
+                    Text(isModal ? "保存" : "开始使用")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
@@ -120,6 +139,12 @@ struct SetupView: View {
                 Text(detectError)
                     .font(.footnote)
                     .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            } else if saved {
+                Text("已保存")
+                    .font(.footnote)
+                    .foregroundStyle(.green)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
             }
@@ -161,6 +186,11 @@ struct SetupView: View {
             ProviderCatalog.saveChatProvider(chat.id)
             ProviderCatalog.saveImageProvider(image.id)
             credentials.save(chatKey: c, imageKey: i)
+            if isModal {
+                saved = true
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                dismiss()
+            }
         }
     }
 }
