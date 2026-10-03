@@ -6,6 +6,8 @@ struct SetupView: View {
     @EnvironmentObject var credentials: CredentialStore
     @State private var chatKey = ""
     @State private var imageKey = ""
+    @State private var chatModelOverride = ""
+    @State private var imageModelOverride = ""
     @State private var isDetecting = false
     @State private var detectError: String?
 
@@ -51,6 +53,25 @@ struct SetupView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
+                DisclosureGroup("高级设置（模型报 404 时才需要填）") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("自定义对话模型 ID").font(.footnote).foregroundStyle(.secondary)
+                        TextField("留空使用默认", text: $chatModelOverride)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Text("自定义作图模型 ID").font(.footnote).foregroundStyle(.secondary)
+                        TextField("留空使用默认", text: $imageModelOverride)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        Text("火山方舟用户：模型需先在控制台「模型广场」开通；也可填推理接入点（ep-开头）。模型 ID 从控制台复制。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .font(.subheadline)
                 Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。首次配置后此页面不再出现。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -104,6 +125,9 @@ struct SetupView: View {
         }
         detectError = nil
         isDetecting = true
+        // 保存模型覆盖（留空即恢复默认）
+        ProviderCatalog.saveChatModelOverride(chatModelOverride.trimmingCharacters(in: .whitespaces))
+        ProviderCatalog.saveImageModelOverride(imageModelOverride.trimmingCharacters(in: .whitespaces))
         Task {
             async let chatProfile = ProviderDetector.detectChat(key: c)
             async let imageProfile = ProviderDetector.detectImage(key: i)
