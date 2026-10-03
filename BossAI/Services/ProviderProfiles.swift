@@ -77,6 +77,12 @@ enum ProviderCatalog {
     static func chatModelOverride() -> String { UserDefaults.standard.string(forKey: chatModelOverrideKey) ?? "" }
     static func imageModelOverride() -> String { UserDefaults.standard.string(forKey: imageModelOverrideKey) ?? "" }
 
+    /// 服务商是否已识别过（首次启动自动识别用）
+    static var providersDetected: Bool {
+        UserDefaults.standard.string(forKey: chatProviderKey) != nil &&
+        UserDefaults.standard.string(forKey: imageProviderKey) != nil
+    }
+
     /// 读取已识别的档案；未识别过（旧版本数据）回落到 Kimi / 火山默认
     static func currentChat() -> ChatProfile {
         let id = UserDefaults.standard.string(forKey: chatProviderKey)
