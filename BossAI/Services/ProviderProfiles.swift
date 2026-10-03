@@ -70,6 +70,12 @@ enum ProviderCatalog {
     static func saveChatProvider(_ id: String) { UserDefaults.standard.set(id, forKey: chatProviderKey) }
     static func saveImageProvider(_ id: String) { UserDefaults.standard.set(id, forKey: imageProviderKey) }
 
+    /// 清空已识别的服务商（换 Key 后触发重新识别）
+    static func clearProviders() {
+        UserDefaults.standard.removeObject(forKey: chatProviderKey)
+        UserDefaults.standard.removeObject(forKey: imageProviderKey)
+    }
+
     /// 自定义模型 ID（高级）：火山等厂商模型版本会更新，报 InvalidEndpointOrModel 时
     /// 让用户从控制台复制正确模型 ID 粘贴覆盖，无需重新编译
     static func saveChatModelOverride(_ s: String) { UserDefaults.standard.set(s, forKey: chatModelOverrideKey) }
