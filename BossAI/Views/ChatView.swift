@@ -37,17 +37,19 @@ struct ChatContainerView: View {
                 ChatView(viewModel: vm, expert: expert)
             } else {
                 Color.clear
-                    .task(id: expert.id) {
-                        // 切换专家时重建会话逻辑（修复来回切换无响应）
-                        viewModelHolder.vm = ChatViewModel(
-                            conversation: conversation,
-                            expert: expert,
-                            modelContext: modelContext,
-                            chatKey: { credentials.chatKey },
-                            imageKey: { credentials.imageKey }
-                        )
-                    }
             }
+        }
+        // 任务挂在稳定的 Group 上（不要挂在条件分支内，否则切换专家时可能不触发）
+        .task(id: expert.id) {
+            guard viewModelHolder.vm?.expert.id != expert.id else { return }
+            // 切换专家时重建会话逻辑（修复来回切换无响应）
+            viewModelHolder.vm = ChatViewModel(
+                conversation: conversation,
+                expert: expert,
+                modelContext: modelContext,
+                chatKey: { credentials.chatKey },
+                imageKey: { credentials.imageKey }
+            )
         }
         .navigationTitle(expert.name)
         .navigationBarTitleDisplayMode(.inline)
