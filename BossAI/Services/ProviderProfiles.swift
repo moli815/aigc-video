@@ -64,19 +64,41 @@ enum ProviderCatalog {
 
     private static let chatProviderKey = "bossai.chat_provider"
     private static let imageProviderKey = "bossai.image_provider"
+    private static let chatModelOverrideKey = "bossai.chat_model_override"
+    private static let imageModelOverrideKey = "bossai.image_model_override"
 
     static func saveChatProvider(_ id: String) { UserDefaults.standard.set(id, forKey: chatProviderKey) }
     static func saveImageProvider(_ id: String) { UserDefaults.standard.set(id, forKey: imageProviderKey) }
 
+    /// 自定义模型 ID（高级）：火山等厂商模型版本会更新，报 InvalidEndpointOrModel 时
+    /// 让用户从控制台复制正确模型 ID 粘贴覆盖，无需重新编译
+    static func saveChatModelOverride(_ s: String) { UserDefaults.standard.set(s, forKey: chatModelOverrideKey) }
+    static func saveImageModelOverride(_ s: String) { UserDefaults.standard.set(s, forKey: imageModelOverrideKey) }
+    static func chatModelOverride() -> String { UserDefaults.standard.string(forKey: chatModelOverrideKey) ?? "" }
+    static func imageModelOverride() -> String { UserDefaults.standard.string(forKey: imageModelOverrideKey) ?? "" }
+
     /// 读取已识别的档案；未识别过（旧版本数据）回落到 Kimi / 火山默认
     static func currentChat() -> ChatProfile {
         let id = UserDefaults.standard.string(forKey: chatProviderKey)
-        return chatCandidates.first { $0.id == id } ?? chatCandidates[0]
+        var profile = chatCandidates.first { $0.id == id } ?? chatCandidates[0]
+        let override = chatModelOverride()
+        if !override.isEmpty {
+            profile = ChatProfile(id: profile.id, displayName: profile.displayName,
+                                  baseURL: profile.baseURL, model: override,
+                                  memoryModel: profile.memoryModel, searchStyle: profile.searchStyle)
+        }
+        return profile
     }
 
     static func currentImage() -> ImageProfile {
         let id = UserDefaults.standard.string(forKey: imageProviderKey)
-        return imageCandidates.first { $0.id == id } ?? imageCandidates[0]
+        var profile = imageCandidates.first { $0.id == id } ?? imageCandidates[0]
+        let override = imageModelOverride()
+        if !override.isEmpty {
+            profile = ImageProfile(id: profile.id, displayName: profile.displayName,
+                                   baseURL: profile.baseURL, model: override, style: profile.style)
+        }
+        return profile
     }
 }
 
