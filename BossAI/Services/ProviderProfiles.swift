@@ -102,6 +102,62 @@ enum ProviderCatalog {
     }
 }
 
+// MARK: - 月度预算（厂商只能按账号设预算，这里做 App 本地硬闸）
+
+enum BudgetTracker {
+    private static let limitKey = "bossai.monthly_limit_cny"
+    private static let monthKeyKey = "bossai.budget_month"
+    private static let spentKey = "bossai.spent_cny"
+
+    /// 每月预算上限（元），0 = 不限
+    static func limit() -> Double { UserDefaults.standard.double(forKey: limitKey) }
+    static func setLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: limitKey) }
+
+    private static func currentMonthKey() -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM"; return f.string(from: Date())
+    }
+
+    /// 已用金额（元），跨月自动清零
+    static func spent() -> Double {
+        let stored = UserDefaults.standard.string(forKey: monthKeyKey) ?? ""
+        if stored != currentMonthKey() {
+            UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
+            UserDefaults.standard.set(0.0, forKey: spentKey)
+            return 0
+        }
+        return UserDefaults.standard.double(forKey: spentKey)
+    }
+
+    static func isExceeded() -> Bool {
+        let l = limit()
+        guard l > 0 else { return false }
+        return spent() >= l
+    }
+
+    /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于预算控制）
+    static func estimateTokens(_ text: String) -> Int {
+        max(1, Int(ceil(Double(text.count) / 1.5)))
+    }
+
+    /// 各家单价（元 / 百万 token，估算值，仅用于预算控制）
+    private static func prices(providerId: String) -> (in: Double, out: Double) {
+        switch providerId {
+        case "volc": return (0.8, 8.0)
+        case "deepseek": return (2.0, 8.0)
+        case "zhipu": return (1.0, 4.0)
+        case "qwen": return (0.8, 2.0)
+        case "kimi": return (4.0, 16.0)
+        default: return (2.0, 8.0)
+        }
+    }
+
+    static func add(promptTokens: Int, completionTokens: Int, providerId: String) {
+        let p = prices(providerId: providerId)
+        let cost = (Double(promptTokens) / 1_000_000.0) * p.in + (Double(completionTokens) / 1_000_000.0) * p.out
+        UserDefaults.standard.set(spent() + cost, forKey: spentKey)
+    }
+}
+
 // MARK: - 自动识别
 
 enum ProviderDetector {
