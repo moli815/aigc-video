@@ -4,6 +4,8 @@ import UIKit
 /// 消息行：用户右对齐气泡，AI 全宽正文 + 图片 + 文件卡片
 struct MessageRow: View {
     let message: Message
+    /// 非空表示这条消息正在流式输出，展示实时文本而非库里的空文本
+    var streamingText: String? = nil
     var files: [StoredFile] = []
     var onPreview: (StoredFile) -> Void = { _ in }
 
@@ -44,15 +46,36 @@ struct MessageRow: View {
                             }
                             .accessibilityLabel("生成的图片")
                     }
+
                     ForEach(files, id: \.id) { file in
                         FileCardView(file: file) { onPreview(file) }
                     }
-                    if !message.text.isEmpty {
-                        MarkdownText(message.text)
-                            .textSelection(.enabled)
-                    } else if message.imageData == nil && files.isEmpty {
-                        Text("▍")
-                            .foregroundStyle(.secondary)
+
+                    let content = streamingText ?? message.text
+                    if !content.isEmpty {
+                        // AI 输出区：带清晰边框的卡片
+                        MarkdownView(content, collapseDisabled: streamingText != nil)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                Color(.secondarySystemBackground).opacity(0.45),
+                                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(Color(.separator).opacity(0.9), lineWidth: 0.6)
+                            )
+                    } else if message.imageData == nil && files.isEmpty && streamingText == nil {
+                        Text("▍").foregroundStyle(.secondary)
+                    }
+
+                    if streamingText != nil {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("正在输出…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 .frame(maxWidth: 760, alignment: .leading)
@@ -94,28 +117,6 @@ struct FilePreviewSheet: View {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Markdown 渲染（iOS 15+ AttributedString，失败时退化为纯文本）
-struct MarkdownText: View {
-    private let content: String
-    private let attributed: AttributedString?
-
-    init(_ content: String) {
-        self.content = content
-        self.attributed = try? AttributedString(
-            markdown: content,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )
-    }
-
-    var body: some View {
-        if let attributed {
-            Text(attributed)
-        } else {
-            Text(content)
         }
     }
 }
