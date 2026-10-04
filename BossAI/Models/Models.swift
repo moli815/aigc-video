@@ -159,6 +159,38 @@ final class StoredFile {
     }
 }
 
+// MARK: - 回复风格
+
+enum ReplyStyle: String, Codable, CaseIterable, Identifiable {
+    case auto
+    case formal
+    case concise
+    case detailed
+    case friendly
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .auto: return "自动"
+        case .formal: return "正式"
+        case .concise: return "简洁"
+        case .detailed: return "详细"
+        case .friendly: return "友好"
+        }
+    }
+
+    /// 注入 system prompt 的风格指令
+    var prompt: String {
+        switch self {
+        case .auto: return ""
+        case .formal: return "\n【回复风格】语气正式、专业、克制，多用书面语，结论严谨，适合对外材料。"
+        case .concise: return "\n【回复风格】极度简洁，先给结论，多用要点，能一句话讲清的不写两句。"
+        case .detailed: return "\n【回复风格】详尽展开，给出背景、依据、步骤与示例，宁可多不要缺。"
+        case .friendly: return "\n【回复风格】语气亲切、有温度，多用口语化表达，先共情再给建议。"
+        }
+    }
+}
+
 // MARK: - 用户身份（显式设置，UserDefaults 持久化）
 
 struct UserIdentity: Codable {
@@ -167,6 +199,7 @@ struct UserIdentity: Codable {
     var industry: String = ""
     var role: String = ""
     var goal: String = ""
+    var replyStyle: ReplyStyle = .auto
 
     var isEmpty: Bool {
         [name, company, industry, role, goal].allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -196,4 +229,17 @@ struct UserIdentity: Codable {
             UserDefaults.standard.set(data, forKey: Self.storageKey)
         }
     }
+
+    /// 容错解码：旧版本没有 replyStyle 字段时给默认值，不让读取失败
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = (try? c.decode(String.self, forKey: .name)) ?? ""
+        company = (try? c.decode(String.self, forKey: .company)) ?? ""
+        industry = (try? c.decode(String.self, forKey: .industry)) ?? ""
+        role = (try? c.decode(String.self, forKey: .role)) ?? ""
+        goal = (try? c.decode(String.self, forKey: .goal)) ?? ""
+        replyStyle = (try? c.decodeIfPresent(ReplyStyle.self, forKey: .replyStyle)) ?? .auto
+    }
+
+    init() {}
 }
