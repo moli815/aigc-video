@@ -61,7 +61,10 @@ final class ChatService {
                     if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                         var errBody = ""
                         for try await line in bytes.lines { errBody += line }
-                        throw ChatError.badResponse(http.statusCode, errBody)
+                        throw ChatError.badResponse(
+                            http.statusCode,
+                            "服务商 \(profile.displayName)｜\(profile.baseURL)/chat/completions｜模型 \(profile.model)\n\(errBody)"
+                        )
                     }
 
                     var text = ""
