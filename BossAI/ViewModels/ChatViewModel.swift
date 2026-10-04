@@ -14,6 +14,10 @@ final class ChatViewModel: ObservableObject {
     @Published var pendingAttachments: [StoredFile] = []
     @Published var isImporting = false
     @Published var toast: String?
+    /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
+    @Published var streamingText = ""
+    /// 正在流式输出的消息 id
+    @Published var streamingMessageId: UUID?
 
     /// 会话（nil = 草稿态：用户还没发第一条消息，此时不写入数据库）
     private(set) var conversation: Conversation?
@@ -27,6 +31,7 @@ final class ChatViewModel: ObservableObject {
     private let chatKey: () -> String?
     private let imageKey: () -> String?
     private let modelContext: ModelContext
+    private var streamTask: Task<Void, Never>?
 
     private var roundsSinceExtraction = 0
     private var fileCache: [UUID: StoredFile] = [:]
@@ -186,7 +191,30 @@ final class ChatViewModel: ObservableObject {
         }
 
         pendingAttachments = []
-        Task { await runLoop(userText: text, attachments: attachments, conv: conv) }
+
+        // 先创建空的 assistant 消息，流式文本只写内存、结束后才落库
+        let assistantMessage = Message(role: "assistant", text: "")
+        assistantMessage.conversation = conv
+        modelContext.insert(assistantMessage)
+        streamingMessageId = assistantMessage.id
+        streamingText = ""
+        isStreaming = true
+
+        streamTask = Task { [self] in
+            await runLoop(userText: text, attachments: attachments, conv: conv,
+                          assistantMessage: assistantMessage)
+        }
+    }
+
+    /// 停止当前回复
+    func stop() {
+        guard isStreaming else { return }
+        streamTask?.cancel()
+        streamTask = nil
+    }
+
+    deinit {
+        streamTask?.cancel()
     }
 
     func clearConversation() {
@@ -196,13 +224,15 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - 工具调用主循环
 
-    private func runLoop(userText: String, attachments: [StoredFile], conv: Conversation) async {
-        isStreaming = true
-        defer { isStreaming = false; statusText = nil }
-
-        let assistantMessage = Message(role: "assistant", text: "")
-        assistantMessage.conversation = conv
-        modelContext.insert(assistantMessage)
+    private func runLoop(userText: String, attachments: [StoredFile], conv: Conversation,
+                         assistantMessage: Message) async {
+        defer {
+            isStreaming = false
+            statusText = nil
+            streamingText = ""
+            streamingMessageId = nil
+            streamTask = nil
+        }
 
         var apiMessages = buildAPIMessages()
         var lastGeneratedImage: Data? = conv.messages
@@ -212,16 +242,19 @@ final class ChatViewModel: ObservableObject {
 
         do {
             var iteration = 0
+            var fullText = ""
             loop: while iteration < AppConfig.maxToolIterations {
                 iteration += 1
                 var pendingToolCalls: [ChatService.ToolCall] = []
                 var assistantText = ""
 
                 for try await event in chatService.stream(messages: apiMessages, enableTools: true) {
+                    if Task.isCancelled { break }
                     switch event {
                     case .textDelta(let delta):
                         assistantText += delta
-                        assistantMessage.text += delta
+                        // 只更新内存中的流式文本，不写库、不触发整个列表重绘
+                        streamingText = fullText + assistantText
                     case .status(let s):
                         statusText = s
                     case .toolCalls(let calls, let text):
@@ -232,6 +265,10 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
+                fullText += assistantText
+                assistantMessage.text = fullText
+
+                if Task.isCancelled { break loop }
                 if pendingToolCalls.isEmpty { break loop }
 
                 apiMessages.append([
@@ -369,9 +406,22 @@ final class ChatViewModel: ObservableObject {
                 }
             }
         } catch {
-            errorMessage = error.localizedDescription
+            let isCancel = error is CancellationError
+                || (error as? URLError)?.code == .cancelled
+            if !isCancel {
+                errorMessage = error.localizedDescription
+                if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
+                    modelContext.delete(assistantMessage)
+                }
+            }
+        }
+
+        // 用户主动停止：无论走 break 还是抛 CancellationError，统一在这里收尾
+        if Task.isCancelled {
             if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
                 modelContext.delete(assistantMessage)
+            } else if !assistantMessage.text.isEmpty {
+                assistantMessage.text += "\n\n*（已停止生成）*"
             }
         }
 
@@ -413,9 +463,9 @@ final class ChatViewModel: ObservableObject {
     // MARK: - 上下文组装：专家 prompt + 身份 + 记忆 + 附件正文
 
     private func buildAPIMessages() -> [[String: Any]] {
-        let identity = UserIdentity.load().promptFragment
+        let identity = UserIdentity.load()
         let memories = memoryService.injectionFragment(context: modelContext)
-        let system = expert.systemPrompt + identity + memories
+        let system = expert.systemPrompt + identity.promptFragment + identity.replyStyle.prompt + memories
 
         var messages: [[String: Any]] = [["role": "system", "content": system]]
         var injectedBudget = 30000
