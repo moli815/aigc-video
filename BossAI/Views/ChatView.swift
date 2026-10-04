@@ -1,51 +1,51 @@
 import SwiftUI
 import SwiftData
-import QuickLook
 import UIKit
 
-/// 对话容器：按会话 id 取持久会话，注入 ViewModel
+/// 对话容器。
+/// - 已有会话：传 conversation
+/// - 草稿态（点了专家但还没发消息）：conversation 为 nil，第一次发送时才落库
 struct ChatContainerView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var credentials: CredentialStore
-    @Query private var conversations: [Conversation]
     @StateObject private var viewModelHolder = ViewModelHolder()
     @State private var showIdentity = false
     @State private var showExportAlert = false
     @State private var exportMessage = ""
+    @State private var previewFile: StoredFile?
 
-    let conversationId: UUID
+    let conversation: Conversation?
+    let expert: Expert
+    var onConversationCreated: (Conversation) -> Void = { _ in }
 
     final class ViewModelHolder: ObservableObject {
         @Published var vm: ChatViewModel?
     }
 
-    init(conversationId: UUID) {
-        self.conversationId = conversationId
-        let id = conversationId
-        _conversations = Query(filter: #Predicate<Conversation> { $0.id == id })
-    }
-
     var body: some View {
         Group {
-            if let vm = viewModelHolder.vm, vm.conversation.id == conversationId {
-                ChatView(viewModel: vm)
+            if let vm = viewModelHolder.vm {
+                ChatView(viewModel: vm, previewFile: $previewFile)
             } else {
                 Color.clear
             }
         }
-        // 任务挂在稳定的 Group 上（不要挂在条件分支内，否则切换时可能不触发）
-        .task(id: conversationId) {
-            guard viewModelHolder.vm?.conversation.id != conversationId else { return }
-            guard let conv = conversations.first else { return }
-            viewModelHolder.vm = ChatViewModel(
-                conversation: conv,
-                expert: conv.expert,
+        // 外层已按会话 .id() 强制重建，这里只需在首次出现时建 VM
+        .task {
+            guard viewModelHolder.vm == nil else { return }
+            let vm = ChatViewModel(
+                conversation: conversation,
+                expert: expert,
                 modelContext: modelContext,
                 chatKey: { credentials.chatKey },
                 imageKey: { credentials.imageKey }
             )
+            vm.onConversationCreated = { created in
+                onConversationCreated(created)
+            }
+            viewModelHolder.vm = vm
         }
-        .navigationTitle(conversations.first?.title ?? "对话")
+        .navigationTitle(conversation?.title ?? expert.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -84,12 +84,16 @@ struct ChatContainerView: View {
         .sheet(isPresented: $showIdentity) {
             IdentitySheet()
         }
+        .sheet(item: $previewFile) { file in
+            FilePreviewSheet(file: file)
+        }
     }
 }
 
 /// 对话区：消息列表 + 状态条 + 输入条
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
+    @Binding var previewFile: StoredFile?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -100,7 +104,9 @@ struct ChatView: View {
                             EmptyStateView(expert: viewModel.expert)
                         }
                         ForEach(viewModel.sortedMessages, id: \.id) { message in
-                            MessageRow(message: message, files: viewModel.files(for: message))
+                            MessageRow(message: message,
+                                       files: viewModel.files(for: message),
+                                       onPreview: { previewFile = $0 })
                                 .id(message.id)
                         }
                         if let status = viewModel.statusText {
@@ -147,51 +153,54 @@ struct ChatView: View {
     }
 }
 
-/// 空状态：开场
+/// 空状态：展示这位专家的技能包（方法论 + 工具）
 struct EmptyStateView: View {
     let expert: Expert
 
     var body: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 100)
+        VStack(spacing: 14) {
+            Spacer(minLength: 90)
             Image(systemName: expert.symbol)
-                .font(.system(size: 44))
+                .font(.system(size: 42))
                 .foregroundStyle(Color.accentColor)
             Text(expert.name)
                 .font(.title2.bold())
             Text(expert.subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Text("有什么可以帮你的？")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .padding(.top, 8)
-            VStack(alignment: .leading, spacing: 6) {
-                CapabilityHint(symbol: "paperclip", text: "点输入框左侧「+」上传文件、拍照或传图")
-                CapabilityHint(symbol: "globe", text: "问最新资讯时会自动联网搜索")
-                CapabilityHint(symbol: "doc.badge.plus", text: "说「整理成 Word / PPT」会直接生成文件")
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                    Text(expert.skill.framework)
+                        .font(.footnote.weight(.medium))
+                }
+                HStack(spacing: 6) {
+                    ForEach(expert.skill.tools, id: \.self) { tool in
+                        HStack(spacing: 3) {
+                            Image(systemName: tool.symbol).font(.system(size: 10))
+                            Text(tool.displayName).font(.system(size: 11))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(.secondarySystemBackground), in: Capsule())
+                        .foregroundStyle(.secondary)
+                    }
+                }
             }
-            .padding(.top, 14)
-            Spacer(minLength: 100)
+            .padding(14)
+            .frame(maxWidth: 420, alignment: .leading)
+            .background(Color(.secondarySystemBackground).opacity(0.6),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            Text("直接提问，或点输入框左侧「+」上传文件、拍照")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 90)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-    }
-}
-
-struct CapabilityHint: View {
-    let symbol: String
-    let text: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-                .font(.footnote)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 18)
-            Text(text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
     }
 }
