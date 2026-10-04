@@ -5,8 +5,14 @@ import UIKit
 /// 主界面：ChatGPT 风格侧栏（可折叠专家团 + 对话列表 + 资料库）+ 对话区
 struct MainView: View {
     @EnvironmentObject var credentials: CredentialStore
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
 
+    /// 侧栏高亮用
     @State private var selectedConversationId: UUID?
+    /// 详情区当前挂载的身份："draft-<expertId>" 或 "conv-<uuid>"。
+    /// 与 selectedConversationId 分开，避免草稿建出会话时把正在流式输出的 VM 换掉。
+    @State private var containerKey: String?
     @State private var showLibrary = false
     @State private var showNewChat = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -15,24 +21,28 @@ struct MainView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(selectedConversationId: $selectedConversationId,
-                        showLibrary: $showLibrary,
-                        onNewChat: { showNewChat = true },
-                        onHiddenSettings: { showPinEntry = true })
-        } detail: {
-            Group {
-                if showLibrary {
-                    LibraryView(onOpenConversation: { id in
+            SidebarView(selectedConversationId: Binding(
+                get: { selectedConversationId },
+                set: { newValue in
+                    selectedConversationId = newValue
+                    if let id = newValue {
+                        containerKey = "conv-\(id.uuidString)"
                         showLibrary = false
-                        selectedConversationId = id
-                    })
-                } else if let id = selectedConversationId {
-                    ChatContainerView(conversationId: id)
-                        .id(id)
-                } else {
-                    WelcomeView(onNewChat: { showNewChat = true })
+                    }
                 }
-            }
+            ),
+            showLibrary: $showLibrary,
+            onNewChat: { showNewChat = true },
+            onOpenExpert: { expert in openExpert(expert) },
+            onDeleteConversation: { conv in delete(conv) },
+            onOpenLibrary: {
+                selectedConversationId = nil
+                containerKey = nil
+                showLibrary = true
+            },
+            onHiddenSettings: { showPinEntry = true })
+        } detail: {
+            detailContent
         }
         .navigationSplitViewStyle(.balanced)
         .task { ensureProvidersDetected() }
@@ -43,6 +53,7 @@ struct MainView: View {
             NewChatSheet { conversation in
                 showLibrary = false
                 selectedConversationId = conversation.id
+                containerKey = "conv-\(conversation.id.uuidString)"
             }
         }
         .sheet(isPresented: $showPinEntry) {
@@ -57,6 +68,58 @@ struct MainView: View {
         .sheet(isPresented: $showHiddenSettings) {
             SetupView(isModal: true)
         }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        if showLibrary {
+            LibraryView(onOpenConversation: { id in
+                showLibrary = false
+                selectedConversationId = id
+                containerKey = "conv-\(id.uuidString)"
+            })
+        } else if let key = containerKey {
+            if key.hasPrefix("draft-") {
+                let expertId = String(key.dropFirst("draft-".count))
+                ChatContainerView(conversation: nil,
+                                  expert: ExpertCatalog.find(expertId),
+                                  onConversationCreated: { created in
+                                      // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
+                                      selectedConversationId = created.id
+                                  })
+                    .id(key)
+            } else {
+                let raw = String(key.dropFirst("conv-".count))
+                if let uuid = UUID(uuidString: raw),
+                   let conv = conversations.first(where: { $0.id == uuid }) {
+                    ChatContainerView(conversation: conv, expert: conv.expert)
+                        .id(key)
+                } else {
+                    WelcomeView(onNewChat: { showNewChat = true })
+                }
+            }
+        } else {
+            WelcomeView(onNewChat: { showNewChat = true })
+        }
+    }
+
+    /// 点专家：已有该专家的对话就打开；没有就进草稿态（发第一条消息时才落库）
+    private func openExpert(_ expert: Expert) {
+        showLibrary = false
+        if let existing = conversations.first(where: { $0.expertId == expert.id }) {
+            selectedConversationId = existing.id
+            containerKey = "conv-\(existing.id.uuidString)"
+        } else {
+            selectedConversationId = nil
+            containerKey = "draft-\(expert.id)"
+        }
+    }
+
+    private func delete(_ conv: Conversation) {
+        if selectedConversationId == conv.id { selectedConversationId = nil }
+        if containerKey == "conv-\(conv.id.uuidString)" { containerKey = nil }
+        modelContext.delete(conv)
+        try? modelContext.save()
     }
 
     /// 首次启动：用内置 Key 自动识别服务商（无需任何手动配置）
@@ -81,6 +144,9 @@ struct SidebarView: View {
     @Binding var selectedConversationId: UUID?
     @Binding var showLibrary: Bool
     var onNewChat: () -> Void
+    var onOpenExpert: (Expert) -> Void = { _ in }
+    var onDeleteConversation: (Conversation) -> Void = { _ in }
+    var onOpenLibrary: () -> Void = {}
     var onHiddenSettings: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
@@ -108,7 +174,7 @@ struct SidebarView: View {
             List(selection: $selectedConversationId) {
                 Section {
                     Button {
-                        showLibrary = true
+                        onOpenLibrary()
                     } label: {
                         Label("资料库", systemImage: "folder.fill")
                             .foregroundStyle(showLibrary ? Color.accentColor : Color.primary)
@@ -137,7 +203,7 @@ struct SidebarView: View {
                     if expertExpanded {
                         ForEach(ExpertCatalog.experts) { expert in
                             Button {
-                                open(expert: expert)
+                                onOpenExpert(expert)
                             } label: {
                                 ExpertRow(expert: expert)
                             }
@@ -182,14 +248,14 @@ struct SidebarView: View {
                                         Label("重命名", systemImage: "pencil")
                                     }
                                     Button(role: .destructive) {
-                                        delete(conv)
+                                        onDeleteConversation(conv)
                                     } label: {
                                         Label("删除对话", systemImage: "trash")
                                     }
                                 }
                                 .swipeActions(edge: .trailing) {
                                     Button(role: .destructive) {
-                                        delete(conv)
+                                        onDeleteConversation(conv)
                                     } label: {
                                         Label("删除", systemImage: "trash")
                                     }
@@ -237,20 +303,6 @@ struct SidebarView: View {
                 }
                 renaming = nil
             }
-        }
-    }
-
-    /// 点专家：优先打开该专家最近一次对话，没有就新建
-    private func open(expert: Expert) {
-        if let existing = conversations.first(where: { $0.expertId == expert.id }) {
-            showLibrary = false
-            selectedConversationId = existing.id
-        } else {
-            let conv = Conversation(expertId: expert.id, title: expert.name)
-            modelContext.insert(conv)
-            try? modelContext.save()
-            showLibrary = false
-            selectedConversationId = conv.id
         }
     }
 
@@ -323,11 +375,12 @@ struct ConversationRow: View {
     }
 
     private var preview: String {
-        if let last = conversation.messages.sorted(by: { $0.createdAt < $1.createdAt }).last {
-            if !last.text.isEmpty { return last.text }
-            if last.imageData != nil { return "[图片]" }
-            if !last.attachmentIds.isEmpty { return "[文件]" }
+        guard let last = conversation.messages.max(by: { $0.createdAt < $1.createdAt }) else {
+            return "暂无消息"
         }
+        if !last.text.isEmpty { return last.text }
+        if last.imageData != nil { return "[图片]" }
+        if !last.attachmentIds.isEmpty { return "[文件]" }
         return "暂无消息"
     }
 }
