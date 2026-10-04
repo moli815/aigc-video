@@ -22,10 +22,10 @@ final class CredentialStore: ObservableObject {
     }
 
     /// 首次启动：把内置 Key 写入钥匙串（之后仍可在隐藏设置中修改）
-    /// v2：本版本起强制覆盖一次——修复旧版本残留的无效 Key 导致 401；
-    /// 同时清掉旧的服务商档案，触发重新识别
+    /// v3：修复 DeepSeek 域名写错（api.deepseek.cn → api.deepseek.com）后，
+    /// 强制重写一次内置 Key 并清空厂商档案，让自动识别重新跑一遍
     private func seedBakedKeys() {
-        let flag = "bossai.baked_seed_v2"
+        let flag = "bossai.baked_seed_v3"
         if UserDefaults.standard.bool(forKey: flag) { return }
         if !AppConfig.bakedChatKey.isEmpty {
             KeychainHelper.save(AppConfig.bakedChatKey, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
