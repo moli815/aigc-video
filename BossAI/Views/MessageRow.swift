@@ -9,56 +9,58 @@ struct MessageRow: View {
     @State private var previewFile: StoredFile?
 
     var body: some View {
-        if message.role == "user" {
-            VStack(alignment: .trailing, spacing: 6) {
-                if !message.text.isEmpty {
-                    Text(message.text)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color(.secondarySystemBackground),
-                                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .textSelection(.enabled)
+        Group {
+            if message.role == "user" {
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !message.text.isEmpty {
+                        Text(message.text)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color(.secondarySystemBackground),
+                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .textSelection(.enabled)
+                    }
+                    ForEach(files, id: \.id) { file in
+                        FileCardView(file: file) { previewFile = file }
+                    }
                 }
-                ForEach(files, id: \.id) { file in
-                    FileCardView(file: file) { previewFile = file }
-                }
-            }
-            .frame(maxWidth: 760, alignment: .trailing)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if let data = message.imageData, let uiImage = UIImage(data: data) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: 420)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .contextMenu {
-                            Button {
-                                UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
-                            } label: {
-                                Label("保存到相册", systemImage: "square.and.arrow.down")
+                .frame(maxWidth: 760, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    if let data = message.imageData, let uiImage = UIImage(data: data) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 420)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .contextMenu {
+                                Button {
+                                    UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
+                                } label: {
+                                    Label("保存到相册", systemImage: "square.and.arrow.down")
+                                }
                             }
-                        }
-                        .accessibilityLabel("生成的图片")
+                            .accessibilityLabel("生成的图片")
+                    }
+                    ForEach(files, id: \.id) { file in
+                        FileCardView(file: file) { previewFile = file }
+                    }
+                    if !message.text.isEmpty {
+                        MarkdownText(message.text)
+                            .textSelection(.enabled)
+                    } else if message.imageData == nil && files.isEmpty {
+                        Text("▍")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                ForEach(files, id: \.id) { file in
-                    FileCardView(file: file) { previewFile = file }
-                }
-                if !message.text.isEmpty {
-                    MarkdownText(message.text)
-                        .textSelection(.enabled)
-                } else if message.imageData == nil && files.isEmpty {
-                    Text("▍")
-                        .foregroundStyle(.secondary)
-                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
         }
         .sheet(item: $previewFile) { file in
             FilePreviewSheet(file: file)
