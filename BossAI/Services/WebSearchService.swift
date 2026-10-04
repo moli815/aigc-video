@@ -28,6 +28,8 @@ struct SearchHit {
     let title: String
     let url: String
     let snippet: String
+    /// 发布时间（RSS 源才有）
+    var publishedAt: String = ""
 }
 
 enum WebSearchService {
@@ -155,9 +157,71 @@ enum WebSearchService {
         }
     }
 
-    // MARK: - Bing HTML
+    // MARK: - Bing（RSS 优先，结构化最可靠）
 
     private static func searchBing(_ query: String, count: Int) async -> [SearchHit] {
+        // 首选 RSS：Bing 会把结果以结构化 XML 返回，标题/链接/摘要/时间齐全，解析不会跑偏
+        if let hits = await searchBingRSS(query, count: count), !hits.isEmpty {
+            return hits
+        }
+        return await searchBingHTML(query, count: count)
+    }
+
+    private static func searchBingRSS(_ query: String, count: Int) async -> [SearchHit]? {
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://www.bing.com/search?q=\(encoded)&format=rss&count=\(max(count, 10))&mkt=zh-CN")
+        else { return nil }
+        guard let data = await rawGet(url, timeout: 20), let xml = decodeHTML(data) else { return nil }
+        guard xml.contains("<item>") || xml.contains("<item ") else { return nil }
+        let hits = parseRSS(xml, count: count)
+        return hits.isEmpty ? nil : hits
+    }
+
+    /// 解析 RSS：<item><title/> <link/> <description/> <pubDate/></item>
+    private static func parseRSS(_ xml: String, count: Int) -> [SearchHit] {
+        var hits: [SearchHit] = []
+        let blocks = xml.components(separatedBy: "<item>")
+            .dropFirst()
+            .flatMap { $0.components(separatedBy: "<item ") }
+        for block in blocks {
+            guard hits.count < count else { break }
+            guard let end = block.range(of: "</item>") else { continue }
+            let chunk = String(block[block.startIndex..<end.lowerBound])
+            guard let rawTitle = tagValue("title", in: chunk),
+                  let rawLink = tagValue("link", in: chunk),
+                  !rawTitle.isEmpty, !rawLink.isEmpty else { continue }
+            let rawDesc = tagValue("description", in: chunk) ?? ""
+            let date = tagValue("pubDate", in: chunk) ?? ""
+            hits.append(SearchHit(title: plainText(fromHTML: stripCDATA(rawTitle)),
+                                  url: decodeEntities(stripCDATA(rawLink)),
+                                  snippet: plainText(fromHTML: stripCDATA(rawDesc)),
+                                  publishedAt: date))
+        }
+        return hits
+    }
+
+    private static func tagValue(_ tag: String, in xml: String) -> String? {
+        firstMatch(xml, pattern: "<\(tag)[^>]*>(.*?)</\(tag)>")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func stripCDATA(_ s: String) -> String {
+        var out = s
+        out = out.replacingOccurrences(of: "<![CDATA[", with: "")
+        out = out.replacingOccurrences(of: "]]>", with: "")
+        return out
+    }
+
+    private static func decodeEntities(_ s: String) -> String {
+        s.replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&apos;", with: "'")
+    }
+
+    private static func searchBingHTML(_ query: String, count: Int) async -> [SearchHit] {
         guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://cn.bing.com/search?q=\(encoded)&setlang=zh-CN&ensearch=0")
         else { return [] }
@@ -173,9 +237,9 @@ enum WebSearchService {
             else { continue }
             let snippet = firstMatch(chunk, pattern: "<p[^>]*>(.*?)</p>") ?? ""
             let cleanTitle = plainText(fromHTML: title)
-            let cleanSnippet = plainText(fromHTML: snippet)
             guard !cleanTitle.isEmpty else { continue }
-            hits.append(SearchHit(title: cleanTitle, url: href, snippet: cleanSnippet))
+            hits.append(SearchHit(title: cleanTitle, url: href,
+                                  snippet: plainText(fromHTML: snippet)))
         }
         return hits
     }
@@ -249,12 +313,8 @@ enum WebSearchService {
         text = text.replacingOccurrences(of: "<br[^>]*>", with: "\n", options: [.regularExpression, .caseInsensitive])
         text = text.replacingOccurrences(of: "</p>", with: "\n", options: [.regularExpression, .caseInsensitive])
         text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        text = decodeEntities(text)
         text = text.replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&amp;", with: "&")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
         let lines = text.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -267,9 +327,11 @@ enum WebSearchService {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy年M月d日"
         out += "搜索时间：\(formatter.string(from: Date()))\n\n"
-        out += "【搜索结果】\n"
+        out += "【搜索结果】（共 \(hits.count) 条，来自实时联网检索，可直接引用）\n"
         for (index, hit) in hits.enumerated() {
-            out += "\(index + 1). \(hit.title)\n   \(hit.url)\n"
+            out += "\(index + 1). \(hit.title)\n"
+            if !hit.publishedAt.isEmpty { out += "   发布时间：\(hit.publishedAt)\n" }
+            out += "   \(hit.url)\n"
             if !hit.snippet.isEmpty { out += "   摘要：\(hit.snippet)\n" }
         }
         if !pages.isEmpty {
