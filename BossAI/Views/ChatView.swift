@@ -60,7 +60,11 @@ struct ChatContainerView: View {
                 Menu {
                     ForEach(DocumentFormat.allCases) { format in
                         Button {
-                            exportMessage = viewModel.exportConversation(format: format)
+                            if let vm = viewModelHolder.vm {
+                                exportMessage = vm.exportConversation(format: format)
+                            } else {
+                                exportMessage = "对话尚未就绪"
+                            }
                             showExportAlert = true
                         } label: {
                             Label("导出为 \(format.displayName)", systemImage: format.symbol)
