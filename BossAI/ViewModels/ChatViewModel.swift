@@ -28,6 +28,8 @@ final class ChatViewModel: ObservableObject {
     private var roundsSinceExtraction = 0
     private var fileCache: [UUID: StoredFile] = [:]
     private var fileCacheLoaded = false
+    /// 本轮联网搜索的结果，作为「信息来源」附在回答末尾
+    private var lastSearchContext: String?
 
     init(conversation: Conversation,
          expert: Expert,
@@ -291,7 +293,40 @@ final class ChatViewModel: ObservableObject {
                             ])
                         }
 
+                    case "web_search":
+                        statusText = "正在联网搜索…"
+                        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
+                        let query = (args?["query"] as? String) ?? userText
+                        let hits = await WebSearchService.search(query: query, count: 6)
+                        if hits.isEmpty {
+                            apiMessages.append([
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "搜索无结果或网络不可用。请基于已有知识回答，并明确告知用户该信息未能联网核实。",
+                            ])
+                        } else {
+                            // 抓取前 N 篇正文，给模型更完整的信息
+                            var pages: [(title: String, url: String, text: String)] = []
+                            let fetchCount = min(AppConfig.searchPageFetchCount, hits.count)
+                            if fetchCount > 0 {
+                                statusText = "正在阅读网页…"
+                                for hit in hits.prefix(fetchCount) {
+                                    let text = await WebSearchService.fetchPageText(url: hit.url, limit: 3500)
+                                    if !text.isEmpty {
+                                        pages.append((hit.title, hit.url, text))
+                                    }
+                                }
+                            }
+                            lastSearchContext = WebSearchService.format(hits: hits, pages: pages)
+                            apiMessages.append([
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": lastSearchContext,
+                            ])
+                        }
+
                     case "$web_search":
+                        // 厂商服务端搜索（开启增强时出现）：回显参数即可继续
                         apiMessages.append([
                             "role": "tool",
                             "tool_call_id": call.id,
@@ -316,6 +351,19 @@ final class ChatViewModel: ObservableObject {
         }
 
         conversation.updatedAt = Date()
+        try? modelContext.save()
+
+        // 附上信息来源，方便核对
+        if let context = lastSearchContext, !assistantMessage.text.isEmpty {
+            let sources = context.components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("http") }
+            if !sources.isEmpty {
+                let list = sources.prefix(5).map { "· \($0)" }.joined(separator: "\n")
+                assistantMessage.text += "\n\n---\n信息来源（联网检索）：\n\(list)"
+            }
+        }
+        lastSearchContext = nil
         try? modelContext.save()
 
         let promptTokens = BudgetTracker.estimateTokens(userText + attachments.map(\.textContent).joined())
