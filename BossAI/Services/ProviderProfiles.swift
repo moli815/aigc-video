@@ -29,16 +29,17 @@ struct ImageProfile {
 }
 
 enum ProviderCatalog {
-    /// 识别探测顺序即优先级（Key 格式相同的前几家靠 /models 探测结果区分）
+    /// 识别探测顺序即优先级（Key 格式相同的前几家靠 /models 探测结果区分）。
+    /// DeepSeek 放首位：它也是「未识别到厂商」时的兜底，避免把 Key 打到别家导致 401
     static let chatCandidates: [ChatProfile] = [
+        ChatProfile(id: "deepseek", displayName: "DeepSeek",
+                    baseURL: "https://api.deepseek.com/v1",
+                    model: "deepseek-chat", memoryModel: "deepseek-chat",
+                    searchStyle: .none),
         ChatProfile(id: "kimi", displayName: "Kimi（Moonshot）",
                     baseURL: "https://api.moonshot.cn/v1",
                     model: "kimi-k2-0905-preview", memoryModel: "kimi-k2-0905-preview",
                     searchStyle: .kimiBuiltin),
-        ChatProfile(id: "deepseek", displayName: "DeepSeek",
-                    baseURL: "https://api.deepseek.cn/v1",
-                    model: "deepseek-chat", memoryModel: "deepseek-chat",
-                    searchStyle: .none),
         ChatProfile(id: "zhipu", displayName: "智谱 GLM",
                     baseURL: "https://open.bigmodel.cn/api/paas/v4",
                     model: "glm-4.6", memoryModel: "glm-4.6-air",
@@ -49,14 +50,14 @@ enum ProviderCatalog {
                     searchStyle: .dashscopeParam),
         ChatProfile(id: "volc", displayName: "豆包（火山方舟）",
                     baseURL: "https://ark.cn-beijing.volces.com/api/v3",
-                    model: "doubao-seed-1-6-250615", memoryModel: "doubao-seed-1-6-flash-250615",
+                    model: "doubao-seed-2-1-pro-260915", memoryModel: "doubao-seed-2-1-pro-260915",
                     searchStyle: .volcTool),
     ]
 
     static let imageCandidates: [ImageProfile] = [
-        ImageProfile(id: "volc", displayName: "火山引擎 Seedream 4.0",
+        ImageProfile(id: "volc", displayName: "火山引擎 Seedream",
                      baseURL: "https://ark.cn-beijing.volces.com/api/v3",
-                     model: "doubao-seedream-4-0-250828", style: .volc),
+                     model: "doubao-seedream-4-0-20260415", style: .volc),
         ImageProfile(id: "zhipu", displayName: "智谱 CogView",
                      baseURL: "https://open.bigmodel.cn/api/paas/v4",
                      model: "cogview-4-250304", style: .zhipu),
@@ -204,6 +205,30 @@ enum ProviderDetector {
             }
         }
         return nil
+    }
+
+    /// 连接自检：两个 Key 各能落到哪家厂商，返回可直接展示的文案
+    static func selfCheck(chatKey: String?, imageKey: String?) async -> String {
+        var lines: [String] = []
+        if let ck = chatKey, !ck.isEmpty {
+            if let c = await detectChat(key: ck) {
+                lines.append("✅ 对话：\(c.displayName)　模型 \(c.model)")
+            } else {
+                lines.append("❌ 对话 Key 没通过任何厂商校验（检查 Key 是否正确/是否欠费）")
+            }
+        } else {
+            lines.append("❌ 对话 Key 为空")
+        }
+        if let ik = imageKey, !ik.isEmpty {
+            if let i = await detectImage(key: ik) {
+                lines.append("✅ 作图：\(i.displayName)　模型 \(i.model)")
+            } else {
+                lines.append("❌ 作图 Key 没通过任何厂商校验")
+            }
+        } else {
+            lines.append("❌ 作图 Key 为空")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func isUUIDLike(_ s: String) -> Bool {
