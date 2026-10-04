@@ -1,57 +1,51 @@
 import SwiftUI
 import SwiftData
+import QuickLook
+import UIKit
 
-/// 对话容器：按专家取/建持久会话，注入 ViewModel。
+/// 对话容器：按会话 id 取持久会话，注入 ViewModel
 struct ChatContainerView: View {
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var credentials: CredentialStore
     @Query private var conversations: [Conversation]
     @StateObject private var viewModelHolder = ViewModelHolder()
     @State private var showIdentity = false
+    @State private var showExportAlert = false
+    @State private var exportMessage = ""
 
-    let expert: Expert
+    let conversationId: UUID
 
     final class ViewModelHolder: ObservableObject {
         @Published var vm: ChatViewModel?
     }
 
-    private var conversation: Conversation {
-        if let existing = conversations.first(where: { $0.expertId == expert.id }) {
-            return existing
-        }
-        let created = Conversation(expertId: expert.id, title: expert.name)
-        modelContext.insert(created)
-        try? modelContext.save()
-        return created
-    }
-
-    init(expert: Expert) {
-        self.expert = expert
-        let id = expert.id
-        _conversations = Query(filter: #Predicate<Conversation> { $0.expertId == id })
+    init(conversationId: UUID) {
+        self.conversationId = conversationId
+        let id = conversationId
+        _conversations = Query(filter: #Predicate<Conversation> { $0.id == id })
     }
 
     var body: some View {
         Group {
-            if let vm = viewModelHolder.vm, vm.expert.id == expert.id {
-                ChatView(viewModel: vm, expert: expert)
+            if let vm = viewModelHolder.vm, vm.conversation.id == conversationId {
+                ChatView(viewModel: vm)
             } else {
                 Color.clear
             }
         }
-        // 任务挂在稳定的 Group 上（不要挂在条件分支内，否则切换专家时可能不触发）
-        .task(id: expert.id) {
-            guard viewModelHolder.vm?.expert.id != expert.id else { return }
-            // 切换专家时重建会话逻辑（修复来回切换无响应）
+        // 任务挂在稳定的 Group 上（不要挂在条件分支内，否则切换时可能不触发）
+        .task(id: conversationId) {
+            guard viewModelHolder.vm?.conversation.id != conversationId else { return }
+            guard let conv = conversations.first else { return }
             viewModelHolder.vm = ChatViewModel(
-                conversation: conversation,
-                expert: expert,
+                conversation: conv,
+                expert: conv.expert,
                 modelContext: modelContext,
                 chatKey: { credentials.chatKey },
                 imageKey: { credentials.imageKey }
             )
         }
-        .navigationTitle(expert.name)
+        .navigationTitle(conversations.first?.title ?? "对话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -62,6 +56,26 @@ struct ChatContainerView: View {
                 }
                 .accessibilityLabel("身份设置")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(DocumentFormat.allCases) { format in
+                        Button {
+                            exportMessage = viewModel.exportConversation(format: format)
+                            showExportAlert = true
+                        } label: {
+                            Label("导出为 \(format.displayName)", systemImage: format.symbol)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "square.and.arrow.down")
+                }
+                .accessibilityLabel("导出对话")
+            }
+        }
+        .alert("导出", isPresented: $showExportAlert) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(exportMessage)
         }
         .sheet(isPresented: $showIdentity) {
             IdentitySheet()
@@ -69,10 +83,9 @@ struct ChatContainerView: View {
     }
 }
 
-/// 对话区：消息列表 + 状态条 + 输入条（ChatGPT 风格，内容居中限宽）
+/// 对话区：消息列表 + 状态条 + 输入条
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
-    let expert: Expert
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,10 +93,10 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if viewModel.sortedMessages.isEmpty {
-                            EmptyStateView(expert: expert)
+                            EmptyStateView(expert: viewModel.expert)
                         }
                         ForEach(viewModel.sortedMessages, id: \.id) { message in
-                            MessageRow(message: message)
+                            MessageRow(message: message, files: viewModel.files(for: message))
                                 .id(message.id)
                         }
                         if let status = viewModel.statusText {
@@ -94,7 +107,7 @@ struct ChatView: View {
                                     .foregroundStyle(.secondary)
                                 Spacer()
                             }
-                            .frame(maxWidth: 720)
+                            .frame(maxWidth: 760)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 8)
                         }
@@ -117,6 +130,8 @@ struct ChatView: View {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 4)
             }
@@ -127,13 +142,13 @@ struct ChatView: View {
     }
 }
 
-/// 空状态：ChatGPT 风格的开场
+/// 空状态：开场
 struct EmptyStateView: View {
     let expert: Expert
 
     var body: some View {
         VStack(spacing: 16) {
-            Spacer(minLength: 120)
+            Spacer(minLength: 100)
             Image(systemName: expert.symbol)
                 .font(.system(size: 44))
                 .foregroundStyle(Color.accentColor)
@@ -146,9 +161,32 @@ struct EmptyStateView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .padding(.top, 8)
-            Spacer(minLength: 120)
+            VStack(alignment: .leading, spacing: 6) {
+                CapabilityHint(symbol: "paperclip", text: "点输入框左侧「+」上传文件、拍照或传图")
+                CapabilityHint(symbol: "globe", text: "问最新资讯时会自动联网搜索")
+                CapabilityHint(symbol: "doc.badge.plus", text: "说「整理成 Word / PPT」会直接生成文件")
+            }
+            .padding(.top, 14)
+            Spacer(minLength: 100)
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct CapabilityHint: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.footnote)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 18)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
     }
 }
