@@ -276,7 +276,7 @@ enum WebSearchService {
             hits.append(SearchHit(title: title,
                                   url: absolutize(href, engine: engine),
                                   snippet: snippet,
-                                  publishedAt: findDate(in: snippet) ?? findDate(in: title)))
+                                  publishedAt: findDate(in: snippet) ?? findDate(in: title) ?? ""))
         }
         return hits
     }
