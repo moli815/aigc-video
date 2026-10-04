@@ -15,7 +15,10 @@ final class ChatViewModel: ObservableObject {
     @Published var isImporting = false
     @Published var toast: String?
 
-    let conversation: Conversation
+    /// 会话（nil = 草稿态：用户还没发第一条消息，此时不写入数据库）
+    private(set) var conversation: Conversation?
+    /// 草稿态首次发消息、真正建出会话时回调，用于侧栏切换过去
+    var onConversationCreated: ((Conversation) -> Void)?
     let expert: Expert
 
     private var chatService: ChatService { ChatService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
@@ -31,7 +34,7 @@ final class ChatViewModel: ObservableObject {
     /// 本轮联网搜索的结果，作为「信息来源」附在回答末尾
     private var lastSearchContext: String?
 
-    init(conversation: Conversation,
+    init(conversation: Conversation?,
          expert: Expert,
          modelContext: ModelContext,
          chatKey: @escaping () -> String?,
@@ -44,7 +47,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     var sortedMessages: [Message] {
-        conversation.messages.sorted { $0.createdAt < $1.createdAt }
+        (conversation?.messages ?? []).sorted { $0.createdAt < $1.createdAt }
     }
 
     // MARK: - 附件
@@ -62,7 +65,7 @@ final class ChatViewModel: ObservableObject {
                 if let record = try? FileStore.store(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
-                                                     sourceConversationId: conversation.id.uuidString,
+                                                     sourceConversationId: conversation?.id.uuidString ?? "",
                                                      textContent: text,
                                                      context: modelContext) {
                     added.append(record)
@@ -87,7 +90,7 @@ final class ChatViewModel: ObservableObject {
                 if let record = try? FileStore.store(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
-                                                     sourceConversationId: conversation.id.uuidString,
+                                                     sourceConversationId: conversation?.id.uuidString ?? "",
                                                      textContent: text,
                                                      context: modelContext) {
                     added.append(record)
@@ -135,6 +138,18 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - 发送
 
+    /// 草稿态 -> 真正会话；已有会话直接返回
+    @discardableResult
+    private func ensureConversation() -> Conversation {
+        if let conversation { return conversation }
+        let created = Conversation(expertId: expert.id, title: expert.name)
+        modelContext.insert(created)
+        try? modelContext.save()
+        conversation = created
+        onConversationCreated?(created)
+        return created
+    }
+
     func send() {
         if BudgetTracker.isExceeded() {
             errorMessage = String(format: "已达本月预算上限（¥%.0f，本月已用约 ¥%.2f）。侧栏连点 Boss AI 进入设置可调整。",
@@ -148,39 +163,49 @@ final class ChatViewModel: ObservableObject {
         inputText = ""
         errorMessage = nil
 
+        // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
+        let conv = ensureConversation()
+        // 注意：必须先判断，再插入消息（插入后 messages 里就有本条了）
+        let isFirstUserMessage = conv.messages.filter { $0.role == "user" }.isEmpty
+
         let userMessage = Message(role: "user", text: text)
         userMessage.attachmentIds = attachments.map { $0.id.uuidString }.joined(separator: ",")
-        userMessage.conversation = conversation
+        userMessage.conversation = conv
         modelContext.insert(userMessage)
 
-        // 第一条消息作为会话标题
-        if conversation.messages.filter({ $0.role == "user" }).isEmpty, !text.isEmpty {
-            conversation.title = String(text.prefix(20))
+        // 第一条消息自动作为会话标题
+        if isFirstUserMessage, !text.isEmpty {
+            conv.title = String(text.prefix(20))
         }
-        conversation.updatedAt = Date()
+        conv.updatedAt = Date()
         try? modelContext.save()
 
+        // 草稿期上传的附件补记到新会话名下
+        for file in attachments where file.sourceConversationId.isEmpty {
+            file.sourceConversationId = conv.id.uuidString
+        }
+
         pendingAttachments = []
-        Task { await runLoop(userText: text, attachments: attachments) }
+        Task { await runLoop(userText: text, attachments: attachments, conv: conv) }
     }
 
     func clearConversation() {
-        for m in conversation.messages { modelContext.delete(m) }
+        for m in conversation?.messages ?? [] { modelContext.delete(m) }
         try? modelContext.save()
     }
 
     // MARK: - 工具调用主循环
 
-    private func runLoop(userText: String, attachments: [StoredFile]) async {
+    private func runLoop(userText: String, attachments: [StoredFile], conv: Conversation) async {
         isStreaming = true
         defer { isStreaming = false; statusText = nil }
 
         let assistantMessage = Message(role: "assistant", text: "")
-        assistantMessage.conversation = conversation
+        assistantMessage.conversation = conv
         modelContext.insert(assistantMessage)
 
         var apiMessages = buildAPIMessages()
-        var lastGeneratedImage: Data? = conversation.messages
+        var lastGeneratedImage: Data? = conv.messages
             .filter { $0.imageData != nil }
             .sorted { $0.createdAt < $1.createdAt }
             .last?.imageData
@@ -233,7 +258,7 @@ final class ChatViewModel: ObservableObject {
                             let imageData = try await imageService.generate(prompt: prompt, reference: reference)
                             lastGeneratedImage = imageData
                             let imageMessage = Message(role: "assistant", text: "", imageData: imageData)
-                            imageMessage.conversation = conversation
+                            imageMessage.conversation = conv
                             modelContext.insert(imageMessage)
                             apiMessages.append([
                                 "role": "tool",
@@ -271,12 +296,12 @@ final class ChatViewModel: ObservableObject {
                             let record = try FileStore.store(data: data,
                                                             filename: finalName,
                                                             kind: .generated,
-                                                            sourceConversationId: conversation.id.uuidString,
+                                                            sourceConversationId: conv.id.uuidString,
                                                             textContent: content,
                                                             context: modelContext)
                             let fileMessage = Message(role: "assistant", text: "")
                             fileMessage.attachmentIds = record.id.uuidString
-                            fileMessage.conversation = conversation
+                            fileMessage.conversation = conv
                             modelContext.insert(fileMessage)
                             apiMessages.append([
                                 "role": "tool",
@@ -350,7 +375,7 @@ final class ChatViewModel: ObservableObject {
             }
         }
 
-        conversation.updatedAt = Date()
+        conv.updatedAt = Date()
         try? modelContext.save()
 
         // 附上信息来源，方便核对
@@ -444,7 +469,7 @@ final class ChatViewModel: ObservableObject {
 
     /// 把当前会话导出为文件并存入资料库，返回提示文案
     func exportConversation(format: DocumentFormat) -> String {
-        let title = conversation.title.isEmpty ? expert.name : conversation.title
+        let title = (conversation?.title.isEmpty ?? true) ? expert.name : (conversation?.title ?? expert.name)
         var lines: [String] = []
         for message in sortedMessages {
             guard !message.text.isEmpty else { continue }
@@ -458,7 +483,7 @@ final class ChatViewModel: ObservableObject {
             let name = DocumentBuilder.safeFilename(title, fallback: "对话导出")
             let file = "\(name)-\(Self.timestamp()).\(format.ext)"
             _ = try FileStore.store(data: data, filename: file, kind: .generated,
-                                    sourceConversationId: conversation.id.uuidString,
+                                    sourceConversationId: conversation?.id.uuidString ?? "",
                                     textContent: markdown, context: modelContext)
             invalidateFileCache()
             return "已导出 \(file)，可在资料库查看"
