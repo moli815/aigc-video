@@ -90,6 +90,14 @@ enum ProviderCatalog {
         UserDefaults.standard.string(forKey: imageProviderKey) != nil
     }
 
+    /// 备份用：当前已识别的服务商 ID
+    static func storedChatProviderId() -> String? {
+        UserDefaults.standard.string(forKey: chatProviderKey)
+    }
+    static func storedImageProviderId() -> String? {
+        UserDefaults.standard.string(forKey: imageProviderKey)
+    }
+
     /// 读取已识别的档案；未识别过（旧版本数据）回落到 Kimi / 火山默认
     static func currentChat() -> ChatProfile {
         let id = UserDefaults.standard.string(forKey: chatProviderKey)
@@ -168,6 +176,12 @@ enum BudgetTracker {
         let p = prices(providerId: providerId)
         let cost = (Double(promptTokens) / 1_000_000.0) * p.in + (Double(completionTokens) / 1_000_000.0) * p.out
         UserDefaults.standard.set(spent() + cost, forKey: spentKey)
+    }
+
+    /// 备份恢复用：直接写回已用金额（并锁定到当前月份）
+    static func restoreSpent(_ value: Double) {
+        UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
+        UserDefaults.standard.set(max(0, value), forKey: spentKey)
     }
 }
 
