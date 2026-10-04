@@ -53,7 +53,10 @@ final class ImageService {
 
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw ImageError.badResponse(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+            throw ImageError.badResponse(
+                http.statusCode,
+                "服务商 \(profile.displayName)｜\(profile.baseURL)/images/generations｜模型 \(profile.model)\n\(String(data: data, encoding: .utf8) ?? "")"
+            )
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let arr = json["data"] as? [[String: Any]], let first = arr.first else {
