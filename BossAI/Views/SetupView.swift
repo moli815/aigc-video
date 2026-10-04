@@ -15,6 +15,8 @@ struct SetupView: View {
     @State private var isDetecting = false
     @State private var detectError: String?
     @State private var saved = false
+    @State private var checking = false
+    @State private var checkResult: String?
 
     private func prefill() {
         chatKey = credentials.chatKey ?? ""
@@ -106,12 +108,37 @@ struct SetupView: View {
                 }
                 .font(.subheadline)
                 if isModal {
-                    Button {
-                        credentials.resetToBaked()
-                        prefill()
-                    } label: {
-                        Label("恢复内置 Key", systemImage: "arrow.counterclockwise")
-                            .font(.footnote)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("连接自检")
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if checking { ProgressView().controlSize(.small) }
+                        }
+                        if let checkResult {
+                            Text(checkResult)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        HStack(spacing: 16) {
+                            Button {
+                                runSelfCheck()
+                            } label: {
+                                Label("测试连接", systemImage: "bolt.horizontal.circle")
+                                    .font(.footnote)
+                            }
+                            .disabled(checking)
+                            Button {
+                                credentials.resetToBaked()
+                                prefill()
+                                runSelfCheck()
+                            } label: {
+                                Label("恢复内置 Key", systemImage: "arrow.counterclockwise")
+                                    .font(.footnote)
+                            }
+                        }
                     }
                 }
                 Text("粘贴后自动识别服务商，无需选择。Key 仅保存在本机钥匙串，不会上传。")
@@ -162,7 +189,23 @@ struct SetupView: View {
             Spacer()
         }
         .accessibilityElement(children: .contain)
-        .onAppear { prefill() }
+        .onAppear {
+            prefill()
+            if isModal { runSelfCheck() }
+        }
+    }
+
+    /// 连接自检：两个 Key 分别能落到哪家厂商
+    private func runSelfCheck() {
+        checking = true
+        checkResult = "正在检测…"
+        Task {
+            let c = chatKey.trimmingCharacters(in: .whitespaces)
+            let i = imageKey.trimmingCharacters(in: .whitespaces)
+            let result = await ProviderDetector.selfCheck(chatKey: c, imageKey: i)
+            checkResult = result
+            checking = false
+        }
     }
 
     private func start() {
