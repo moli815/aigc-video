@@ -30,4 +30,21 @@ enum AppConfig {
     // MARK: 工具调用保护
     static let maxToolIterations = 8
     static let memoryInjectLimit = 50
+
+    /// 是否额外启用模型厂商自带的服务端搜索（默认关闭：统一用 App 自带的免费搜索，行为一致）
+    static var preferProviderSearch: Bool {
+        UserDefaults.standard.bool(forKey: "bossai.prefer_provider_search")
+    }
+    static func setPreferProviderSearch(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: "bossai.prefer_provider_search")
+    }
+
+    /// 每次搜索自动抓取正文的网页数（0 = 只返回摘要）
+    static var searchPageFetchCount: Int {
+        let v = UserDefaults.standard.object(forKey: "bossai.search_page_fetch") as? Int
+        return v ?? 2
+    }
+    static func setSearchPageFetchCount(_ n: Int) {
+        UserDefaults.standard.set(n, forKey: "bossai.search_page_fetch")
+    }
 }
