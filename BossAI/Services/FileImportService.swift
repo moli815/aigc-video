@@ -25,9 +25,7 @@ enum FileImportService {
         case "docx", "pptx", "xlsx", "pages", "numbers", "key":
             return extractOOXML(data: data, ext: ext.lowercased())
         case "txt", "md", "markdown", "csv", "json", "xml", "html", "log":
-            return String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .gbk)
-                ?? ""
+            return decodePlainText(data)
         case "png", "jpg", "jpeg", "heic", "heif", "gif", "webp", "tiff":
             return await ocr(imageData: data)
         default:
@@ -36,8 +34,19 @@ enum FileImportService {
         }
     }
 
-    // MARK: - PDF
+    /// 纯文本解码：优先 UTF-8，失败再用 GB18030（兼容 Windows 记事本导出的中文文件）
+    static func decodePlainText(_ data: Data) -> String {
+        if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+            return text
+        }
+        let gb18030 = String.Encoding(rawValue: 0x80000632)
+        if let text = String(data: data, encoding: gb18030) {
+            return text
+        }
+        return String(data: data, encoding: .isoLatin1) ?? ""
+    }
 
+    // MARK: - PDF
     static func extractPDF(data: Data) -> String {
         guard let doc = PDFDocument(data: data) else { return "" }
         var parts: [String] = []
