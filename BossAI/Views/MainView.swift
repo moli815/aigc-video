@@ -285,9 +285,9 @@ struct ExpertRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)
-                Text(expert.subtitle)
+                Text(expert.skill.framework)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accentColor)
                     .lineLimit(1)
             }
         }
@@ -446,6 +446,22 @@ struct NewChatSheet: View {
                                             .foregroundStyle(.secondary)
                                             .lineLimit(2, reservesSpace: true)
                                             .multilineTextAlignment(.leading)
+                                        Text(expert.skill.framework)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(Color.accentColor)
+                                            .lineLimit(2, reservesSpace: true)
+                                            .multilineTextAlignment(.leading)
+                                        HStack(spacing: 5) {
+                                            ForEach(expert.skill.tools, id: \.self) { tool in
+                                                HStack(spacing: 2) {
+                                                    Image(systemName: tool.symbol)
+                                                        .font(.system(size: 9))
+                                                    Text(tool.displayName)
+                                                        .font(.system(size: 9))
+                                                }
+                                                .foregroundStyle(.secondary)
+                                            }
+                                        }
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(12)
