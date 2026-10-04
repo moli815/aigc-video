@@ -66,13 +66,13 @@ enum MarkdownParser {
                 continue
             }
             if line.hasPrefix("#### ") {
-                result.append(MarkdownBlock(kind: .heading3, text: inline(line.dropFirst(5))))
+                result.append(MarkdownBlock(kind: .heading3, text: inline(String(line.dropFirst(5)))))
             } else if line.hasPrefix("### ") {
-                result.append(MarkdownBlock(kind: .heading3, text: inline(line.dropFirst(4))))
+                result.append(MarkdownBlock(kind: .heading3, text: inline(String(line.dropFirst(4)))))
             } else if line.hasPrefix("## ") {
-                result.append(MarkdownBlock(kind: .heading2, text: inline(line.dropFirst(3))))
+                result.append(MarkdownBlock(kind: .heading2, text: inline(String(line.dropFirst(3)))))
             } else if line.hasPrefix("# ") {
-                result.append(MarkdownBlock(kind: .heading1, text: inline(line.dropFirst(2))))
+                result.append(MarkdownBlock(kind: .heading1, text: inline(String(line.dropFirst(2)))))
             } else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
                 result.append(MarkdownBlock(kind: .bullet, text: inline(String(line.dropFirst(2)))))
             } else if line.hasPrefix("> ") {
