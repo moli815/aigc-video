@@ -152,7 +152,7 @@ struct SidebarView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
 
-    @State private var expertExpanded = false
+    @State private var expertExpanded = true
     @State private var searchText = ""
     @State private var renaming: Conversation?
     @State private var renameText = ""
