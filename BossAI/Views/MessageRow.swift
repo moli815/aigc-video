@@ -5,8 +5,7 @@ import UIKit
 struct MessageRow: View {
     let message: Message
     var files: [StoredFile] = []
-
-    @State private var previewFile: StoredFile?
+    var onPreview: (StoredFile) -> Void = { _ in }
 
     var body: some View {
         Group {
@@ -21,7 +20,7 @@ struct MessageRow: View {
                             .textSelection(.enabled)
                     }
                     ForEach(files, id: \.id) { file in
-                        FileCardView(file: file) { previewFile = file }
+                        FileCardView(file: file) { onPreview(file) }
                     }
                 }
                 .frame(maxWidth: 760, alignment: .trailing)
@@ -46,7 +45,7 @@ struct MessageRow: View {
                             .accessibilityLabel("生成的图片")
                     }
                     ForEach(files, id: \.id) { file in
-                        FileCardView(file: file) { previewFile = file }
+                        FileCardView(file: file) { onPreview(file) }
                     }
                     if !message.text.isEmpty {
                         MarkdownText(message.text)
@@ -61,9 +60,6 @@ struct MessageRow: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
             }
-        }
-        .sheet(item: $previewFile) { file in
-            FilePreviewSheet(file: file)
         }
     }
 }
