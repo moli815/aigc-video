@@ -121,25 +121,47 @@ final class ChatService {
         }
     }
 
-    /// 按服务商适配工具挂载方式
+    /// 挂载工具。联网搜索改为 App 自带的本地工具（web_search），
+    /// 不再依赖模型厂商的搜索能力 —— 换任何模型商都不会掉联网功能。
     private func applyTools(to body: inout [String: Any]) {
-        var tools: [[String: Any]] = []
-        switch profile.searchStyle {
-        case .kimiBuiltin:
-            tools.append(["type": "builtin_function", "function": ["name": "$web_search"]])
-        case .zhipuTool:
-            tools.append(["type": "web_search", "web_search": ["enable": true]])
-        case .volcTool:
-            tools.append(["type": "web_search"])
-        case .dashscopeParam:
-            body["enable_search"] = true
-        case .none:
-            break
+        // 少数厂商的服务端搜索质量更高，可在设置里开启作为增强
+        if AppConfig.preferProviderSearch {
+            switch profile.searchStyle {
+            case .kimiBuiltin:
+                body["tools"] = [["type": "builtin_function", "function": ["name": "$web_search"]]]
+            case .zhipuTool:
+                body["tools"] = [["type": "web_search", "web_search": ["enable": true]]]
+            case .volcTool:
+                body["tools"] = [["type": "web_search"]]
+            case .dashscopeParam:
+                body["enable_search"] = true
+            case .none:
+                break
+            }
         }
+
+        var tools = (body["tools"] as? [[String: Any]]) ?? []
+        tools.append(["type": "function", "function": Self.webSearchFunction])
         tools.append(["type": "function", "function": Self.generateImageFunction])
         tools.append(["type": "function", "function": Self.createDocumentFunction])
         body["tools"] = tools
     }
+
+    /// 自定义联网搜索工具（App 本地执行，与模型厂商无关）
+    static let webSearchFunction: [String: Any] = [
+        "name": "web_search",
+        "description": "联网搜索最新信息。查资讯、行情、政策、竞品动态、平台规则、价格、新闻时必须调用，不要凭记忆回答时效性问题。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "query": [
+                    "type": "string",
+                    "description": "搜索关键词，尽量具体，包含主体与年份（如「2026 年 餐饮加盟 政策」）",
+                ],
+            ],
+            "required": ["query"],
+        ],
+    ]
 
     /// 自定义生图工具定义
     static let generateImageFunction: [String: Any] = {
