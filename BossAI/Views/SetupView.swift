@@ -17,6 +17,11 @@ struct SetupView: View {
     @State private var saved = false
     @State private var checking = false
     @State private var checkResult: String?
+    @State private var searchEngineKind: WebSearchEngine = WebSearchService.engine
+    @State private var tavilyKey = WebSearchService.tavilyKey
+    @State private var bochaKey = WebSearchService.bochaKey
+    @State private var providerSearchOn = AppConfig.preferProviderSearch
+    @State private var pageFetch = AppConfig.searchPageFetchCount
 
     private func prefill() {
         chatKey = credentials.chatKey ?? ""
@@ -25,6 +30,11 @@ struct SetupView: View {
         imageModelOverride = ProviderCatalog.imageModelOverride()
         let l = BudgetTracker.limit()
         budgetLimit = l > 0 ? String(format: "%.0f", l) : ""
+        searchEngineKind = WebSearchService.engine
+        tavilyKey = WebSearchService.tavilyKey
+        bochaKey = WebSearchService.bochaKey
+        providerSearchOn = AppConfig.preferProviderSearch
+        pageFetch = AppConfig.searchPageFetchCount
     }
 
     var body: some View {
@@ -103,6 +113,38 @@ struct SetupView: View {
                         Text("火山方舟用户：模型需先在控制台「模型广场」开通；也可填推理接入点（ep-开头）。模型 ID 从控制台复制。")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+
+                        Divider().padding(.vertical, 6)
+
+                        Text("联网搜索（App 自带，与模型厂商无关）")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("搜索引擎", selection: $searchEngineKind) {
+                            ForEach(WebSearchEngine.allCases) { item in
+                                Text(item.displayName).tag(item)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Text("自动模式：先用下面的 API（若填写），失败自动回落到 Bing、百度。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+
+                        Text("Tavily API Key（可选，免费额度）").font(.footnote).foregroundStyle(.secondary)
+                        TextField("tvly-...", text: $tavilyKey)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+
+                        Text("博查 API Key（可选，中文搜索质量好）").font(.footnote).foregroundStyle(.secondary)
+                        TextField("sk-...", text: $bochaKey)
+                            .textFieldStyle(.roundedBorder)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+
+                        Toggle("同时启用模型商自带搜索（增强）", isOn: $providerSearchOn)
+                            .font(.footnote)
+                        Stepper("每次自动阅读 \(pageFetch) 篇网页正文", value: $pageFetch, in: 0...4)
+                            .font(.footnote)
                     }
                     .padding(.vertical, 4)
                 }
@@ -203,7 +245,11 @@ struct SetupView: View {
             let c = chatKey.trimmingCharacters(in: .whitespaces)
             let i = imageKey.trimmingCharacters(in: .whitespaces)
             let result = await ProviderDetector.selfCheck(chatKey: c, imageKey: i)
-            checkResult = result
+            let hits = await WebSearchService.search(query: "今日新闻", count: 1)
+            let searchLine = hits.isEmpty
+                ? "❌ 联网搜索未返回结果（可换引擎或在下方填 Tavily / 博查 Key）"
+                : "✅ 联网搜索可用（当前引擎：\(WebSearchService.engine.displayName)）"
+            checkResult = result + "\n" + searchLine
             checking = false
         }
     }
@@ -222,6 +268,12 @@ struct SetupView: View {
         BudgetTracker.setLimit(Double(budgetText) ?? 0)
         ProviderCatalog.saveChatModelOverride(chatModelOverride.trimmingCharacters(in: .whitespaces))
         ProviderCatalog.saveImageModelOverride(imageModelOverride.trimmingCharacters(in: .whitespaces))
+        // 联网搜索设置
+        WebSearchService.engine = searchEngineKind
+        WebSearchService.tavilyKey = tavilyKey.trimmingCharacters(in: .whitespaces)
+        WebSearchService.bochaKey = bochaKey.trimmingCharacters(in: .whitespaces)
+        AppConfig.setPreferProviderSearch(providerSearchOn)
+        AppConfig.setSearchPageFetchCount(pageFetch)
         Task {
             async let chatProfile = ProviderDetector.detectChat(key: c)
             async let imageProfile = ProviderDetector.detectImage(key: i)
