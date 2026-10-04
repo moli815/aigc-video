@@ -5,6 +5,10 @@ import SwiftData
 struct BossAIApp: App {
     @StateObject private var credentials = CredentialStore()
 
+    init() {
+        FileStore.prepare()
+    }
+
     var body: some Scene {
         WindowGroup {
             if credentials.isConfigured {
@@ -13,6 +17,6 @@ struct BossAIApp: App {
                 SetupView().environmentObject(credentials)
             }
         }
-        .modelContainer(for: [Conversation.self, Message.self, MemoryItem.self])
+        .modelContainer(for: [Conversation.self, Message.self, MemoryItem.self, StoredFile.self])
     }
 }
