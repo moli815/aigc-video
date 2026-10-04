@@ -1,61 +1,141 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
+import UIKit
 
-/// 输入条：麦克风（语音输入）+ 文本框 + 发送。ChatGPT 风格胶囊造型。
+/// 输入条：附件（拍照 / 相册 / 文件）+ 麦克风语音输入 + 文本框 + 发送
 struct InputBar: View {
     @ObservedObject var viewModel: ChatViewModel
     @StateObject private var speech = SpeechService()
+
+    @State private var showSourceDialog = false
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var showCamera = false
+    @State private var photoItems: [PhotosPickerItem] = []
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            // 语音输入按钮
-            Button {
-                if speech.isRecording {
-                    speech.stop()
-                    viewModel.inputText = speech.recognizedText
-                } else {
-                    Task { await speech.start() }
+        VStack(spacing: 0) {
+            if viewModel.isImporting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在读取文件…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-            } label: {
-                Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
-                    .frame(width: 44, height: 44)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
             }
-            .accessibilityLabel(speech.isRecording ? "停止录音" : "语音输入")
 
-            // 文本框（语音识别的中间结果实时回填）
-            TextField("发消息…", text: inputBinding, axis: .vertical)
-                .lineLimit(1...6)
-                .focused($focused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 11)
-                .background(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color(.separator), lineWidth: 1)
-                )
+            if !viewModel.pendingAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(viewModel.pendingAttachments, id: \.id) { file in
+                            AttachmentChip(file: file) {
+                                viewModel.removeAttachment(file)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+            }
 
-            // 发送
-            Button {
-                viewModel.send()
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(
-                        canSend ? Color.accentColor : Color(.systemGray4)
+            HStack(alignment: .bottom, spacing: 6) {
+                Button {
+                    showSourceDialog = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 42, height: 42)
+                        .background(Color(.secondarySystemBackground), in: Circle())
+                }
+                .accessibilityLabel("添加附件")
+
+                Button {
+                    if speech.isRecording {
+                        speech.stop()
+                        viewModel.inputText = speech.recognizedText
+                    } else {
+                        Task { await speech.start() }
+                    }
+                } label: {
+                    Image(systemName: speech.isRecording ? "stop.circle.fill" : "mic.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
+                        .frame(width: 42, height: 42)
+                }
+                .accessibilityLabel(speech.isRecording ? "停止录音" : "语音输入")
+
+                TextField("发消息…", text: inputBinding, axis: .vertical)
+                    .lineLimit(1...6)
+                    .focused($focused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color(.separator), lineWidth: 1)
                     )
-                    .frame(width: 44, height: 44)
+
+                Button {
+                    viewModel.send()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
+                        .frame(width: 42, height: 42)
+                }
+                .disabled(!canSend)
+                .accessibilityLabel("发送")
             }
-            .disabled(!canSend)
-            .accessibilityLabel("发送")
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .background(.bar)
         .onChange(of: speech.recognizedText) { _, newValue in
-            if speech.isRecording {
-                viewModel.inputText = newValue
+            if speech.isRecording { viewModel.inputText = newValue }
+        }
+        .confirmationDialog("添加附件", isPresented: $showSourceDialog, titleVisibility: .visible) {
+            Button("拍照") { showCamera = true }
+            Button("从相册选择") { showPhotos = true }
+            Button("选择文件") { showFiles = true }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("支持 PDF、Word、Excel、PPT、文本与图片，可多选")
+        }
+        .photosPicker(isPresented: $showPhotos, selection: $photoItems,
+                      maxSelectionCount: 10, matching: .images)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task {
+                var images: [UIImage] = []
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self),
+                       let image = UIImage(data: data) {
+                        images.append(image)
+                    }
+                }
+                photoItems = []
+                viewModel.attach(images: images)
             }
+        }
+        .fileImporter(isPresented: $showFiles,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                viewModel.attach(urls: urls)
+            } else if case .failure(let error) = result {
+                viewModel.errorMessage = "文件读取失败：\(error.localizedDescription)"
+            }
+        }
+        .sheet(isPresented: $showCamera) {
+            CameraPicker { image in
+                viewModel.attach(images: [image])
+            }
+            .ignoresSafeArea()
         }
         .alert("语音输入不可用", isPresented: .constant(speech.errorMessage != nil)) {
             Button("好", role: .cancel) { speech.errorMessage = nil }
@@ -65,14 +145,78 @@ struct InputBar: View {
     }
 
     private var canSend: Bool {
-        !viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (!viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+         || !viewModel.pendingAttachments.isEmpty)
             && !viewModel.isStreaming
     }
 
     private var inputBinding: Binding<String> {
-        Binding(
-            get: { viewModel.inputText },
-            set: { viewModel.inputText = $0 }
-        )
+        Binding(get: { viewModel.inputText }, set: { viewModel.inputText = $0 })
+    }
+}
+
+/// 附件小卡片（带删除）
+struct AttachmentChip: View {
+    let file: StoredFile
+    var onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: file.category.symbol)
+                .font(.footnote)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(file.name)
+                    .font(.caption2)
+                    .lineLimit(1)
+                Text(file.sizeText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(.secondarySystemBackground), in: Capsule())
+        .frame(maxWidth: 190)
+    }
+}
+
+/// 相机（iPad 无相机时自动回退到相册）
+struct CameraPicker: UIViewControllerRepresentable {
+    var onPick: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = UIImagePickerController.isSourceTypeAvailable(.camera) ? .camera : .photoLibrary
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        private let parent: CameraPicker
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                parent.onPick(image)
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
     }
 }
