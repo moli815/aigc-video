@@ -90,6 +90,39 @@ struct ChatContainerView: View {
     }
 }
 
+/// 专家对话顶部横幅：标明正在与哪位顾问对话
+struct ExpertBanner: View {
+    let expert: Expert
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: expert.symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(expert.name)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(expert.skill.framework)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.8))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 /// 对话区：消息列表 + 状态条 + 输入条
 struct ChatView: View {
     @ObservedObject var viewModel: ChatViewModel
@@ -97,6 +130,10 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 专家对话：顶部固定身份横幅，与其他普通对话区分
+            if viewModel.expert.id != ExpertCatalog.general.id {
+                ExpertBanner(expert: viewModel.expert)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -104,10 +141,13 @@ struct ChatView: View {
                             EmptyStateView(expert: viewModel.expert)
                         }
                         ForEach(viewModel.sortedMessages, id: \.id) { message in
-                            MessageRow(message: message,
-                                       files: viewModel.files(for: message),
-                                       onPreview: { previewFile = $0 })
-                                .id(message.id)
+                            MessageRow(
+                                message: message,
+                                streamingText: message.id == viewModel.streamingMessageId ? viewModel.streamingText : nil,
+                                files: viewModel.files(for: message),
+                                onPreview: { previewFile = $0 }
+                            )
+                            .id(message.id)
                         }
                         if let status = viewModel.statusText {
                             HStack(spacing: 8) {
@@ -131,6 +171,11 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: viewModel.sortedMessages.last?.text) { _, _ in
+                    if let last = viewModel.sortedMessages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.streamingText) { _, _ in
                     if let last = viewModel.sortedMessages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
