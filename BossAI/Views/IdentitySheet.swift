@@ -10,6 +10,8 @@ struct IdentitySheet: View {
 
     @State private var identity = UserIdentity.load()
     @State private var showClearConfirm = false
+    @State private var showExport = false
+    @State private var showImport = false
 
     var body: some View {
         NavigationStack {
@@ -54,6 +56,23 @@ struct IdentitySheet: View {
                 } footer: {
                     Text("记忆只保存在本机，可随时删除或清空。")
                 }
+
+                Section {
+                    Button {
+                        showExport = true
+                    } label: {
+                        Label("导出全部数据（加密）", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    Button {
+                        showImport = true
+                    } label: {
+                        Label("从备份导入", systemImage: "square.and.arrow.down.on.square")
+                    }
+                } header: {
+                    Text("备份与迁移")
+                } footer: {
+                    Text("导出的文件包含全部对话与图片、资料库文件、长期记忆、身份设置、API Key 和偏好配置，用你设定的密码加密（AES-256）。换设备时把这个文件传过去导入即可。")
+                }
             }
             .navigationTitle("身份设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -75,6 +94,12 @@ struct IdentitySheet: View {
                     try? modelContext.save()
                 }
                 Button("取消", role: .cancel) {}
+            }
+            .sheet(isPresented: $showExport) {
+                BackupExportSheet()
+            }
+            .sheet(isPresented: $showImport) {
+                BackupImportSheet()
             }
         }
     }
