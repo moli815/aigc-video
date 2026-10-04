@@ -12,6 +12,7 @@ struct IdentitySheet: View {
     @State private var showClearConfirm = false
     @State private var showExport = false
     @State private var showImport = false
+    @AppStorage(ThemeStore.key) private var themeRaw = AppTheme.blue.rawValue
 
     var body: some View {
         NavigationStack {
@@ -27,6 +28,54 @@ struct IdentitySheet: View {
                     Text("对话者身份")
                 } footer: {
                     Text("设置后，所有对话的回答都会结合你的身份背景，更贴合实际经营场景。")
+                }
+
+                Section {
+                    Picker("回复风格", selection: $identity.replyStyle) {
+                        ForEach(ReplyStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                } header: {
+                    Text("AI 回复风格")
+                } footer: {
+                    Text("控制 AI 回答的语气与详略。可在不同场景随时切换。")
+                }
+
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(AppTheme.allCases) { theme in
+                                let selected = theme.rawValue == themeRaw
+                                Button {
+                                    themeRaw = theme.rawValue
+                                } label: {
+                                    VStack(spacing: 6) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(theme.swatch)
+                                                .frame(width: 40, height: 40)
+                                            if selected {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 15, weight: .bold))
+                                                    .foregroundStyle(.white)
+                                            }
+                                        }
+                                        Text(theme.displayName)
+                                            .font(.caption2)
+                                            .foregroundStyle(selected ? Color.primary : Color.secondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("主题 \(theme.displayName)")
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } header: {
+                    Text("外观主题")
+                } footer: {
+                    Text("切换后立即全局生效。")
                 }
 
                 Section {
