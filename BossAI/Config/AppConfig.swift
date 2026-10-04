@@ -28,6 +28,6 @@ enum AppConfig {
     static let imageKeyAccount = "image_api_key"
 
     // MARK: 工具调用保护
-    static let maxToolIterations = 6
+    static let maxToolIterations = 8
     static let memoryInjectLimit = 50
 }
