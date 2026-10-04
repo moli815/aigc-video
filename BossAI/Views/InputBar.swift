@@ -80,16 +80,28 @@ struct InputBar: View {
                             .stroke(Color(.separator), lineWidth: 1)
                     )
 
-                Button {
-                    viewModel.send()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 30))
-                        .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
-                        .frame(width: 42, height: 42)
+                if viewModel.isStreaming {
+                    Button {
+                        viewModel.stop()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(Color.red)
+                            .frame(width: 42, height: 42)
+                    }
+                    .accessibilityLabel("停止输出")
+                } else {
+                    Button {
+                        viewModel.send()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(canSend ? Color.accentColor : Color(.systemGray4))
+                            .frame(width: 42, height: 42)
+                    }
+                    .disabled(!canSend)
+                    .accessibilityLabel("发送")
                 }
-                .disabled(!canSend)
-                .accessibilityLabel("发送")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
