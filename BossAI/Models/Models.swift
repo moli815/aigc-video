@@ -6,17 +6,23 @@ import SwiftData
 @Model
 final class Conversation {
     var id: UUID = UUID()
-    /// 对应 ExpertCatalog 中的 expert.id（"general" 为普通对话）
+    /// 对应 ExpertCatalog 中的 expert.id
     var expertId: String = "general"
     var title: String = ""
     var createdAt: Date = Date()
+    /// 最后活动时间：侧栏按此倒序排列
+    var updatedAt: Date = Date()
     @Relationship(deleteRule: .cascade, inverse: \Message.conversation)
     var messages: [Message] = []
 
     init(expertId: String, title: String) {
         self.expertId = expertId
         self.title = title
+        self.createdAt = Date()
+        self.updatedAt = Date()
     }
+
+    var expert: Expert { ExpertCatalog.find(expertId) }
 }
 
 @Model
@@ -25,6 +31,8 @@ final class Message {
     var role: String = "user"          // user / assistant
     var text: String = ""
     var imageData: Data? = nil         // 生成的图片（assistant 消息）
+    /// 附件（StoredFile.id 的字符串形式，逗号分隔）
+    var attachmentIds: String = ""
     var createdAt: Date = Date()
     var conversation: Conversation?
 
@@ -32,6 +40,11 @@ final class Message {
         self.role = role
         self.text = text
         self.imageData = imageData
+        self.createdAt = Date()
+    }
+
+    var attachmentIdList: [String] {
+        attachmentIds.split(separator: ",").map(String.init).filter { !$0.isEmpty }
     }
 }
 
@@ -46,6 +59,103 @@ final class MemoryItem {
 
     init(content: String) {
         self.content = content
+    }
+}
+
+// MARK: - 资料库文件（本地沙盒保存，App 生成 + 用户上传）
+
+enum FileKind: String, Codable, CaseIterable, Identifiable {
+    case uploaded
+    case generated
+    var id: String { rawValue }
+    var displayName: String { self == .uploaded ? "我上传的" : "AI 生成的" }
+    var symbol: String { self == .uploaded ? "square.and.arrow.up" : "sparkles" }
+}
+
+enum FileCategory: String, Codable, CaseIterable, Identifiable {
+    case pdf, document, spreadsheet, presentation, image, text, other
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .pdf: return "PDF"
+        case .document: return "文档"
+        case .spreadsheet: return "表格"
+        case .presentation: return "演示"
+        case .image: return "图片"
+        case .text: return "文本"
+        case .other: return "其他"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .pdf: return "doc.richtext"
+        case .document: return "doc.text"
+        case .spreadsheet: return "tablecells"
+        case .presentation: return "rectangle.on.rectangle"
+        case .image: return "photo"
+        case .text: return "text.alignleft"
+        case .other: return "doc"
+        }
+    }
+
+    static func from(ext: String) -> FileCategory {
+        switch ext.lowercased() {
+        case "pdf": return .pdf
+        case "doc", "docx", "rtf", "pages": return .document
+        case "xls", "xlsx", "csv", "numbers": return .spreadsheet
+        case "ppt", "pptx", "key": return .presentation
+        case "png", "jpg", "jpeg", "heic", "heif", "gif", "webp", "tiff": return .image
+        case "txt", "md", "markdown", "json", "xml", "html": return .text
+        default: return .other
+        }
+    }
+}
+
+@Model
+final class StoredFile {
+    var id: UUID = UUID()
+    /// 显示名（含扩展名）
+    var name: String = ""
+    /// 小写扩展名，不含点
+    var ext: String = ""
+    /// FileKind.rawValue
+    var kindRaw: String = FileKind.uploaded.rawValue
+    /// FileCategory.rawValue
+    var categoryRaw: String = FileCategory.other.rawValue
+    /// 相对 Files 目录的文件名
+    var storedName: String = ""
+    var byteCount: Int = 0
+    var createdAt: Date = Date()
+    /// 来源会话（可空字符串）
+    var sourceConversationId: String = ""
+    /// 抽取出的纯文本（供喂给模型 / 全文搜索）
+    var textContent: String = ""
+    var isFavorite: Bool = false
+
+    init(name: String, ext: String, storedName: String,
+         kind: FileKind, category: FileCategory,
+         byteCount: Int, sourceConversationId: String = "",
+         textContent: String = "") {
+        self.name = name
+        self.ext = ext
+        self.storedName = storedName
+        self.kindRaw = kind.rawValue
+        self.categoryRaw = category.rawValue
+        self.byteCount = byteCount
+        self.sourceConversationId = sourceConversationId
+        self.textContent = textContent
+        self.createdAt = Date()
+    }
+
+    var kind: FileKind { FileKind(rawValue: kindRaw) ?? .uploaded }
+    var category: FileCategory { FileCategory(rawValue: categoryRaw) ?? .other }
+
+    var sizeText: String {
+        let f = ByteCountFormatter()
+        f.countStyle = .file
+        return f.string(fromByteCount: Int64(byteCount))
     }
 }
 
