@@ -123,34 +123,22 @@ final class ChatService {
 
     /// 按服务商适配工具挂载方式
     private func applyTools(to body: inout [String: Any]) {
+        var tools: [[String: Any]] = []
         switch profile.searchStyle {
         case .kimiBuiltin:
-            // Kimi 内置搜索工具 + 自定义生图
-            body["tools"] = [
-                ["type": "builtin_function", "function": ["name": "$web_search"]],
-                ["type": "function", "function": Self.generateImageFunction],
-            ]
+            tools.append(["type": "builtin_function", "function": ["name": "$web_search"]])
         case .zhipuTool:
-            body["tools"] = [
-                ["type": "web_search", "web_search": ["enable": true]],
-                ["type": "function", "function": Self.generateImageFunction],
-            ]
+            tools.append(["type": "web_search", "web_search": ["enable": true]])
         case .volcTool:
-            body["tools"] = [
-                ["type": "web_search"],
-                ["type": "function", "function": Self.generateImageFunction],
-            ]
+            tools.append(["type": "web_search"])
         case .dashscopeParam:
-            // 阿里通义：搜索是请求参数而非工具
             body["enable_search"] = true
-            body["tools"] = [
-                ["type": "function", "function": Self.generateImageFunction],
-            ]
         case .none:
-            body["tools"] = [
-                ["type": "function", "function": Self.generateImageFunction],
-            ]
+            break
         }
+        tools.append(["type": "function", "function": Self.generateImageFunction])
+        tools.append(["type": "function", "function": Self.createDocumentFunction])
+        body["tools"] = tools
     }
 
     /// 自定义生图工具定义
@@ -175,5 +163,37 @@ final class ChatService {
             "parameters": generateImageParameters,
         ]
         return functionDefinition
+    }()
+
+    /// 自定义文档生成工具定义：让 AI 直接产出可下载的 Word/PPT/Excel/PDF
+    static let createDocumentFunction: [String: Any] = {
+        let parameters: [String: Any] = [
+            "type": "object",
+            "properties": [
+                "format": [
+                    "type": "string",
+                    "enum": ["word", "ppt", "excel", "pdf"],
+                    "description": "要生成的文件类型：word=Word 文档，ppt=PPT 演示，excel=Excel 表格，pdf=PDF",
+                ],
+                "filename": [
+                    "type": "string",
+                    "description": "文件名（含中文，不含扩展名），如「2026年经营计划」",
+                ],
+                "title": [
+                    "type": "string",
+                    "description": "文档标题",
+                ],
+                "content": [
+                    "type": "string",
+                    "description": "正文，使用 Markdown：# 一级标题、## 二级标题、- 列表项。PPT 用 --- 分页，每页第一行是标题；Excel 用 Markdown 表格。",
+                ],
+            ],
+            "required": ["format", "filename", "content"],
+        ]
+        return [
+            "name": "create_document",
+            "description": "生成可下载的办公文件（Word / PPT / Excel / PDF）并存入资料库。当用户要求「整理成文档」「做成 PPT」「导出成 Word/Excel」「生成报告」时调用。调用后不要再重复输出正文，只做简短说明。",
+            "parameters": parameters,
+        ]
     }()
 }
