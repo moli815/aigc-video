@@ -118,6 +118,7 @@ struct ChatView: View {
                     }
                     .padding(.vertical, 12)
                 }
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: viewModel.sortedMessages.count) { _, _ in
                     if let last = viewModel.sortedMessages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
