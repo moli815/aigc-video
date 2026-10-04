@@ -1,0 +1,538 @@
+import Foundation
+import SwiftData
+import CryptoKit
+import CommonCrypto
+import Compression
+import Security
+
+/// 全量备份与迁移：把对话、消息、图片、资料库文件、长期记忆、身份、API Key 与各项设置
+/// 打成一个**加密**文件，换设备时一键导入。
+///
+/// 安全设计：
+/// - 用户密码经 PBKDF2-SHA256（随机盐 + 12 万次迭代）派生 256 位密钥
+/// - 整个归档用 AES-256-GCM 加密并带完整性校验（改一个字节就解不开）
+/// - 文件格式：`BOSSAI01`(8B) + salt(16B) + AES-GCM combined(nonce12 + 密文 + tag16)
+enum BackupService {
+
+    static let magic = "BOSSAI01"
+    static let fileExtension = "bossai"
+    private static let saltLength = 16
+    private static let keyLength = 32
+    private static let pbkdfRounds: UInt32 = 120_000
+
+    enum BackupError: LocalizedError {
+        case notBackupFile
+        case wrongPasswordOrDamaged
+        case corruptArchive(String)
+        case emptyPassword
+        case nothingToExport
+
+        var errorDescription: String? {
+            switch self {
+            case .notBackupFile: return "这不是 Boss AI 的备份文件"
+            case .wrongPasswordOrDamaged: return "密码错误，或文件已损坏"
+            case .corruptArchive(let detail): return "备份内容不完整：\(detail)"
+            case .emptyPassword: return "请设置密码"
+            case .nothingToExport: return "没有可导出的数据"
+            }
+        }
+    }
+
+    // MARK: - 归档结构
+
+    struct Manifest: Codable, Sendable {
+        var version: Int = 1
+        var exportedAt: Date = Date()
+        var conversations: [ConversationDTO] = []
+        var memories: [MemoryDTO] = []
+        var files: [FileDTO] = []
+        var identity: UserIdentity?
+        var chatKey: String?
+        var imageKey: String?
+        var settings: SettingsDTO = SettingsDTO()
+
+        init() {}
+
+        /// 容错解码：以后新增字段时，老备份依然能读进来
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            version = (try? c.decode(Int.self, forKey: .version)) ?? 1
+            exportedAt = (try? c.decode(Date.self, forKey: .exportedAt)) ?? Date()
+            conversations = (try? c.decode([ConversationDTO].self, forKey: .conversations)) ?? []
+            memories = (try? c.decode([MemoryDTO].self, forKey: .memories)) ?? []
+            files = (try? c.decode([FileDTO].self, forKey: .files)) ?? []
+            identity = try? c.decodeIfPresent(UserIdentity.self, forKey: .identity)
+            chatKey = try? c.decodeIfPresent(String.self, forKey: .chatKey)
+            imageKey = try? c.decodeIfPresent(String.self, forKey: .imageKey)
+            settings = (try? c.decode(SettingsDTO.self, forKey: .settings)) ?? SettingsDTO()
+        }
+    }
+
+    struct ConversationDTO: Codable, Sendable {
+        var id: UUID
+        var expertId: String
+        var title: String
+        var createdAt: Date
+        var updatedAt: Date
+        var messages: [MessageDTO]
+    }
+
+    struct MessageDTO: Codable, Sendable {
+        var id: UUID
+        var role: String
+        var text: String
+        var createdAt: Date
+        var attachmentIds: String
+        var imageEntry: String?
+    }
+
+    struct FileDTO: Codable, Sendable {
+        var id: UUID
+        var name: String
+        var ext: String
+        var kindRaw: String
+        var categoryRaw: String
+        var storedName: String
+        var byteCount: Int
+        var createdAt: Date
+        var sourceConversationId: String
+        var textContent: String
+        var isFavorite: Bool
+        var entry: String?
+    }
+
+    struct MemoryDTO: Codable, Sendable {
+        var id: UUID
+        var content: String
+        var createdAt: Date
+        var hitCount: Int
+    }
+
+    struct SettingsDTO: Codable, Sendable {
+        var chatProvider: String?
+        var imageProvider: String?
+        var chatModelOverride: String = ""
+        var imageModelOverride: String = ""
+        var budgetLimit: Double = 0
+        var budgetSpent: Double = 0
+        var searchEngine: String = WebSearchEngine.auto.rawValue
+        var tavilyKey: String = ""
+        var bochaKey: String = ""
+        var preferProviderSearch: Bool = false
+        var searchPageFetch: Int = 2
+
+        init() {}
+
+        /// 容错解码：缺字段时用默认值，不让整个备份解析失败
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            chatProvider = try? c.decodeIfPresent(String.self, forKey: .chatProvider)
+            imageProvider = try? c.decodeIfPresent(String.self, forKey: .imageProvider)
+            chatModelOverride = (try? c.decode(String.self, forKey: .chatModelOverride)) ?? ""
+            imageModelOverride = (try? c.decode(String.self, forKey: .imageModelOverride)) ?? ""
+            budgetLimit = (try? c.decode(Double.self, forKey: .budgetLimit)) ?? 0
+            budgetSpent = (try? c.decode(Double.self, forKey: .budgetSpent)) ?? 0
+            searchEngine = (try? c.decode(String.self, forKey: .searchEngine)) ?? WebSearchEngine.auto.rawValue
+            tavilyKey = (try? c.decode(String.self, forKey: .tavilyKey)) ?? ""
+            bochaKey = (try? c.decode(String.self, forKey: .bochaKey)) ?? ""
+            preferProviderSearch = (try? c.decode(Bool.self, forKey: .preferProviderSearch)) ?? false
+            searchPageFetch = (try? c.decode(Int.self, forKey: .searchPageFetch)) ?? 2
+        }
+    }
+
+    /// 解密后的结果，用于跨线程传递
+    private struct DecryptedPayload: Sendable {
+        let manifest: Manifest
+        let archive: Data
+    }
+
+    struct ImportSummary {        var conversations = 0
+        var messages = 0
+        var files = 0
+        var memories = 0
+        var skippedExisting = 0
+        var identityRestored = false
+        var keysRestored = false
+        var exportedAt: Date?
+
+        var text: String {
+            var lines: [String] = []
+            if let exportedAt {
+                lines.append("备份时间：\(exportedAt.formatted(date: .abbreviated, time: .shortened))")
+            }
+            lines.append("导入对话 \(conversations) 个（含 \(messages) 条消息）")
+            lines.append("导入文件 \(files) 个")
+            lines.append("导入记忆 \(memories) 条")
+            if skippedExisting > 0 { lines.append("跳过已存在 \(skippedExisting) 项") }
+            if identityRestored { lines.append("已恢复身份设置") }
+            if keysRestored { lines.append("已恢复 API Key") }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    // MARK: - 导出
+
+    /// 生成加密备份文件，返回文件 URL（存在 Documents/Exports 下）
+    @MainActor
+    static func export(password: String, context: ModelContext) async throws -> URL {
+        guard !password.isEmpty else { throw BackupError.emptyPassword }
+
+        let conversations = ((try? context.fetch(FetchDescriptor<Conversation>())) ?? [])
+            .sorted { $0.createdAt < $1.createdAt }
+        let storedFiles = ((try? context.fetch(FetchDescriptor<StoredFile>())) ?? [])
+            .sorted { $0.createdAt < $1.createdAt }
+        let memories = ((try? context.fetch(FetchDescriptor<MemoryItem>())) ?? [])
+            .sorted { $0.createdAt < $1.createdAt }
+
+        guard !conversations.isEmpty || !storedFiles.isEmpty || !memories.isEmpty else {
+            throw BackupError.nothingToExport
+        }
+
+        // 主线程：只做对象到 DTO 的搬运（快）
+        var manifest = Manifest()
+        manifest.exportedAt = Date()
+        var blobs: [(String, Data)] = []
+
+        for conv in conversations {
+            var dto = ConversationDTO(id: conv.id, expertId: conv.expertId, title: conv.title,
+                                      createdAt: conv.createdAt, updatedAt: conv.updatedAt, messages: [])
+            for msg in conv.messages.sorted(by: { $0.createdAt < $1.createdAt }) {
+                var entry: String?
+                if let image = msg.imageData {
+                    let name = "images/\(msg.id.uuidString).bin"
+                    blobs.append((name, image))
+                    entry = name
+                }
+                dto.messages.append(MessageDTO(id: msg.id, role: msg.role, text: msg.text,
+                                               createdAt: msg.createdAt,
+                                               attachmentIds: msg.attachmentIds,
+                                               imageEntry: entry))
+            }
+            manifest.conversations.append(dto)
+        }
+
+        for file in storedFiles {
+            var entry: String?
+            if let data = try? Data(contentsOf: FileStore.url(for: file)) {
+                let name = "files/\(file.storedName)"
+                blobs.append((name, data))
+                entry = name
+            }
+            manifest.files.append(FileDTO(id: file.id, name: file.name, ext: file.ext,
+                                          kindRaw: file.kindRaw, categoryRaw: file.categoryRaw,
+                                          storedName: file.storedName, byteCount: file.byteCount,
+                                          createdAt: file.createdAt,
+                                          sourceConversationId: file.sourceConversationId,
+                                          textContent: file.textContent,
+                                          isFavorite: file.isFavorite,
+                                          entry: entry))
+        }
+
+        for memory in memories {
+            manifest.memories.append(MemoryDTO(id: memory.id, content: memory.content,
+                                               createdAt: memory.createdAt, hitCount: memory.hitCount))
+        }
+
+        manifest.identity = UserIdentity.load()
+        manifest.chatKey = KeychainHelper.read(service: AppConfig.keychainService,
+                                               account: AppConfig.chatKeyAccount)
+        manifest.imageKey = KeychainHelper.read(service: AppConfig.keychainService,
+                                                account: AppConfig.imageKeyAccount)
+        manifest.settings = currentSettings()
+
+        // 后台线程：打包 + 加密（PBKDF2 与压缩都在这里，避免卡界面）
+        let payload = try await Task.detached(priority: .userInitiated) {
+            try assemble(manifest: manifest, blobs: blobs, password: password)
+        }.value
+
+        let dir = exportsDirectory()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmm"
+        let url = dir.appendingPathComponent("BossAI备份-\(formatter.string(from: Date())).\(fileExtension)")
+        try payload.write(to: url, options: .atomic)
+        return url
+    }
+
+    static func exportsDirectory() -> URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("Exports", isDirectory: true)
+    }
+
+    /// 纯数据操作，可安全地在后台线程执行
+    nonisolated private static func assemble(manifest: Manifest,
+                                            blobs: [(String, Data)],
+                                            password: String) throws -> Data {
+        var zip = ZipWriter()
+        for (name, data) in blobs {
+            zip.add(name, data)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let json = try encoder.encode(manifest)
+        if let compressed = deflate(json) {
+            zip.add("manifest.json.z", compressed)
+        } else {
+            zip.add("manifest.json", json)
+        }
+        return try encrypt(zip.finalize(), password: password)
+    }
+
+    private static func currentSettings() -> SettingsDTO {
+        var s = SettingsDTO()
+        s.chatProvider = ProviderCatalog.storedChatProviderId()
+        s.imageProvider = ProviderCatalog.storedImageProviderId()
+        s.chatModelOverride = ProviderCatalog.chatModelOverride()
+        s.imageModelOverride = ProviderCatalog.imageModelOverride()
+        s.budgetLimit = BudgetTracker.limit()
+        s.budgetSpent = BudgetTracker.spent()
+        s.searchEngine = WebSearchService.engine.rawValue
+        s.tavilyKey = WebSearchService.tavilyKey
+        s.bochaKey = WebSearchService.bochaKey
+        s.preferProviderSearch = AppConfig.preferProviderSearch
+        s.searchPageFetch = AppConfig.searchPageFetchCount
+        return s
+    }
+
+    // MARK: - 导入
+
+    /// 从备份文件恢复；同 ID 跳过，不覆盖本地已有数据
+    @MainActor
+    static func importBackup(from url: URL,
+                             password: String,
+                             context: ModelContext) async throws -> ImportSummary {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        guard let encrypted = try? Data(contentsOf: url) else {
+            throw BackupError.notBackupFile
+        }
+
+        // 后台线程：解密 + 解析 manifest
+        let payload = try await Task.detached(priority: .userInitiated) {
+            let archive = try decrypt(encrypted, password: password)
+            let manifest = try parseManifest(reader: ZipReader(data: archive))
+            return DecryptedPayload(manifest: manifest, archive: archive)
+        }.value
+
+        let manifest = payload.manifest
+        let reader = ZipReader(data: payload.archive)
+        let names = reader.entryNames()
+
+        let existingConversations = Set(((try? context.fetch(FetchDescriptor<Conversation>())) ?? []).map(\.id))
+        let existingFiles = Set(((try? context.fetch(FetchDescriptor<StoredFile>())) ?? []).map(\.id))
+        let existingMemoryTexts = Set(((try? context.fetch(FetchDescriptor<MemoryItem>())) ?? []).map(\.content))
+
+        var summary = ImportSummary()
+        summary.exportedAt = manifest.exportedAt
+
+        // 1) 对话与消息
+        for dto in manifest.conversations {
+            if existingConversations.contains(dto.id) {
+                summary.skippedExisting += 1
+                continue
+            }
+            let conv = Conversation(expertId: dto.expertId, title: dto.title)
+            conv.id = dto.id
+            conv.createdAt = dto.createdAt
+            conv.updatedAt = dto.updatedAt
+            context.insert(conv)
+            for m in dto.messages {
+                let msg = Message(role: m.role, text: m.text)
+                msg.id = m.id
+                msg.createdAt = m.createdAt
+                msg.attachmentIds = m.attachmentIds
+                if let entry = m.imageEntry, names.contains(entry) {
+                    msg.imageData = try? reader.data(for: entry)
+                }
+                msg.conversation = conv
+                context.insert(msg)
+                summary.messages += 1
+            }
+            summary.conversations += 1
+        }
+
+        // 2) 资料库文件（写回沙盒）
+        FileStore.prepare()
+        for dto in manifest.files {
+            if existingFiles.contains(dto.id) {
+                summary.skippedExisting += 1
+                continue
+            }
+            let record = StoredFile(name: dto.name, ext: dto.ext, storedName: dto.storedName,
+                                    kind: FileKind(rawValue: dto.kindRaw) ?? .uploaded,
+                                    category: FileCategory(rawValue: dto.categoryRaw) ?? .other,
+                                    byteCount: dto.byteCount,
+                                    sourceConversationId: dto.sourceConversationId,
+                                    textContent: dto.textContent)
+            record.id = dto.id
+            record.createdAt = dto.createdAt
+            record.isFavorite = dto.isFavorite
+            if let entry = dto.entry, names.contains(entry),
+               let data = try? reader.data(for: entry) {
+                let dest = FileStore.rootURL.appendingPathComponent(dto.storedName)
+                if !FileManager.default.fileExists(atPath: dest.path) {
+                    try? data.write(to: dest, options: .atomic)
+                }
+            }
+            context.insert(record)
+            summary.files += 1
+        }
+
+        // 3) 长期记忆（按内容去重）
+        for dto in manifest.memories {
+            if existingMemoryTexts.contains(dto.content) {
+                summary.skippedExisting += 1
+                continue
+            }
+            let item = MemoryItem(content: dto.content)
+            item.createdAt = dto.createdAt
+            item.hitCount = dto.hitCount
+            context.insert(item)
+            summary.memories += 1
+        }
+
+        try? context.save()
+
+        // 4) 身份
+        if let identity = manifest.identity, !identity.isEmpty {
+            identity.save()
+            summary.identityRestored = true
+        }
+
+        // 5) API Key
+        if let chat = manifest.chatKey, !chat.isEmpty {
+            KeychainHelper.save(chat, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
+            summary.keysRestored = true
+        }
+        if let image = manifest.imageKey, !image.isEmpty {
+            KeychainHelper.save(image, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+            summary.keysRestored = true
+        }
+
+        // 6) 设置
+        applySettings(manifest.settings)
+
+        NotificationCenter.default.post(name: .bossAIKeysChanged, object: nil)
+        return summary
+    }
+
+    nonisolated private static func parseManifest(reader: ZipReader) throws -> Manifest {
+        let names = reader.entryNames()
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        if names.contains("manifest.json.z") {
+            let compressed = try reader.data(for: "manifest.json.z")
+            guard let json = inflate(compressed) else { throw BackupError.corruptArchive("manifest 解压失败") }
+            do { return try decoder.decode(Manifest.self, from: json) }
+            catch { throw BackupError.corruptArchive("内容解析失败") }
+        }
+        if names.contains("manifest.json") {
+            let json = try reader.data(for: "manifest.json")
+            do { return try decoder.decode(Manifest.self, from: json) }
+            catch { throw BackupError.corruptArchive("内容解析失败") }
+        }
+        throw BackupError.corruptArchive("缺少 manifest")
+    }
+
+    @MainActor
+    private static func applySettings(_ s: SettingsDTO) {
+        if let chat = s.chatProvider { ProviderCatalog.saveChatProvider(chat) }
+        if let image = s.imageProvider { ProviderCatalog.saveImageProvider(image) }
+        ProviderCatalog.saveChatModelOverride(s.chatModelOverride)
+        ProviderCatalog.saveImageModelOverride(s.imageModelOverride)
+        BudgetTracker.setLimit(s.budgetLimit)
+        if s.budgetSpent > 0 { BudgetTracker.restoreSpent(s.budgetSpent) }
+        WebSearchService.engine = WebSearchEngine(rawValue: s.searchEngine) ?? .auto
+        WebSearchService.tavilyKey = s.tavilyKey
+        WebSearchService.bochaKey = s.bochaKey
+        AppConfig.setPreferProviderSearch(s.preferProviderSearch)
+        AppConfig.setSearchPageFetchCount(s.searchPageFetch)
+    }
+
+    // MARK: - 加解密（纯数据操作）
+
+    nonisolated static func encrypt(_ plain: Data, password: String) throws -> Data {
+        var salt = Data(count: saltLength)
+        _ = salt.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, saltLength, buffer.baseAddress!)
+        }
+        let key = deriveKey(password: password, salt: salt)
+        let sealed = try AES.GCM.seal(plain, using: key)
+        guard let combined = sealed.combined else { throw BackupError.corruptArchive("加密失败") }
+        var out = Data(magic.utf8)
+        out.append(salt)
+        out.append(combined)
+        return out
+    }
+
+    nonisolated static func decrypt(_ encrypted: Data, password: String) throws -> Data {
+        guard encrypted.count > saltLength + 8,
+              String(data: encrypted.prefix(8), encoding: .utf8) == magic else {
+            throw BackupError.notBackupFile
+        }
+        let salt = encrypted.subdata(in: 8..<(8 + saltLength))
+        let combined = encrypted.subdata(in: (8 + saltLength)..<encrypted.count)
+        let key = deriveKey(password: password, salt: salt)
+        do {
+            let box = try AES.GCM.SealedBox(combined: combined)
+            return try AES.GCM.open(box, using: key)
+        } catch {
+            throw BackupError.wrongPasswordOrDamaged
+        }
+    }
+
+    nonisolated private static func deriveKey(password: String, salt: Data) -> SymmetricKey {
+        let passwordData = Data(password.utf8)
+        var derived = Data(count: keyLength)
+        let status = derived.withUnsafeMutableBytes { derivedBytes -> Int32 in
+            salt.withUnsafeBytes { saltBytes -> Int32 in
+                passwordData.withUnsafeBytes { pwBytes -> Int32 in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        pwBytes.bindMemory(to: Int8.self).baseAddress, passwordData.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
+                        pbkdfRounds,
+                        derivedBytes.bindMemory(to: UInt8.self).baseAddress, keyLength
+                    )
+                }
+            }
+        }
+        if status != kCCSuccess {
+            return SymmetricKey(data: SHA256.hash(data: salt + passwordData))
+        }
+        return SymmetricKey(data: derived)
+    }
+
+    // MARK: - zlib 压缩（manifest 文本）
+
+    nonisolated private static func deflate(_ data: Data) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let capacity = data.count + max(64 * 1024, data.count / 10)
+        var out = Data(count: capacity)
+        let written = out.withUnsafeMutableBytes { dst -> Int in
+            data.withUnsafeBytes { src -> Int in
+                guard let d = dst.bindMemory(to: UInt8.self).baseAddress,
+                      let s = src.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_encode_buffer(d, capacity, s, data.count, nil, COMPRESSION_ZLIB)
+            }
+        }
+        guard written > 0 else { return nil }
+        return out.prefix(written)
+    }
+
+    /// 解压时逐级放大缓冲区，直到不再顶满
+    nonisolated private static func inflate(_ data: Data) -> Data? {
+        var capacity = max(data.count * 8, 1 << 20)
+        for _ in 0..<7 {
+            if let result = ZipReader.inflateRaw(data, expectedSize: capacity),
+               result.count < capacity {
+                return result
+            }
+            capacity *= 4
+        }
+        return ZipReader.inflateRaw(data, expectedSize: capacity)
+    }
+}
