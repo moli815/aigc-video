@@ -149,16 +149,13 @@ enum MarkdownParser {
     /// 表格解析：把 Markdown 表格转成二维数组
     static func table(from markdown: String) -> [[String]] {
         var rows: [[String]] = []
+        var fenced = false
         for rawLine in markdown.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard line.hasPrefix("|") || line.contains("|") else { continue }
-            if line.contains("---") { continue }
-            var cells = line.split(separator: "|", omittingEmptySubsequences: false).map {
-                inline(String($0).trimmingCharacters(in: .whitespaces))
-            }
-            if cells.first?.isEmpty == true { cells.removeFirst() }
-            if cells.last?.isEmpty == true { cells.removeLast() }
-            if !cells.isEmpty { rows.append(cells) }
+            if line.hasPrefix("```") { fenced.toggle(); continue }
+            guard !fenced, line.contains("|"), !MarkdownTableCore.isSeparator(line) else { continue }
+            let cells = MarkdownTableCore.cells(line).map(inline)
+            if cells.count >= 2 { rows.append(cells) }
         }
         return rows
     }
@@ -183,10 +180,12 @@ enum MarkdownParser {
             }
         }
 
+        var fenced = false
         for rawLine in markdown.components(separatedBy: .newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("|") && line.contains("---") { continue }  // 表格分隔行
-            if line.hasPrefix("|") {
+            if line.hasPrefix("```") { fenced.toggle(); flushTable(); currentText.append(line); continue }
+            if !fenced && MarkdownTableCore.isSeparator(line) { continue }  // 表格分隔行
+            if !fenced && line.contains("|") && MarkdownTableCore.cells(line).count >= 2 {
                 flushText()
                 currentTable.append(line)
             } else {
@@ -328,23 +327,28 @@ enum DocumentBuilder {
             deck.insert((title, []), at: 0)
         }
 
-        // F02 修复：每页 bullet 上限 8，超过的拆成多页（带"续 N"），不再静默丢弃
+        // Bound estimated lines, not just bullet count; preserve every character on continuation pages.
         var expanded: [(String, [String])] = []
         for slide in deck {
-            let bullets = slide.bullets
-            guard bullets.count > 8 else {
-                expanded.append(slide)
-                continue
+            var segments: [String] = []
+            for bullet in slide.bullets {
+                let characters = Array(bullet)
+                if characters.isEmpty { segments.append(""); continue }
+                for start in stride(from: 0, to: characters.count, by: 80) {
+                    segments.append(String(characters[start..<min(start + 80, characters.count)]))
+                }
             }
-            var page = 0
-            var idx = 0
-            while idx < bullets.count {
-                page += 1
-                let chunk = Array(bullets[idx..<min(idx + 8, bullets.count)])
-                let pageTitle = page == 1 ? slide.title : "\(slide.title)（续 \(page)）"
-                expanded.append((pageTitle, chunk))
-                idx += 8
+            var page: [String] = []; var lines = 0; var number = 1
+            func flush() {
+                let title = number == 1 ? slide.title : "\(slide.title)（续 \(number)）"
+                expanded.append((title, page)); number += 1; page = []; lines = 0
             }
+            for segment in segments {
+                let cost = max(1, Int(ceil(Double(segment.count) / 40)))
+                if page.count >= 8 || (!page.isEmpty && lines + cost > 12) { flush() }
+                page.append(segment); lines += cost
+            }
+            if !page.isEmpty || segments.isEmpty { flush() }
         }
         deck = expanded
 
@@ -458,7 +462,13 @@ enum DocumentBuilder {
             var cells = ""
             for (colIndex, value) in row.enumerated() {
                 let ref = "\(columnName(colIndex))\(rowIndex + 1)"
-                cells += "<c r=\"\(ref)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+                // Keep leading-zero identifiers and currency labels as text; ordinary numbers become numeric cells.
+                if let number = Double(value), number.isFinite,
+                   !(value.count > 1 && value.hasPrefix("0") && !value.hasPrefix("0.")) {
+                    cells += "<c r=\"\(ref)\"><v>\(number)</v></c>"
+                } else {
+                    cells += "<c r=\"\(ref)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+                }
             }
             sheetData += "<row r=\"\(rowIndex + 1)\">\(cells)</row>"
         }
@@ -474,7 +484,7 @@ enum DocumentBuilder {
         """)
         zip.add("xl/workbook.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(String(title.prefix(28))))" sheetId="1" r:id="rId1"/></sheets></workbook>
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(MarkdownTableCore.sheetName(title)))" sheetId="1" r:id="rId1"/></sheets></workbook>
         """)
         zip.add("xl/_rels/workbook.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -541,9 +551,9 @@ enum DocumentBuilder {
 
                 // F04 修复：单个文本块（超长段落）超过一页时，按比例切成能放进一页的块，
                 // 逐块绘制。旧版整体 draw 会溢出页面、内容丢失。
-                if height > usable {
+                if height > usable && text.count > 1 {
                     let chars = Array(text)
-                    let chunkSize = max(100, Int(Double(chars.count) * (usable / height) * 0.9))
+                    let chunkSize = max(1, min(chars.count - 1, Int(Double(chars.count) * (usable / height) * 0.9)))
                     var i = 0
                     while i < chars.count {
                         let end = min(i + chunkSize, chars.count)
