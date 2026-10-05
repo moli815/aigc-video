@@ -2,6 +2,15 @@ import Foundation
 import SwiftData
 import UIKit
 
+/// 一次 web_search 的执行结果（要在并行 Task 之间传递，需 Sendable）
+private struct SearchOutcome: Sendable {
+    /// 在本轮工具调用中的顺序，回填时按此排序
+    let order: Int
+    let callId: String
+    let content: String
+    let sources: [String]
+}
+
 /// 单个会话的对话逻辑：
 /// 流式回复、联网搜索、generate_image 生图、create_document 生成文档、附件注入、记忆抽取
 @MainActor
@@ -33,11 +42,10 @@ final class ChatViewModel: ObservableObject {
     private let modelContext: ModelContext
     private var streamTask: Task<Void, Never>?
 
-    private var roundsSinceExtraction = 0
     private var fileCache: [UUID: StoredFile] = [:]
     private var fileCacheLoaded = false
-    /// 本轮联网搜索的结果，作为「信息来源」附在回答末尾
-    private var lastSearchContext: String?
+    /// 本轮联网搜索命中的来源链接，去重后作为「信息来源」附在回答末尾
+    private var searchSources: [String] = []
 
     init(conversation: Conversation?,
          expert: Expert,
@@ -234,11 +242,16 @@ final class ChatViewModel: ObservableObject {
             streamTask = nil
         }
 
+        searchSources = []
         var apiMessages = buildAPIMessages()
         var lastGeneratedImage: Data? = conv.messages
             .filter { $0.imageData != nil }
             .sorted { $0.createdAt < $1.createdAt }
             .last?.imageData
+
+        // B01：服务端返回的真实 token 数（拿不到就回退估算）
+        var realPromptTokens = 0
+        var realCompletionTokens = 0
 
         do {
             var iteration = 0
@@ -260,6 +273,9 @@ final class ChatViewModel: ObservableObject {
                     case .toolCalls(let calls, let text):
                         pendingToolCalls = calls
                         assistantText = text
+                    case .usage(let p, let c):
+                        realPromptTokens = p
+                        realCompletionTokens = c
                     case .finished:
                         break
                     }
@@ -283,6 +299,25 @@ final class ChatViewModel: ObservableObject {
                     },
                 ] as [String: Any])
 
+                // 本轮所有联网搜索并行执行。
+                // 收集类任务（如「6 款旗舰机参数」）会一次发多个 web_search，
+                // 串行等待会让耗时翻倍，模型就会偷懒退化成"只搜一次 + 靠记忆补齐"。
+                let searchOrders = pendingToolCalls.indices.filter { pendingToolCalls[$0].name == "web_search" }
+                var searchOutcomes: [SearchOutcome] = []
+                if !searchOrders.isEmpty {
+                    statusText = "正在联网搜索…"
+                    searchOutcomes = await withTaskGroup(of: SearchOutcome.self) { group in
+                        for order in searchOrders {
+                            let call = pendingToolCalls[order]
+                            group.addTask { await Self.runWebSearch(call: call, order: order, fallback: userText) }
+                        }
+                        var collected: [SearchOutcome] = []
+                        for await outcome in group { collected.append(outcome) }
+                        return collected.sorted { $0.order < $1.order }
+                    }
+                }
+                var searchCursor = 0
+
                 for call in pendingToolCalls {
                     switch call.name {
                     case "generate_image":
@@ -297,6 +332,7 @@ final class ChatViewModel: ObservableObject {
                             let imageMessage = Message(role: "assistant", text: "", imageData: imageData)
                             imageMessage.conversation = conv
                             modelContext.insert(imageMessage)
+                            BudgetTracker.addImageGeneration()   // B01：生图计入预算
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
@@ -347,6 +383,7 @@ final class ChatViewModel: ObservableObject {
                             ])
                             invalidateFileCache()
                             toast = "已生成 \(finalName)"
+                            BudgetTracker.addDocument(content)   // B01：文档生成计入预算
                         } catch {
                             apiMessages.append([
                                 "role": "tool",
@@ -356,35 +393,16 @@ final class ChatViewModel: ObservableObject {
                         }
 
                     case "web_search":
-                        statusText = "正在联网搜索…"
-                        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
-                        let query = (args?["query"] as? String) ?? userText
-                        let hits = await WebSearchService.search(query: query, count: 6)
-                        if hits.isEmpty {
+                        // 结果已在上面并行取回，这里按调用顺序回填给模型
+                        if searchCursor < searchOutcomes.count {
+                            let outcome = searchOutcomes[searchCursor]
+                            searchCursor += 1
                             apiMessages.append([
                                 "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": "搜索无结果或网络不可用。请基于已有知识回答，并明确告知用户该信息未能联网核实。",
+                                "tool_call_id": outcome.callId,
+                                "content": outcome.content,
                             ])
-                        } else {
-                            // 抓取前 N 篇正文，给模型更完整的信息
-                            var pages: [(title: String, url: String, text: String)] = []
-                            let fetchCount = min(AppConfig.searchPageFetchCount, hits.count)
-                            if fetchCount > 0 {
-                                statusText = "正在阅读网页…"
-                                for hit in hits.prefix(fetchCount) {
-                                    let text = await WebSearchService.fetchPageText(url: hit.url, limit: 3500)
-                                    if !text.isEmpty {
-                                        pages.append((hit.title, hit.url, text))
-                                    }
-                                }
-                            }
-                            lastSearchContext = WebSearchService.format(hits: hits, pages: pages)
-                            apiMessages.append([
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": lastSearchContext,
-                            ])
+                            searchSources.append(contentsOf: outcome.sources)
                         }
 
                     case "$web_search":
@@ -428,36 +446,93 @@ final class ChatViewModel: ObservableObject {
         conv.updatedAt = Date()
         try? modelContext.save()
 
-        // 附上信息来源，方便核对
-        if let context = lastSearchContext, !assistantMessage.text.isEmpty {
-            let sources = context.components(separatedBy: .newlines)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { $0.hasPrefix("http") }
-            if !sources.isEmpty {
-                let list = sources.prefix(5).map { "· \($0)" }.joined(separator: "\n")
-                assistantMessage.text += "\n\n---\n信息来源（联网检索）：\n\(list)"
-            }
+        // 附上信息来源，方便核对。带编号，与回答里的「（来源 N）」对应，可逐条追溯。
+        if !searchSources.isEmpty, !assistantMessage.text.isEmpty {
+            var seen = Set<String>()
+            let unique = searchSources.filter { seen.insert($0).inserted }
+            let list = unique.prefix(8).enumerated()
+                .map { "[\($0.offset + 1)] \($0.element)" }.joined(separator: "\n")
+            let more = unique.count > 8 ? "（仅列出前 8 条）" : ""
+            assistantMessage.text += "\n\n---\n信息来源（联网检索，共 \(unique.count) 条\(more)）：\n\(list)"
         }
-        lastSearchContext = nil
+        searchSources = []
         try? modelContext.save()
 
-        let promptTokens = BudgetTracker.estimateTokens(userText + attachments.map(\.textContent).joined())
-        let completionTokens = BudgetTracker.estimateTokens(
-            sortedMessages.suffix(2).map { $0.text }.joined()
-        )
+        // B01：优先用服务端返回的真实 token 计费，拿不到才回退估算
+        let promptTokens = realPromptTokens > 0
+            ? realPromptTokens
+            : BudgetTracker.estimateTokens(userText + attachments.map(\.textContent).joined())
+        let completionTokens = realCompletionTokens > 0
+            ? realCompletionTokens
+            : BudgetTracker.estimateTokens(sortedMessages.suffix(2).map { $0.text }.joined())
         BudgetTracker.add(promptTokens: promptTokens, completionTokens: completionTokens,
                           providerId: ProviderCatalog.currentChat().id)
 
-        roundsSinceExtraction += 1
-        if roundsSinceExtraction >= 3 {
-            roundsSinceExtraction = 0
+        // R01 修复：抽取计数持久化到 UserDefaults，VM 重建后不归零
+        // （旧版 roundsSinceExtraction 是实例属性，切会话重建 VM 就归零，每 3 轮抽取名存实亡）
+        let memoryRoundKey = "bossai.memory_rounds"
+        var rounds = UserDefaults.standard.integer(forKey: memoryRoundKey) + 1
+        if rounds >= 3 {
+            UserDefaults.standard.set(0, forKey: memoryRoundKey)
             let recent = sortedMessages.suffix(6)
                 .map { "\($0.role == "user" ? "用户" : "AI"): \($0.text)" }
                 .joined(separator: "\n")
             let service = memoryService
             let context = modelContext
-            Task { await service.extract(from: recent, context: context) }
+            let source = conv.title
+            Task { await service.extract(from: recent, source: source, context: context) }
+        } else {
+            UserDefaults.standard.set(rounds, forKey: memoryRoundKey)
         }
+    }
+
+    // MARK: - 联网搜索执行（可并行）
+
+    /// 执行一次 web_search：搜索 → 并行抓正文 → 格式化成给模型看的上下文
+    ///
+    /// 并行抓取正文是关键：参数类信息分散在不同站点，
+    /// 串行抓 3 篇要等 3 个 RTT，模型容易因为"太慢"而减少搜索次数。
+    /// nonisolated：必须脱离 MainActor，否则多个搜索会被排到主线程上排队，并行失效
+    nonisolated private static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String) async -> SearchOutcome {
+        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
+        let query = (args?["query"] as? String) ?? fallback
+        let hits = await WebSearchService.search(query: query, count: 6)
+
+        if hits.isEmpty {
+            return SearchOutcome(
+                order: order,
+                callId: call.id,
+                content: """
+                搜索「\(query)」无结果或网络不可用。
+                请在最终答案里把对应字段明确标注为「未核实」，\
+                不要用记忆中的数字、其他型号的数字或拼凑的数字填空 —— 留空不算错，填错才算错。
+                """,
+                sources: []
+            )
+        }
+
+        // 并行抓取正文，多给 3 个候选。
+        // 部分站点会反爬返回空，只抓前 N 个会因为个别失败而白白少拿一份资料 —— 这里凑够为止。
+        let fetchCount = min(AppConfig.searchPageFetchCount, hits.count)
+        let candidates = Array(hits.prefix(fetchCount + 3))
+        let raw = await withTaskGroup(of: (Int, String, String, String).self) { group in
+            for (i, hit) in candidates.enumerated() {
+                group.addTask {
+                    (i, hit.title, hit.url, await WebSearchService.fetchPageText(url: hit.url, limit: 3500))
+                }
+            }
+            var collected: [(Int, String, String, String)] = []
+            for await item in group { collected.append(item) }
+            return collected.sorted { $0.0 < $1.0 }
+        }
+
+        let pages = Array(raw.filter { !$0.3.isEmpty }
+            .map { (title: $0.1, url: $0.2, text: $0.3) }
+            .prefix(fetchCount))
+        return SearchOutcome(order: order,
+                             callId: call.id,
+                             content: WebSearchService.format(hits: hits, pages: pages),
+                             sources: hits.map(\.url))
     }
 
     // MARK: - 上下文组装：专家 prompt + 身份 + 记忆 + 附件正文
