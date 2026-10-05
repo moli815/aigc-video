@@ -61,7 +61,7 @@ final class StreamRegressionTests: XCTestCase {
         let container = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, MemoryItem.self, configurations: config)
         let context = ModelContext(container)
         let chat = service(delta)
-        let vm = ChatViewModel(conversation: nil, expert: Expert.general, modelContext: context,
+        let vm = ChatViewModel(conversation: nil, expert: ExpertCatalog.find("general"), modelContext: context,
                                chatKey: { "stream-regression-fixture" }, imageKey: { nil }, chatService: chat)
         vm.inputText = "Synthetic question"; vm.send()
         for _ in 0..<200 { if !vm.isStreaming { break }; try await Task.sleep(nanoseconds: 10_000_000) }
