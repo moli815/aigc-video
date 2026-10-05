@@ -25,7 +25,8 @@ final class MemoryService {
     }
 
     /// 后台抽取：对照现有记忆返回 add/update/skip 操作并落库。
-    func extract(from recentDialogue: String, context: ModelContext) async {
+    /// source：本条记忆来自哪段对话（会话标题），落到每条记忆上，供查看与纠错定位。
+    func extract(from recentDialogue: String, source: String = "", context: ModelContext) async {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { return }
 
         let existing = (try? context.fetch(FetchDescriptor<MemoryItem>())) ?? []
@@ -76,12 +77,13 @@ final class MemoryService {
                   let text = op["content"] as? String, !text.isEmpty else { continue }
             switch action {
             case "add":
-                context.insert(MemoryItem(content: text))
+                context.insert(MemoryItem(content: text, source: source))
             case "update":
                 if let index = op["index"] as? Int, existing.indices.contains(index) {
                     existing[index].content = text
+                    if !source.isEmpty { existing[index].source = source }
                 } else {
-                    context.insert(MemoryItem(content: text))
+                    context.insert(MemoryItem(content: text, source: source))
                 }
             default:
                 continue
