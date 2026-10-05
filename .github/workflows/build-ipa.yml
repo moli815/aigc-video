@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 同一分支只保留最新一次编译：新 run 触发时自动取消所有排队中的旧 run
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-14
