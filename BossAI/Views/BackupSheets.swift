@@ -115,9 +115,9 @@ struct BackupImportSheet: View {
     @State private var working = false
     @State private var errorText: String?
     @State private var summaryText: String?
-    @State private var overwriteIdentity = true
-    @State private var overwriteKeys = true
-    @State private var overwriteSettings = true
+    @State private var overwriteIdentity = false
+    @State private var overwriteKeys = false
+    @State private var overwriteSettings = false
 
     var body: some View {
         NavigationStack {
@@ -184,7 +184,7 @@ struct BackupImportSheet: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } footer: {
-                    Text("导入是合并式的：与本地同一条的数据会跳过，不会覆盖你现有的对话。")
+                    Text("导入是合并式的：已有会话保留本机内容，补入备份中新出现的消息；身份、密钥和偏好默认保留本机配置。")
                 }
             }
             .navigationTitle("从备份导入")
