@@ -104,3 +104,38 @@ enum MarkdownTableCore {
         return cleaned.isEmpty ? "工作表" : String(cleaned.prefix(31))
     }
 }
+
+
+/// Reads network bytes directly: SSE requires empty lines and exact CR/LF framing.
+/// Never decode a partial UTF-8 scalar at a transport chunk boundary.
+struct SSEByteDecoder {
+    private var line: [UInt8] = []
+    private var previousCR = false
+    private var events = SSEDecoder()
+    mutating func consume(_ byte: UInt8) throws -> String? {
+        if previousCR {
+            previousCR = false
+            if byte == 10 { return nil }
+        }
+        if byte == 13 || byte == 10 {
+            previousCR = byte == 13
+            return try finishLine()
+        }
+        guard line.count < 1_048_576 else { throw ExpertSkillError.invalidInput("流数据行超过1MB") }
+        line.append(byte)
+        return nil
+    }
+    private mutating func finishLine() throws -> String? {
+        guard let decoded = String(bytes: line, encoding: .utf8) else {
+            throw ExpertSkillError.invalidInput("流数据不是有效UTF-8")
+        }
+        line.removeAll(keepingCapacity: true)
+        return try events.consume(decoded)
+    }
+    /// Compatibility with providers omitting the last delimiter. The caller still
+    /// requires an explicit DONE/stop/tool_calls marker; EOF alone is not success.
+    mutating func finish() throws -> String? {
+        if !line.isEmpty { _ = try finishLine() }
+        return events.drain()
+    }
+}

@@ -210,6 +210,14 @@ struct ChatView: View {
                     .padding(.bottom, 4)
             }
 
+            if viewModel.canRetryReply {
+                Button { viewModel.retryReply() } label: {
+                    Label("重新生成本次回复", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("retry-reply")
+                .padding(.bottom, 6)
+            }
             InputBar(viewModel: viewModel)
         }
         .background(theme.canvas)

@@ -25,7 +25,7 @@ final class ChatService {
             switch self {
             case .missingKey: return "未配置对话 API Key"
             case .badResponse(let code, let body): return "请求失败（\(code)）：\(body.prefix(300))"
-            case .incomplete(let reason): return "输出尚未完成（\(reason)），已保留收到的内容，可继续生成。"
+            case .incomplete(let reason): return "输出尚未完成（\(reason)）。"
             }
         }
     }
@@ -52,6 +52,7 @@ final class ChatService {
                     request.httpMethod = "POST"
                     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     request.timeoutInterval = 120
 
                     var body: [String: Any] = [
@@ -83,14 +84,12 @@ final class ChatService {
                     var toolBytes = 0
                     var toolCallBuffer: [Int: (id: String, name: String, args: String)] = [:]
                     var searchNotified = false
-                    var sse = SSEDecoder()
+                    var sse = SSEByteDecoder()
                     var sawDone = false
                     var finishReason: String?
 
-                    for try await line in bytes.lines {
-                        if Task.isCancelled { break }
-                        guard let payload = try sse.consume(line) else { continue }
-                        if payload == "[DONE]" { sawDone = true; break }
+                    func processPayload(_ payload: String) throws -> Bool {
+                        if payload == "[DONE]" { sawDone = true; return true }
                         guard let data = payload.data(using: .utf8),
                               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ChatError.incomplete("无效流事件") }
                         if let failure = json["error"] { throw ChatError.incomplete(String(describing: failure).prefix(200).description) }
@@ -106,7 +105,7 @@ final class ChatService {
                         }
 
                         guard let choices = json["choices"] as? [[String: Any]],
-                              let choice = choices.first else { continue }
+                              let choice = choices.first else { return false }
                         if let reason = choice["finish_reason"] as? String { finishReason = reason }
 
                         if let delta = choice["delta"] as? [String: Any] {
@@ -146,7 +145,18 @@ final class ChatService {
                                 }
                             }
                         }
+                        return false
                     }
+                    if let http = response as? HTTPURLResponse,
+                       let type = http.value(forHTTPHeaderField: "Content-Type"),
+                       !type.lowercased().contains("text/event-stream") {
+                        throw ChatError.incomplete("服务端未返回事件流，请检查模型服务地址与配置")
+                    }
+                    for try await byte in bytes {
+                        try Task.checkCancellation()
+                        if let payload = try sse.consume(byte), try processPayload(payload) { break }
+                    }
+                    if !sawDone, let payload = try sse.finish() { _ = try processPayload(payload) }
 
                     if Task.isCancelled { throw CancellationError() }
                     if finishReason == "length" || finishReason == "content_filter" {
@@ -160,6 +170,7 @@ final class ChatService {
                     guard calls.count <= 24, calls.allSatisfy({ !$0.id.isEmpty && !$0.name.isEmpty && $0.arguments.utf8.count <= 262144 }) else {
                         throw ChatError.incomplete("工具调用缺少ID或超过安全上限")
                     }
+                    guard !text.isEmpty || !calls.isEmpty else { throw ChatError.incomplete("服务端返回了空回复") }
                     if !calls.isEmpty {
                         continuation.yield(.toolCalls(calls, assistantText: text))
                     } else {

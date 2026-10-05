@@ -20,6 +20,9 @@ final class ChatViewModel: ObservableObject {
     @Published var isStreaming = false
     @Published var statusText: String?
     @Published var errorMessage: String?
+    @Published private(set) var failedUserMessageID: UUID?
+    private var failedAssistantMessageID: UUID?
+    var canRetryReply: Bool { failedUserMessageID != nil && !isStreaming && !isImporting }
     /// 待发送的附件
     @Published var pendingAttachments: [StoredFile] = []
     @Published var isImporting = false
@@ -35,9 +38,10 @@ final class ChatViewModel: ObservableObject {
     var onConversationCreated: ((Conversation) -> Void)?
     let expert: Expert
 
-    private var chatService: ChatService { ChatService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
+    private var chatService: ChatService { injectedChatService ?? ChatService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
     private var imageService: ImageService { ImageService(profile: ProviderCatalog.currentImage(), apiKeyProvider: imageKey) }
     private var memoryService: MemoryService { MemoryService(profile: ProviderCatalog.currentChat(), apiKeyProvider: chatKey) }
+    private let injectedChatService: ChatService?
     private let chatKey: () -> String?
     private let imageKey: () -> String?
     private let modelContext: ModelContext
@@ -53,12 +57,14 @@ final class ChatViewModel: ObservableObject {
          expert: Expert,
          modelContext: ModelContext,
          chatKey: @escaping () -> String?,
-         imageKey: @escaping () -> String?) {
+         imageKey: @escaping () -> String?,
+         chatService: ChatService? = nil) {
         self.conversation = conversation
         self.expert = expert
         self.modelContext = modelContext
         self.chatKey = chatKey
         self.imageKey = imageKey
+        self.injectedChatService = chatService
         filesObserver = NotificationCenter.default.addObserver(forName: .bossAIFilesChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.invalidateFileCache() }
         }
@@ -188,6 +194,8 @@ final class ChatViewModel: ObservableObject {
         guard (!text.isEmpty || !attachments.isEmpty), !isStreaming, !isImporting else { return }
 
         errorMessage = nil
+        failedUserMessageID = nil
+        failedAssistantMessageID = nil
 
         // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
         let conv: Conversation
@@ -229,6 +237,35 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Regenerate the failed reply using the existing user message, not a new send.
+    func retryReply() {
+        guard canRetryReply, let conv = conversation, let id = failedUserMessageID,
+              let user = conv.messages.first(where: { $0.id == id && $0.role == "user" }),
+              sortedMessages.last(where: { $0.role == "user" })?.id == id else { return }
+        guard !BudgetTracker.isExceeded() else { errorMessage = "已达到本月预算上限，无法重新生成。"; return }
+        if let failedID = failedAssistantMessageID,
+           let failed = conv.messages.first(where: { $0.id == failedID }) { modelContext.delete(failed) }
+        let assistant = Message(role: "assistant", text: "")
+        assistant.conversation = conv
+        modelContext.insert(assistant)
+        do { try modelContext.save() } catch {
+            modelContext.rollback()
+            errorMessage = "重试准备失败：" + error.localizedDescription
+            return
+        }
+        orderedMessageCount = -1
+        let attachments = user.attachmentIds.split(separator: ",").compactMap { storedFile(id: String($0)) }
+        errorMessage = nil
+        failedUserMessageID = nil
+        failedAssistantMessageID = nil
+        streamingMessageId = assistant.id
+        streamingText = ""
+        isStreaming = true
+        streamTask = Task { [self] in
+            await runLoop(userText: user.text, attachments: attachments, conv: conv, assistantMessage: assistant)
+        }
+    }
+
     /// 停止当前回复
     func stop() {
         guard isStreaming else { return }
@@ -242,6 +279,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     func clearConversation() {
+        failedUserMessageID = nil
+        failedAssistantMessageID = nil
         orderedMessageCount = -1
         for m in conversation?.messages ?? [] { modelContext.delete(m) }
         try? modelContext.save()
@@ -523,7 +562,10 @@ final class ChatViewModel: ObservableObject {
             let isCancel = error is CancellationError
                 || (error as? URLError)?.code == .cancelled
             if !isCancel {
-                errorMessage = error.localizedDescription
+                failedUserMessageID = sortedMessages.last(where: { $0.role == "user" })?.id
+                failedAssistantMessageID = assistantMessage.id
+                let received = !assistantMessage.text.isEmpty || assistantMessage.imageData != nil
+                errorMessage = (received ? "回复中断，已保留部分内容。重新生成将替换这次回复。\n" : "未收到有效回复，可重新生成。\n") + error.localizedDescription
                 if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
                     modelContext.delete(assistantMessage)
                 }
