@@ -6,6 +6,7 @@ import UIKit
 /// - 已有会话：传 conversation
 /// - 草稿态（点了专家但还没发消息）：conversation 为 nil，第一次发送时才落库
 struct ChatContainerView: View {
+    @Environment(\.appTheme) private var theme
     @Environment(\.modelContext) private var modelContext
     @EnvironmentObject var credentials: CredentialStore
     @StateObject private var viewModelHolder = ViewModelHolder()
@@ -45,6 +46,7 @@ struct ChatContainerView: View {
             }
             viewModelHolder.vm = vm
         }
+        .onDisappear { viewModelHolder.vm?.stop() }
         .navigationTitle(conversation?.title ?? expert.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -92,6 +94,7 @@ struct ChatContainerView: View {
 
 /// 专家对话顶部横幅：标明正在与哪位顾问对话
 struct ExpertBanner: View {
+    @Environment(\.appTheme) private var theme
     let expert: Expert
 
     var body: some View {
@@ -125,6 +128,9 @@ struct ExpertBanner: View {
 
 /// 对话区：消息列表 + 状态条 + 输入条
 struct ChatView: View {
+    @Environment(\.appTheme) private var theme
+    @State private var followOutput = true
+    @State private var lastScrollTime: TimeInterval = 0
     @ObservedObject var viewModel: ChatViewModel
     @Binding var previewFile: StoredFile?
 
@@ -149,6 +155,9 @@ struct ChatView: View {
                             )
                             .id(message.id)
                         }
+                        Color.clear.frame(height: 1).id("conversation-bottom")
+                            .onAppear { followOutput = true }
+
                         if let status = viewModel.statusText {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
@@ -165,19 +174,28 @@ struct ChatView: View {
                     .padding(.vertical, 12)
                 }
                 .defaultScrollAnchor(.bottom)
+                .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in followOutput = false })
                 .onChange(of: viewModel.sortedMessages.count) { _, _ in
-                    if let last = viewModel.sortedMessages.last {
+                    if followOutput, let last = viewModel.sortedMessages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
                 .onChange(of: viewModel.sortedMessages.last?.text) { _, _ in
-                    if let last = viewModel.sortedMessages.last {
+                    if followOutput, let last = viewModel.sortedMessages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
                 .onChange(of: viewModel.streamingText) { _, _ in
-                    if let last = viewModel.sortedMessages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if followOutput && now - lastScrollTime >= 0.25 {
+                        lastScrollTime = now
+                        proxy.scrollTo("conversation-bottom", anchor: .bottom)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if !followOutput {
+                        Button { followOutput = true; proxy.scrollTo("conversation-bottom", anchor: .bottom) } label: { Label("回到最新", systemImage: "arrow.down") }
+                            .buttonStyle(.borderedProminent).padding()
                     }
                 }
             }
@@ -194,12 +212,13 @@ struct ChatView: View {
 
             InputBar(viewModel: viewModel)
         }
-        .background(Color(.systemBackground))
+        .background(theme.canvas)
     }
 }
 
 /// 空状态：展示这位专家的技能包（方法论 + 工具）
 struct EmptyStateView: View {
+    @Environment(\.appTheme) private var theme
     let expert: Expert
 
     var body: some View {
@@ -230,15 +249,15 @@ struct EmptyStateView: View {
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(Color(.secondarySystemBackground), in: Capsule())
+                        .background(theme.surface, in: Capsule())
                         .foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding(14)
+            .padding(theme.cardPadding)
             .frame(maxWidth: 420, alignment: .leading)
-            .background(Color(.secondarySystemBackground).opacity(0.6),
-                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(theme.surface.opacity(0.6),
+                        in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous))
 
             Text("直接提问，或点输入框左侧「+」上传文件、拍照")
                 .font(.footnote)
