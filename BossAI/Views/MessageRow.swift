@@ -3,6 +3,7 @@ import UIKit
 
 /// 消息行：用户右对齐气泡，AI 全宽正文 + 图片 + 文件卡片
 struct MessageRow: View {
+    @Environment(\.appTheme) private var theme
     let message: Message
     /// 非空表示这条消息正在流式输出，展示实时文本而非库里的空文本
     var streamingText: String? = nil
@@ -17,15 +18,15 @@ struct MessageRow: View {
                         Text(message.text)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .background(Color(.secondarySystemBackground),
-                                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .background(theme.userBubble,
+                                        in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous))
                             .textSelection(.enabled)
                     }
                     ForEach(files, id: \.id) { file in
                         FileCardView(file: file) { onPreview(file) }
                     }
                 }
-                .frame(maxWidth: 760, alignment: .trailing)
+                .frame(maxWidth: theme.messageWidth, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
@@ -55,15 +56,15 @@ struct MessageRow: View {
                     if !content.isEmpty {
                         // AI 输出区：带清晰边框的卡片
                         MarkdownView(content, collapseDisabled: streamingText != nil)
-                            .padding(14)
+                            .padding(theme.cardPadding)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
-                                Color(.secondarySystemBackground).opacity(0.45),
-                                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                theme.surface.opacity(0.45),
+                                in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous)
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(Color(.separator).opacity(0.9), lineWidth: 0.6)
+                                RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous)
+                                    .stroke(theme.border, lineWidth: 0.8)
                             )
                     } else if message.imageData == nil && files.isEmpty && streamingText == nil {
                         Text("▍").foregroundStyle(.secondary)
@@ -78,7 +79,7 @@ struct MessageRow: View {
                         }
                     }
                 }
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: theme.messageWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
@@ -89,6 +90,7 @@ struct MessageRow: View {
 
 /// 文件预览弹窗（QuickLook + 分享/保存）
 struct FilePreviewSheet: View {
+    @Environment(\.appTheme) private var theme
     let file: StoredFile
     @Environment(\.dismiss) private var dismiss
 
