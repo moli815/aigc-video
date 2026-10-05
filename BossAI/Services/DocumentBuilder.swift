@@ -162,6 +162,42 @@ enum MarkdownParser {
         }
         return rows
     }
+
+    /// 把 Markdown 按「文本段 / 表格段」切分，供 Word 这类需要单独渲染表格的格式使用。
+    /// 表格分隔行（|---|）属于表格结构，跳过不参与切分。
+    static func splitTables(from markdown: String) -> [(markdown: String, isTable: Bool)] {
+        var sections: [(String, Bool)] = []
+        var currentText: [String] = []
+        var currentTable: [String] = []
+
+        func flushText() {
+            if !currentText.isEmpty {
+                sections.append((currentText.joined(separator: "\n"), false))
+                currentText = []
+            }
+        }
+        func flushTable() {
+            if !currentTable.isEmpty {
+                sections.append((currentTable.joined(separator: "\n"), true))
+                currentTable = []
+            }
+        }
+
+        for rawLine in markdown.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("|") && line.contains("---") { continue }  // 表格分隔行
+            if line.hasPrefix("|") {
+                flushText()
+                currentTable.append(line)
+            } else {
+                flushTable()
+                currentText.append(line)
+            }
+        }
+        flushText()
+        flushTable()
+        return sections
+    }
 }
 
 // MARK: - 生成入口
@@ -216,24 +252,32 @@ enum DocumentBuilder {
         body += paragraph(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none),
                           size: 18, bold: false, spacingAfter: 360, color: "888888")
 
-        for block in MarkdownParser.blocks(from: markdown) {
-            switch block.kind {
-            case .title, .heading1:
-                body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160)
-            case .heading2:
-                body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120)
-            case .heading3:
-                body += paragraph(block.text, size: 22, bold: true, spacingBefore: 200, spacingAfter: 100)
-            case .bullet:
-                body += paragraph("• " + block.text, size: 21, bold: false, indent: 360, spacingAfter: 80)
-            case .numbered:
-                body += paragraph(block.text, size: 21, bold: false, indent: 360, spacingAfter: 80)
-            case .quote:
-                body += paragraph("“" + block.text + "”", size: 21, bold: false, indent: 360, spacingAfter: 120, color: "555555")
-            case .paragraph:
-                body += paragraph(block.text, size: 21, bold: false, spacingAfter: 120)
-            case .pageBreak:
-                body += "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"
+        // F03 修复：旧版把 Markdown 表格行当普通段落，`|` 符号残留、表格结构丢失。
+        // 现在按「文本段 / 表格段」切分，表格段单独渲染成 <w:tbl>。
+        for section in MarkdownParser.splitTables(from: markdown) {
+            if section.isTable {
+                body += wordTable(MarkdownParser.table(from: section.markdown))
+                continue
+            }
+            for block in MarkdownParser.blocks(from: section.markdown) {
+                switch block.kind {
+                case .title, .heading1:
+                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160)
+                case .heading2:
+                    body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120)
+                case .heading3:
+                    body += paragraph(block.text, size: 22, bold: true, spacingBefore: 200, spacingAfter: 100)
+                case .bullet:
+                    body += paragraph("• " + block.text, size: 21, bold: false, indent: 360, spacingAfter: 80)
+                case .numbered:
+                    body += paragraph(block.text, size: 21, bold: false, indent: 360, spacingAfter: 80)
+                case .quote:
+                    body += paragraph("“" + block.text + "”", size: 21, bold: false, indent: 360, spacingAfter: 120, color: "555555")
+                case .paragraph:
+                    body += paragraph(block.text, size: 21, bold: false, spacingAfter: 120)
+                case .pageBreak:
+                    body += "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"
+                }
             }
         }
 
@@ -255,6 +299,27 @@ enum DocumentBuilder {
         return zip.finalize()
     }
 
+    /// Word 表格渲染：二维数组 → <w:tbl>，首行加粗当表头
+    private static func wordTable(_ rows: [[String]]) -> String {
+        var xml = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>"
+        for edge in ["top", "left", "bottom", "right", "insideH", "insideV"] {
+            xml += "<w:\(edge) w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BBBBBB\"/>"
+        }
+        xml += "</w:tblBorders></w:tblPr>"
+        for (rowIndex, row) in rows.enumerated() {
+            xml += "<w:tr>"
+            for cell in row {
+                let bold = rowIndex == 0 ? "<w:b/>" : ""
+                xml += "<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/>\(bold)<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+            }
+            xml += "</w:tr>"
+        }
+        xml += "</w:tbl>"
+        // 表格后补一个空段，避免与后续正文粘连
+        xml += "<w:p><w:r><w:rPr><w:sz w:val=\"10\"/></w:rPr></w:r></w:p>"
+        return xml
+    }
+
     // MARK: - PowerPoint (.pptx)
 
     static func pptx(title: String, markdown: String) -> Data {
@@ -262,6 +327,26 @@ enum DocumentBuilder {
         if deck.first?.title.isEmpty ?? true {
             deck.insert((title, []), at: 0)
         }
+
+        // F02 修复：每页 bullet 上限 8，超过的拆成多页（带"续 N"），不再静默丢弃
+        var expanded: [(String, [String])] = []
+        for slide in deck {
+            let bullets = slide.bullets
+            guard bullets.count > 8 else {
+                expanded.append(slide)
+                continue
+            }
+            var page = 0
+            var idx = 0
+            while idx < bullets.count {
+                page += 1
+                let chunk = Array(bullets[idx..<min(idx + 8, bullets.count)])
+                let pageTitle = page == 1 ? slide.title : "\(slide.title)（续 \(page)）"
+                expanded.append((pageTitle, chunk))
+                idx += 8
+            }
+        }
+        deck = expanded
 
         var zip = ZipWriter()
         var contentTypes = """
@@ -359,6 +444,15 @@ enum DocumentBuilder {
             rows = MarkdownParser.blocks(from: markdown).map { [$0.text] }
         }
 
+        // F05 修复：各行列数不一致时按最大列数补空列，避免列错位
+        // （某行缺了末尾空单元格时，旧版会直接错位到下一列）
+        let maxCols = rows.map(\.count).max() ?? 0
+        if maxCols > 0 {
+            rows = rows.map { row in
+                row.count < maxCols ? row + Array(repeating: "", count: maxCols - row.count) : row
+            }
+        }
+
         var sheetData = ""
         for (rowIndex, row) in rows.enumerated() {
             var cells = ""
@@ -443,6 +537,24 @@ enum DocumentBuilder {
                     with: CGSize(width: width, height: .greatestFiniteMagnitude),
                     options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
                 ).height
+                let usable = pageSize.height - margin * 2
+
+                // F04 修复：单个文本块（超长段落）超过一页时，按比例切成能放进一页的块，
+                // 逐块绘制。旧版整体 draw 会溢出页面、内容丢失。
+                if height > usable {
+                    let chars = Array(text)
+                    let chunkSize = max(100, Int(Double(chars.count) * (usable / height) * 0.9))
+                    var i = 0
+                    while i < chars.count {
+                        let end = min(i + chunkSize, chars.count)
+                        draw(String(chars[i..<end]), font: font, color: color, style: style,
+                             spacingAfter: 0, indent: indent)
+                        i = end
+                    }
+                    y += spacingAfter
+                    return
+                }
+
                 beginPageIfNeeded()
                 if y + height > pageSize.height - margin {
                     newPage()
