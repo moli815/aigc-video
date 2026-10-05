@@ -1,0 +1,293 @@
+{
+  "scope": "独立Python直连服务商API；不是Swift/iOS测试，也不是专业结论质量评测",
+  "endpoint": "https://api.deepseek.com/v1/chat/completions",
+  "model": "deepseek-chat",
+  "max_requests": 11,
+  "max_completion_tokens_per_request": 256,
+  "concurrency": 3,
+  "data": "仅合成输入，无用户文件或对话",
+  "results": [
+    {
+      "expert": "general",
+      "expected_operation": "plan",
+      "expected_calculator": null,
+      "http_status": 200,
+      "headers_s": 0.17559429997345433,
+      "usage": {
+        "prompt_tokens": 705,
+        "completion_tokens": 39,
+        "total_tokens": 744,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 705
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.5563556000124663,
+      "total_s": 0.609101300011389,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "plan",
+      "passed": true
+    },
+    {
+      "expert": "decision",
+      "expected_operation": "calculate",
+      "expected_calculator": "weighted_decision",
+      "http_status": 200,
+      "headers_s": 0.15745180001249537,
+      "usage": {
+        "prompt_tokens": 854,
+        "completion_tokens": 103,
+        "total_tokens": 957,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 854
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.6338628999656066,
+      "total_s": 0.796791700005997,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "strategy",
+      "expected_operation": "calculate",
+      "expected_calculator": "weighted_decision",
+      "http_status": 200,
+      "headers_s": 0.37946090003242716,
+      "usage": {
+        "prompt_tokens": 833,
+        "completion_tokens": 103,
+        "total_tokens": 936,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 833
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.8330387999885716,
+      "total_s": 1.0460093999863602,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "marketing",
+      "expected_operation": "calculate",
+      "expected_calculator": "marketing_funnel",
+      "http_status": 200,
+      "headers_s": 0.11185320001095533,
+      "usage": {
+        "prompt_tokens": 876,
+        "completion_tokens": 125,
+        "total_tokens": 1001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 876
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.8297707000165246,
+      "total_s": 1.0401034000096843,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "traffic",
+      "expected_operation": "calculate",
+      "expected_calculator": "marketing_funnel",
+      "http_status": 200,
+      "headers_s": 0.09097279998240992,
+      "usage": {
+        "prompt_tokens": 855,
+        "completion_tokens": 125,
+        "total_tokens": 980,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 855
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.6141657999833114,
+      "total_s": 0.8573204000131227,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "model",
+      "expected_operation": "calculate",
+      "expected_calculator": "unit_economics",
+      "http_status": 200,
+      "headers_s": 0.08723310002824292,
+      "usage": {
+        "prompt_tokens": 855,
+        "completion_tokens": 106,
+        "total_tokens": 961,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 855
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.3382634000154212,
+      "total_s": 0.5440595000400208,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "funding",
+      "expected_operation": "calculate",
+      "expected_calculator": "cash_runway",
+      "http_status": 200,
+      "headers_s": 0.14810160000342876,
+      "usage": {
+        "prompt_tokens": 875,
+        "completion_tokens": 103,
+        "total_tokens": 978,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 875
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.5648079999955371,
+      "total_s": 0.7577887999941595,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "equity",
+      "expected_operation": "calculate",
+      "expected_calculator": "equity_dilution",
+      "http_status": 200,
+      "headers_s": 0.09001179999904707,
+      "usage": {
+        "prompt_tokens": 857,
+        "completion_tokens": 99,
+        "total_tokens": 956,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 857
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.5422470000339672,
+      "total_s": 0.6862456999951974,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "performance",
+      "expected_operation": "calculate",
+      "expected_calculator": "commission",
+      "http_status": 200,
+      "headers_s": 0.08889149996684864,
+      "usage": {
+        "prompt_tokens": 866,
+        "completion_tokens": 97,
+        "total_tokens": 963,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 866
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.6473256999743171,
+      "total_s": 0.8290779999806546,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "speech",
+      "expected_operation": "calculate",
+      "expected_calculator": "speech_duration",
+      "http_status": 200,
+      "headers_s": 0.11347939999541268,
+      "usage": {
+        "prompt_tokens": 824,
+        "completion_tokens": 99,
+        "total_tokens": 923,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 824
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.7170370999956504,
+      "total_s": 0.9193545999587514,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "calculate",
+      "input_fixture_matches": true,
+      "passed": true
+    },
+    {
+      "expert": "legal",
+      "expected_operation": "plan",
+      "expected_calculator": null,
+      "http_status": 200,
+      "headers_s": 0.13450509996619076,
+      "usage": {
+        "prompt_tokens": 802,
+        "completion_tokens": 39,
+        "total_tokens": 841,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 802
+      },
+      "finish_reason": "tool_calls",
+      "ttft_s": 0.8424730999977328,
+      "total_s": 0.8986858999705873,
+      "done_marker": true,
+      "returned_tool": "expert_skill",
+      "returned_operation": "plan",
+      "passed": true
+    }
+  ],
+  "passed": 11,
+  "total": 11,
+  "usage_total": {
+    "prompt_tokens": 9202,
+    "completion_tokens": 1038,
+    "total_tokens": 10240
+  },
+  "billing": "未查询账单；不声称免费或准确费用；未持久化密钥/请求头",
+  "latency_scope": "每专家1次；不可推断稳定p95、iPad性能或专业正确率"
+}
