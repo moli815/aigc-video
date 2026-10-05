@@ -45,6 +45,18 @@ jobs:
           xcodebuild -project BossAI.xcodeproj -scheme BossAI -configuration Release \
             -destination "platform=iOS Simulator,id=$IPAD_SIM" \
             -parallel-testing-enabled NO -resultBundlePath BossAITestResults.xcresult CODE_SIGNING_ALLOWED=NO test
+      - name: Export native test summary and screenshots
+        if: always()
+        run: |
+          if [ -d BossAITestResults.xcresult ]; then
+            xcrun xcresulttool get test-results summary --path BossAITestResults.xcresult > ios-test-summary.json || true
+            xcrun xcresulttool export attachments --path BossAITestResults.xcresult --output-path ios-test-attachments || true
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: ios-performance-xcresult, path: BossAITestResults.xcresult}
+        with:
+          name: ios-performance-xcresult
+          path: |
+            BossAITestResults.xcresult
+            ios-test-summary.json
+            ios-test-attachments

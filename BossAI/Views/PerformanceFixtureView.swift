@@ -48,7 +48,6 @@ struct PerformanceFixtureView: View {
                 .accessibilityIdentifier("fixture-stream")
             }
             .navigationTitle("离线性能样本 \(messageCount)")
-            .accessibilityIdentifier("performance-fixture")
             .onDisappear { streamTask?.cancel() }
         }
     }

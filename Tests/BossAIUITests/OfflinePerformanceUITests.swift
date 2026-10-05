@@ -16,7 +16,12 @@ final class OfflinePerformanceUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--performance-fixture", "--fixture-count=200"]
         app.launch()
-        XCTAssertTrue(app.scrollViews["fixture-scroll"].waitForExistence(timeout: 10))
+        let scroll = app.scrollViews["fixture-scroll"]
+        if !scroll.waitForExistence(timeout: 10) {
+            let tree = XCTAttachment(string: app.debugDescription); tree.lifetime = .keepAlways; add(tree)
+            let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; add(screenshot)
+        }
+        XCTAssertTrue(scroll.exists)
         let options = XCTMeasureOptions()
         options.iterationCount = 5
         measure(metrics: [XCTClockMetric(), XCTMemoryMetric(application: app)], options: options) {

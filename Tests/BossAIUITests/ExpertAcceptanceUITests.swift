@@ -12,8 +12,15 @@ final class ExpertAcceptanceUITests: XCTestCase {
             XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(value)
         }
         app.buttons["计算"].tap()
-        XCTAssertTrue(app.staticTexts["盈亏平衡销量"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["25.00"].exists)
+        let result = app.descendants(matching: .any).matching(identifier: "calculator-result-盈亏平衡销量").firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        let representedValue = result.value as? String ?? ""
+        let exactValue = representedValue == "25.00" || result.label.contains("25.00") || result.staticTexts["25.00"].exists
+        if !exactValue {
+            let tree = XCTAttachment(string: app.debugDescription); tree.lifetime = .keepAlways; add(tree)
+            let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; add(screenshot)
+        }
+        XCTAssertTrue(exactValue, "Break-even result must be 25.00; AX value: " + representedValue)
         app.terminate()
     }
     func testLandscapeExpertNavigation() {

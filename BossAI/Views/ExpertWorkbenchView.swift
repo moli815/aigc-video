@@ -36,7 +36,7 @@ struct ExpertWorkbenchView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if let error { Section { Text(error).foregroundStyle(.red) } }
-            if !result.isEmpty { Section("计算结果") { ForEach(result, id: \.0) { key, value in LabeledContent(key, value: value) } } }
+            if !result.isEmpty { Section("计算结果") { ForEach(result, id: \.0) { key, value in LabeledContent(key, value: value).accessibilityIdentifier("calculator-result-" + key) } } }
             if !notes.isEmpty { Section("口径与公式") { ForEach(notes, id: \.self) { Text($0).font(.footnote) } } }
             if calculators.contains("weighted_decision") {
                 Section { Text("多维加权决策需要完整维度、权重及候选方案，请在专家对话中调用加权决策技能。") }
