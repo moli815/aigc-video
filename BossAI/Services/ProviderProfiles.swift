@@ -211,6 +211,7 @@ enum ProviderDetector {
             candidates.sort { ($0.id == "volc" ? 0 : 1) < ($1.id == "volc" ? 0 : 1) }
         }
         for profile in candidates {
+            guard !Task.isCancelled else { return nil }
             if await probeModelsEndpoint(baseURL: profile.baseURL, key: key) {
                 return profile
             }
@@ -227,6 +228,7 @@ enum ProviderDetector {
             candidates.sort { ($0.id == "volc" ? 0 : 1) < ($1.id == "volc" ? 0 : 1) }
         }
         for profile in candidates {
+            guard !Task.isCancelled else { return nil }
             if await probeImageEndpoint(baseURL: profile.baseURL, key: key) {
                 return profile
             }
@@ -283,7 +285,7 @@ enum ProviderDetector {
         request.timeoutInterval = 8
         guard let (_, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse else { return false }
-        // 401/403 = 密钥不属于该厂商；400/404/422 等 = 认证通过但请求参数不全 → 命中
-        return http.statusCode != 401 && http.statusCode != 403
+        // Empty-request validation is only a connectivity hint; not a successful image-generation test.
+        return [200, 201, 400, 422].contains(http.statusCode) // 404/429/5xx are inconclusive, never authentication success
     }
 }
