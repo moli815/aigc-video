@@ -1,0 +1,463 @@
+{
+  "source_tree": "BossAI-final-upgrade",
+  "swift_files": 47,
+  "native_test_cases_written": 65,
+  "native_test_execution": "未执行；Windows无Swift SDK与Xcode，当前没有可连接macOS环境",
+  "syntax_errors": [],
+  "checks": [
+    {
+      "module": "全源码",
+      "test": "第三方Swift语法树扫描",
+      "type": "source",
+      "passed": true,
+      "detail": []
+    },
+    {
+      "module": "联网搜索",
+      "test": "时效工具schema与执行入口",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "引用",
+      "test": "统一注册编号且无前8条截断",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "流式协议",
+      "test": "SSE分帧器接入",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "流式协议",
+      "test": "截断和中断错误保留缓冲",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "请求体2MB边界及取消",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "网页空列保留",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "白名单与资料检索完整接通",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "工作台调用可信专家而非自选ID",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "文件导入",
+      "test": "共享si及列坐标解析接通",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "文件导入",
+      "test": "扫描PDF OCR接通",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "ZIP",
+      "test": "raw DEFLATE与CRC校验",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "备份",
+      "test": "校验阶段在写库之前",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "备份",
+      "test": "失败回滚新文件",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "备份",
+      "test": "严格解码数组而非吞错",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "备份",
+      "test": "记忆来源保存",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "凭证",
+      "test": "更新后新增而非先删除",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "语音",
+      "test": "启动互斥及独立tap清理",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "语音",
+      "test": "保留草稿并在退出停止",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "主题",
+      "test": "六套枚举和语义样式接通",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "聊天体验",
+      "test": "按底部跟随及250ms滚动限频",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "预算",
+      "test": "按请求记费并保留失败usage",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "测试环境",
+      "test": "离线验收禁止种子凭证",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "编译配置",
+      "test": "Swift语言版本合法",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "Tavily服务端时间过滤",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "博查服务端freshness",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "验证页识别",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "Markdown",
+      "test": "表格可读且不丢额外列",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "测试环境",
+      "test": "离线内存数据库",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "备份",
+      "test": "隔离数据库上下文",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "渲染性能",
+      "test": "有限Markdown缓存",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "长期记忆",
+      "test": "查看来源",
+      "type": "source",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "流式协议",
+      "test": "无空格多行SSE",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "流式协议",
+      "test": "SSE事件上限",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "引用",
+      "test": "URL跟踪参数去重",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "办公文档",
+      "test": "转义管道/代码/空列",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "联网搜索",
+      "test": "查询参数特殊字符不注入",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "文件导入",
+      "test": "稀疏列夹具结构",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "文件导入",
+      "test": "共享字符串富文本夹具",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "ZIP",
+      "test": "raw DEFLATE真实Python压缩/解压",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "ZIP",
+      "test": "损坏压缩流拒绝",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "公式单位经济确定样本",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "营销漏斗期望订单",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "增发股权比例",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "现金续航",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "提成报酬",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家",
+      "test": "演讲预计时长",
+      "type": "Python逻辑复刻",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：unit_economics",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "period_fixed_cost",
+          "period_quantity",
+          "unit_price",
+          "unit_variable_cost"
+        ],
+        "expected": [
+          "period_fixed_cost",
+          "period_quantity",
+          "unit_price",
+          "unit_variable_cost"
+        ]
+      }
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：marketing_funnel",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "ad_spend",
+          "average_order_value",
+          "click_rate",
+          "contribution_per_order",
+          "impressions",
+          "order_rate"
+        ],
+        "expected": [
+          "ad_spend",
+          "average_order_value",
+          "click_rate",
+          "contribution_per_order",
+          "impressions",
+          "order_rate"
+        ]
+      }
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：equity_dilution",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "existing_total_shares",
+          "new_shares",
+          "owner_shares"
+        ],
+        "expected": [
+          "existing_total_shares",
+          "new_shares",
+          "owner_shares"
+        ]
+      }
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：cash_runway",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "available_cash",
+          "monthly_cash_inflow",
+          "monthly_cash_outflow"
+        ],
+        "expected": [
+          "available_cash",
+          "monthly_cash_inflow",
+          "monthly_cash_outflow"
+        ]
+      }
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：commission",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "base_pay",
+          "commission_rate",
+          "eligible_revenue"
+        ],
+        "expected": [
+          "base_pay",
+          "commission_rate",
+          "eligible_revenue"
+        ]
+      }
+    },
+    {
+      "module": "专家工作台",
+      "test": "表单字段与计算器契约一致：speech_duration",
+      "type": "source",
+      "passed": true,
+      "detail": {
+        "actual": [
+          "character_count",
+          "characters_per_minute",
+          "pause_seconds"
+        ],
+        "expected": [
+          "character_count",
+          "characters_per_minute",
+          "pause_seconds"
+        ]
+      }
+    }
+  ],
+  "desktop_replica_benchmark": {
+    "scope": "Windows/Python SSE逻辑复刻10000事件，非Swift性能/非iOS性能",
+    "samples": 30,
+    "median_ms": 5.0973,
+    "p95_ms": 7.4426,
+    "max_ms": 7.7481
+  },
+  "passed": 53,
+  "total": 53
+}
