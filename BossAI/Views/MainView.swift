@@ -4,6 +4,7 @@ import UIKit
 
 /// 主界面：ChatGPT 风格侧栏（可折叠专家团 + 对话列表 + 资料库）+ 对话区
 struct MainView: View {
+    @Environment(\.appTheme) private var theme
     @EnvironmentObject var credentials: CredentialStore
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
@@ -14,6 +15,8 @@ struct MainView: View {
     /// 与 selectedConversationId 分开，避免草稿建出会话时把正在流式输出的 VM 换掉。
     @State private var containerKey: String?
     @State private var showLibrary = false
+    @State private var draftConversationID: UUID?
+    @State private var providerTask: Task<Void, Never>?
     @State private var showNewChat = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showPinEntry = false
@@ -51,7 +54,7 @@ struct MainView: View {
         }
         .sheet(isPresented: $showNewChat) {
             NewChatSheet(
-                onSelectExpert: { expert in openExpert(expert) },
+                onSelectExpert: { expert in startNewDraft(expert) },
                 onOpenConversation: { conversation in
                     showLibrary = false
                     selectedConversationId = conversation.id
@@ -83,12 +86,13 @@ struct MainView: View {
             })
         } else if let key = containerKey {
             if key.hasPrefix("draft-") {
-                let expertId = String(key.dropFirst("draft-".count))
+                let expertId = String(key.dropFirst("draft-".count)).components(separatedBy: "~")[0]
                 ChatContainerView(conversation: nil,
                                   expert: ExpertCatalog.find(expertId),
                                   onConversationCreated: { created in
                                       // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
                                       selectedConversationId = created.id
+                                      draftConversationID = created.id
                                   })
                     .id(key)
             } else {
@@ -106,6 +110,13 @@ struct MainView: View {
         }
     }
 
+    private func startNewDraft(_ expert: Expert) {
+        showLibrary = false
+        selectedConversationId = nil
+        // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
+        containerKey = "draft-\(expert.id)~\(UUID().uuidString)"
+    }
+
     /// 点专家：已有该专家的对话就打开；没有就进草稿态（发第一条消息时才落库）
     private func openExpert(_ expert: Expert) {
         showLibrary = false
@@ -120,21 +131,28 @@ struct MainView: View {
 
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
-        if containerKey == "conv-\(conv.id.uuidString)" { containerKey = nil }
+        if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
         modelContext.delete(conv)
         try? modelContext.save()
     }
 
     /// 首次启动：用内置 Key 自动识别服务商（无需任何手动配置）
     private func ensureProvidersDetected() {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+              NSClassFromString("XCTestCase") == nil else { return }
         guard !ProviderCatalog.providersDetected else { return }
-        Task {
-            if let ck = credentials.chatKey,
+        providerTask?.cancel()
+        let capturedChatKey = credentials.chatKey
+        let capturedImageKey = credentials.imageKey
+        providerTask = Task {
+            if let ck = capturedChatKey,
                let p = await ProviderDetector.detectChat(key: ck) {
+                guard !Task.isCancelled, credentials.chatKey == capturedChatKey else { return }
                 ProviderCatalog.saveChatProvider(p.id)
             }
-            if let ik = credentials.imageKey,
+            if let ik = capturedImageKey,
                let p = await ProviderDetector.detectImage(key: ik) {
+                guard !Task.isCancelled, credentials.imageKey == capturedImageKey else { return }
                 ProviderCatalog.saveImageProvider(p.id)
             }
         }
@@ -144,6 +162,7 @@ struct MainView: View {
 // MARK: - 侧栏
 
 struct SidebarView: View {
+    @Environment(\.appTheme) private var theme
     @Binding var selectedConversationId: UUID?
     @Binding var showLibrary: Bool
     var onNewChat: () -> Void
@@ -329,6 +348,7 @@ struct SidebarView: View {
 }
 
 struct ExpertRow: View {
+    @Environment(\.appTheme) private var theme
     let expert: Expert
 
     var body: some View {
@@ -350,6 +370,7 @@ struct ExpertRow: View {
 }
 
 struct ConversationRow: View {
+    @Environment(\.appTheme) private var theme
     let conversation: Conversation
 
     var body: some View {
@@ -392,6 +413,7 @@ struct ConversationRow: View {
 
 /// 液态玻璃风格胶囊按钮：超薄材质 + 高光渐变描边 + 柔和投影
 struct LiquidGlassButton: View {
+    @Environment(\.appTheme) private var theme
     let title: String
     let symbol: String
     let action: () -> Void
@@ -434,6 +456,7 @@ struct LiquidGlassButton: View {
 // MARK: - 欢迎页
 
 struct WelcomeView: View {
+    @Environment(\.appTheme) private var theme
     var onNewChat: () -> Void
 
     var body: some View {
@@ -463,15 +486,17 @@ struct WelcomeView: View {
             .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(theme.canvas)
     }
 }
 
 // MARK: - 新建对话（选专家）
 
 struct NewChatSheet: View {
+    @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
+    @State private var skillExpert: Expert?
 
     /// 选一位顾问新建对话：走草稿态（发第一条消息才落库），不在这里建空会话
     var onSelectExpert: (Expert) -> Void
@@ -510,6 +535,10 @@ struct NewChatSheet: View {
                                             .foregroundStyle(Color.accentColor)
                                             .lineLimit(2, reservesSpace: true)
                                             .multilineTextAlignment(.leading)
+                                        if let capability = try? ExpertCapabilityCatalog.profile(expert.id) {
+                                            Text(capability.calculators.isEmpty ? "证据整理 · 交付校验" : "本地计算 \(capability.calculators.count) 项 · 交付校验")
+                                                .font(.caption2).foregroundStyle(.secondary)
+                                        }
                                         HStack(spacing: 5) {
                                             ForEach(expert.skill.tools, id: \.self) { tool in
                                                 HStack(spacing: 2) {
@@ -524,10 +553,11 @@ struct NewChatSheet: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(12)
-                                    .background(Color(.secondarySystemBackground),
-                                                in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .background(theme.surface,
+                                                in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
+                                .contextMenu { Button("查看技能与交付标准") { skillExpert = expert } }
                             }
                         }
                     }
@@ -558,7 +588,7 @@ struct NewChatSheet: View {
                                     }
                                     .padding(.vertical, 8)
                                     .padding(.horizontal, 12)
-                                    .background(Color(.secondarySystemBackground),
+                                    .background(theme.surface,
                                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
@@ -570,6 +600,7 @@ struct NewChatSheet: View {
             }
             .navigationTitle("新对话")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $skillExpert) { ExpertSkillSheet(expert: $0) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -579,7 +610,7 @@ struct NewChatSheet: View {
     }
 
     private func create(expert: Expert) {
-        // 不再在这里 insert 空会话 —— 交给 MainView.openExpert 走草稿态，
+        // 新建入口走独立草稿，继续对话入口仍打开既有会话。
         // 发第一条消息时才由 ChatViewModel.ensureConversation() 落库，杜绝空对话
         dismiss()
         onSelectExpert(expert)
@@ -589,6 +620,7 @@ struct NewChatSheet: View {
 // MARK: - 隐藏设置门禁：密码验证
 
 struct HiddenPinGate: View {
+    @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
     @State private var pin = ""
     @State private var wrong = false
