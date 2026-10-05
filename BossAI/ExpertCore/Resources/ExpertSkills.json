@@ -1,0 +1,521 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "general",
+      "name": "通用任务分解",
+      "requiredInputs": [
+        "任务目标",
+        "希望的交付形式"
+      ],
+      "workflow": [
+        "澄清目标",
+        "列输入与缺口",
+        "有时效要求就检索",
+        "交付并说明下一步"
+      ],
+      "documentSections": [],
+      "documentFormats": [
+        "word",
+        "pdf"
+      ],
+      "calculators": [],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "任务拆解",
+          "rules": [
+            "先给结论，再给证据和行动",
+            "不替用户做未经授权的外部操作"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "decision",
+      "name": "商业决策",
+      "requiredInputs": [
+        "决策选项",
+        "投入及现金约束",
+        "评判维度/权重",
+        "观察期"
+      ],
+      "workflow": [
+        "定义决策命题和约束",
+        "为各方案列证据与待核实项",
+        "调用weighted_decision并做权重敏感性比较",
+        "给推荐、止损线与验证计划"
+      ],
+      "documentSections": [
+        "决策命题",
+        "依据与假设",
+        "方案对比",
+        "风险与止损",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "excel",
+        "word",
+        "pdf"
+      ],
+      "calculators": [
+        "weighted_decision",
+        "unit_economics",
+        "cash_runway"
+      ],
+      "allowSearch": true,
+      "allowImages": false,
+      "knowledge": [
+        {
+          "title": "决策矩阵",
+          "rules": [
+            "权重非负，评分0到5，所有方案同口径",
+            "分数是偏好模型，不是收益承诺",
+            "不可逆风险先列否决条件"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "strategy",
+      "name": "战略定位",
+      "requiredInputs": [
+        "行业/地区",
+        "目标客户",
+        "现有能力",
+        "竞争对手",
+        "战略周期"
+      ],
+      "workflow": [
+        "建立公司/客户/竞争清单",
+        "核实竞品与地区事实",
+        "比较定位选项与能力缺口",
+        "设计访谈或小规模验证及90天指标"
+      ],
+      "documentSections": [
+        "定位结论",
+        "依据与假设",
+        "竞争对比",
+        "验证计划",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "word",
+        "ppt",
+        "pdf"
+      ],
+      "calculators": [
+        "weighted_decision"
+      ],
+      "allowSearch": true,
+      "allowImages": false,
+      "knowledge": [
+        {
+          "title": "定位验证",
+          "rules": [
+            "定位陈述包含服务谁、解决什么、独特能力",
+            "客户意愿必须验证，不用空泛差异化替代",
+            "竞品数据附时间/区域/来源"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "marketing",
+      "name": "营销策划",
+      "requiredInputs": [
+        "产品/客户",
+        "活动目标",
+        "预算",
+        "周期",
+        "现有转化数据"
+      ],
+      "workflow": [
+        "定义目标与指标分母",
+        "设计目标人群/价值主张/渠道/素材",
+        "调用marketing_funnel测算场景",
+        "输出实验分组、日历和复盘"
+      ],
+      "documentSections": [
+        "营销目标",
+        "依据与假设",
+        "渠道与预算",
+        "实验与指标",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "ppt",
+        "excel",
+        "word"
+      ],
+      "calculators": [
+        "marketing_funnel",
+        "unit_economics"
+      ],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "营销口径",
+          "rules": [
+            "点击率=点击/曝光，转化率明确是否点击到订单",
+            "ROAS=收入/广告费，不等于利润ROI",
+            "实际订单与期望订单分开；不编造转化基准"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "traffic",
+      "name": "流量策划",
+      "requiredInputs": [
+        "平台/地区",
+        "流量目标",
+        "预算",
+        "内容产能",
+        "漏斗历史数据"
+      ],
+      "workflow": [
+        "核实平台规则及日期",
+        "分解曝光→点击→订单",
+        "调用marketing_funnel核算获客场景",
+        "设计最小实验与止损机制"
+      ],
+      "documentSections": [
+        "流量目标",
+        "依据与假设",
+        "漏斗测算",
+        "实验与止损",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "excel",
+        "ppt",
+        "word"
+      ],
+      "calculators": [
+        "marketing_funnel"
+      ],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "增长实验",
+          "rules": [
+            "每个实验明确假设、变量、预算、观察期和退出条件",
+            "订单期望不是预测承诺",
+            "禁止建议刷量、绕平台规则或伪造效果"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "model",
+      "name": "商业模式",
+      "requiredInputs": [
+        "客户/价值主张",
+        "收入结构",
+        "单价/成本",
+        "周期销量",
+        "固定支出"
+      ],
+      "workflow": [
+        "梳理客户价值与收入链",
+        "对成本分类并检查同周期",
+        "调用unit_economics/cash_runway",
+        "输出三场景、关键假设和验证任务"
+      ],
+      "documentSections": [
+        "模式结论",
+        "依据与假设",
+        "单位经济模型",
+        "敏感性与风险",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "excel",
+        "word"
+      ],
+      "calculators": [
+        "unit_economics",
+        "cash_runway"
+      ],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "单位经济",
+          "rules": [
+            "单位贡献=单价-单位变动成本",
+            "固定成本与销量必须同周期，单位贡献≤0时无有限盈亏平衡销量",
+            "LTV等长期参数需观察数据，不能随意倍乘"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "funding",
+      "name": "融资招商",
+      "requiredInputs": [
+        "融资目标/用途",
+        "阶段",
+        "可用现金/月流入流出",
+        "现有股数",
+        "计划新增股数"
+      ],
+      "workflow": [
+        "核实经营证据和资金用途",
+        "调用cash_runway及equity_dilution",
+        "区分事实/计划/假设，准备投资人质询",
+        "形成资金用途、里程碑、风险和材料清单"
+      ],
+      "documentSections": [
+        "融资目标",
+        "依据与假设",
+        "资金与稀释测算",
+        "里程碑与风险",
+        "行动计划"
+      ],
+      "documentFormats": [
+        "ppt",
+        "word",
+        "excel"
+      ],
+      "calculators": [
+        "cash_runway",
+        "equity_dilution"
+      ],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "融资测算",
+          "rules": [
+            "融资承诺和估值不能由模型保证",
+            "增发股数计算不覆盖期权/可转债/优先权",
+            "现金续航只适用于稳定流入流出场景"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署",
+        "不提供收益保证或代替投资尽调"
+      ]
+    },
+    {
+      "id": "equity",
+      "name": "股权结构",
+      "requiredInputs": [
+        "司法辖区/公司形式",
+        "当前股数与持股",
+        "增发计划",
+        "股东目标",
+        "既有协议"
+      ],
+      "workflow": [
+        "收集现状与协议约束",
+        "调用equity_dilution列场景",
+        "检索适用辖区/日期下的官方规则",
+        "列治理事项、风险和律师审核清单"
+      ],
+      "documentSections": [
+        "股权目标",
+        "依据与假设",
+        "股权场景",
+        "治理与风险",
+        "专业审核清单"
+      ],
+      "documentFormats": [
+        "excel",
+        "word"
+      ],
+      "calculators": [
+        "equity_dilution"
+      ],
+      "allowSearch": true,
+      "allowImages": false,
+      "knowledge": [
+        {
+          "title": "股权边界",
+          "rules": [
+            "股数比例不自动等于表决权或控制权",
+            "不得固定套用67/51/34等阈值判断所有公司",
+            "协议条款与法域需单独核实"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署",
+        "不把测算或合同草稿当具法律效力的定论"
+      ]
+    },
+    {
+      "id": "performance",
+      "name": "薪酬绩效",
+      "requiredInputs": [
+        "岗位/地区",
+        "目标与可计提口径",
+        "底薪",
+        "提成比例",
+        "退款/结算规则"
+      ],
+      "workflow": [
+        "定义指标、数据源、归属和反作弊",
+        "调用commission计算同口径样例",
+        "检查激励副作用与地方适用规则",
+        "输出试行方案、复盘和审核清单"
+      ],
+      "documentSections": [
+        "方案目标",
+        "依据与假设",
+        "指标与计提",
+        "风险与约束",
+        "试行与复盘"
+      ],
+      "documentFormats": [
+        "excel",
+        "word"
+      ],
+      "calculators": [
+        "commission",
+        "weighted_decision"
+      ],
+      "allowSearch": true,
+      "allowImages": false,
+      "knowledge": [
+        {
+          "title": "薪酬口径",
+          "rules": [
+            "可计提收入需明确收款/退款/税含口径",
+            "本地commission只是平率税前场景，不模拟社保个税",
+            "指标应兼顾质量/过程/结果，明确责任人与数据源"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署",
+        "劳动/社保/税务规则需按地区与日期核实"
+      ]
+    },
+    {
+      "id": "speech",
+      "name": "演讲表达",
+      "requiredInputs": [
+        "听众",
+        "目标动作",
+        "场合/时长",
+        "可公开的真实案例"
+      ],
+      "workflow": [
+        "确认听众与目标",
+        "建立开场→证据→故事→行动框架",
+        "调用speech_duration估时",
+        "标节奏、核实事实、朗读修订"
+      ],
+      "documentSections": [
+        "演讲目标",
+        "依据与假设",
+        "演讲稿",
+        "节奏与时长",
+        "行动与排练"
+      ],
+      "documentFormats": [
+        "word",
+        "ppt",
+        "pdf"
+      ],
+      "calculators": [
+        "speech_duration"
+      ],
+      "allowSearch": true,
+      "allowImages": true,
+      "knowledge": [
+        {
+          "title": "演讲练习",
+          "rules": [
+            "案例必须真实或标虚构示例",
+            "实际时长通过朗读确认，字数只能估算",
+            "不承诺影响力，给可观察的听众行动"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署"
+      ]
+    },
+    {
+      "id": "legal",
+      "name": "法务风控",
+      "requiredInputs": [
+        "司法辖区",
+        "事项/主体/时间",
+        "合同及证据",
+        "目标与期限"
+      ],
+      "workflow": [
+        "区分事实、争议、缺失材料",
+        "检索官方依据并记生效日期/辖区",
+        "列风险→依据→后果→整改表",
+        "输出专业审核清单和待核实项"
+      ],
+      "documentSections": [
+        "事项与辖区",
+        "依据与假设",
+        "风险清单",
+        "整改与责任",
+        "专业审核清单"
+      ],
+      "documentFormats": [
+        "word",
+        "pdf"
+      ],
+      "calculators": [],
+      "allowSearch": true,
+      "allowImages": false,
+      "knowledge": [
+        {
+          "title": "法务分析边界",
+          "rules": [
+            "不能凭通用常识推断现行条文或适用性",
+            "每个法律结论关联法域、事实前提、有效日期、官方来源",
+            "证据不足写待核实，不捏造判例、条号或律师身份"
+          ]
+        }
+      ],
+      "boundaries": [
+        "用户数据、计算结果、假设和联网事实分开标识",
+        "知识卡是方法与口径，不替代实时资料或专业签署",
+        "仅资料整理与风险清单，重要决定需合格专业人士审核"
+      ]
+    }
+  ]
+}
