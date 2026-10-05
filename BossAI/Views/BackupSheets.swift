@@ -115,6 +115,9 @@ struct BackupImportSheet: View {
     @State private var working = false
     @State private var errorText: String?
     @State private var summaryText: String?
+    @State private var overwriteIdentity = true
+    @State private var overwriteKeys = true
+    @State private var overwriteSettings = true
 
     var body: some View {
         NavigationStack {
@@ -141,6 +144,16 @@ struct BackupImportSheet: View {
                         .textContentType(.password)
                 } header: {
                     Text("解密")
+                }
+
+                Section {
+                    Toggle("覆盖身份设置", isOn: $overwriteIdentity)
+                    Toggle("覆盖 API Key", isOn: $overwriteKeys)
+                    Toggle("覆盖偏好设置", isOn: $overwriteSettings)
+                } header: {
+                    Text("覆盖选项")
+                } footer: {
+                    Text("关闭后保留本机当前配置，只导入对话、文件与记忆。")
                 }
 
                 Section {
@@ -203,9 +216,15 @@ struct BackupImportSheet: View {
         summaryText = nil
         Task {
             do {
+                let options = BackupService.ImportOptions(
+                    overwriteIdentity: overwriteIdentity,
+                    overwriteKeys: overwriteKeys,
+                    overwriteSettings: overwriteSettings
+                )
                 let summary = try await BackupService.importBackup(from: fileURL,
                                                                    password: password,
-                                                                   context: modelContext)
+                                                                   context: modelContext,
+                                                                   options: options)
                 // 让 App 立即用上恢复后的 Key
                 credentials.reload()
                 summaryText = summary.text
