@@ -3,6 +3,7 @@ import SwiftData
 
 /// 资料库：本地保存所有上传与 AI 生成的文件，支持筛选、搜索、预览、分享、收藏、删除
 struct LibraryView: View {
+    @Environment(\.appTheme) private var theme
     var onOpenConversation: (UUID) -> Void = { _ in }
 
     @Environment(\.modelContext) private var modelContext
@@ -14,6 +15,7 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var previewFile: StoredFile?
     @State private var pendingDelete: StoredFile?
+    @State private var fileError: String?
 
     private let columns = [GridItem(.adaptive(minimum: 190), spacing: 12)]
 
@@ -75,7 +77,8 @@ struct LibraryView: View {
             }
             .padding(20)
         }
-        .background(Color(.systemBackground))
+        .background(theme.canvas)
+        .overlay(alignment: .bottom) { if let fileError { Text(fileError).font(.footnote).foregroundStyle(.red).padding() } }
         .navigationTitle("资料库")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "搜索文件名或内容")
@@ -89,7 +92,8 @@ struct LibraryView: View {
             Button("取消", role: .cancel) { pendingDelete = nil }
             Button("删除", role: .destructive) {
                 if let file = pendingDelete {
-                    FileStore.delete(file, context: modelContext)
+                    do { try FileStore.delete(file, context: modelContext) }
+                    catch { fileError = error.localizedDescription }
                 }
                 pendingDelete = nil
             }
@@ -189,6 +193,7 @@ struct LibraryView: View {
 }
 
 struct FilterChip: View {
+    @Environment(\.appTheme) private var theme
     let title: String
     var symbol: String? = nil
     let active: Bool
@@ -204,7 +209,7 @@ struct FilterChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(active ? ThemeStore.current.accentSoft : Color(.secondarySystemBackground),
+            .background(active ? ThemeStore.current.accentSoft : theme.surface,
                         in: Capsule())
             .foregroundStyle(active ? Color.accentColor : Color.primary)
             .overlay(
