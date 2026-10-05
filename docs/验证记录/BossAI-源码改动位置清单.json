@@ -1,0 +1,2197 @@
+{
+  "scope": "源码/配置/脚本和继承文件的位置快照；生成的说明/验证记录不构成自引用哈希清单",
+  "baseline_zip_sha256": "45995272b191a9a128dc35b981ebccc690f674c1a79ff571538cba1d29467047",
+  "files": [
+    {
+      "path": ".github/workflows/build-ipa.yml",
+      "status": "保留",
+      "bytes": 1169,
+      "sha256": "33bb8d520bd863c0a336aec3ba4d51f8c4e13487c83b232a40652d5d79de81fb",
+      "changed_line_starts": [],
+      "functions": []
+    },
+    {
+      "path": ".github/workflows/expert-quality.yml",
+      "status": "新增",
+      "bytes": 1955,
+      "sha256": "5ab0913a172c60759bc6ae46f64f0cd1b05ce43d084a6ec6855bc7e234978611",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": ".gitignore",
+      "status": "修改",
+      "bytes": 150,
+      "sha256": "e7c00eefb588da2a69dea7c09a264665befed91f7c82f474d9e4dbe617f5506f",
+      "changed_line_starts": [
+        11
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/BossAIApp.swift",
+      "status": "修改",
+      "bytes": 1335,
+      "sha256": "5d9d7ab09c4dc0840b975ac9672fa93714ef6814580e9ff463cc9378ba4695ed",
+      "changed_line_starts": [
+        16,
+        26,
+        30
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Config/AppConfig.swift",
+      "status": "保留",
+      "bytes": 2437,
+      "sha256": "aa322addae0094860bb6be1b33ff26a5b991f01ae45798bdc308f1d1ada13050",
+      "changed_line_starts": [],
+      "functions": [
+        {
+          "function": "setPreferProviderSearch",
+          "line": 40
+        },
+        {
+          "function": "setSearchPageFetchCount",
+          "line": 50
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Config/CredentialStore.swift",
+      "status": "修改",
+      "bytes": 3685,
+      "sha256": "97bb87046a03e22ad195e76a834a64e6100338b87addb30f22ac9f9f3753b801",
+      "changed_line_starts": [
+        9,
+        14,
+        21,
+        27,
+        31,
+        35,
+        38,
+        47,
+        51
+      ],
+      "functions": [
+        {
+          "function": "seedBakedKeys",
+          "line": 28
+        },
+        {
+          "function": "reload",
+          "line": 41
+        },
+        {
+          "function": "save",
+          "line": 46
+        },
+        {
+          "function": "resetToBaked",
+          "line": 55
+        },
+        {
+          "function": "clear",
+          "line": 68
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Config/KeychainHelper.swift",
+      "status": "修改",
+      "bytes": 1845,
+      "sha256": "9794666b90e986058ecd829befc0bb52e934dd30d7a0a477507b8bff00d6b011",
+      "changed_line_starts": [
+        6,
+        14,
+        20
+      ],
+      "functions": [
+        {
+          "function": "save",
+          "line": 7
+        },
+        {
+          "function": "read",
+          "line": 23
+        },
+        {
+          "function": "delete",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Config/Theme.swift",
+      "status": "修改",
+      "bytes": 4256,
+      "sha256": "a839f9c08310345b96e6c4b96548ee124459e897f660b026fcc7634958a38c28",
+      "changed_line_starts": [
+        2,
+        5,
+        10,
+        19,
+        30,
+        42,
+        54,
+        62,
+        73,
+        76,
+        102
+      ],
+      "functions": [
+        {
+          "function": "set",
+          "line": 98
+        }
+      ]
+    },
+    {
+      "path": "BossAI/ExpertCore/BusinessCalculators.swift",
+      "status": "新增",
+      "bytes": 8882,
+      "sha256": "63086810949517a1f438599fcbcbfee5c56d99ae2e2440c00d1aa2c76268983d",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "displayName",
+          "line": 13
+        },
+        {
+          "function": "calculate",
+          "line": 30
+        },
+        {
+          "function": "number",
+          "line": 37
+        },
+        {
+          "function": "rate",
+          "line": 43
+        },
+        {
+          "function": "weighted",
+          "line": 113
+        }
+      ]
+    },
+    {
+      "path": "BossAI/ExpertCore/ExpertCapabilities.swift",
+      "status": "新增",
+      "bytes": 7014,
+      "sha256": "0cb491fd95c95eb7b1e1fa1486881a0dc4b039cad74b6a0afa5937f9367e0d41",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "decode",
+          "line": 63
+        },
+        {
+          "function": "profile",
+          "line": 80
+        },
+        {
+          "function": "permits",
+          "line": 95
+        },
+        {
+          "function": "validateDocument",
+          "line": 105
+        },
+        {
+          "function": "execute",
+          "line": 120
+        }
+      ]
+    },
+    {
+      "path": "BossAI/ExpertCore/ReliabilityCore.swift",
+      "status": "新增",
+      "bytes": 4994,
+      "sha256": "257d1e1b8fb26c933d6bfbd7673fc6d548a3f88621a5ad7df65a7dcc6e846e96",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "consume",
+          "line": 7
+        },
+        {
+          "function": "drain",
+          "line": 20
+        },
+        {
+          "function": "register",
+          "line": 29
+        },
+        {
+          "function": "canonical",
+          "line": 35
+        },
+        {
+          "function": "inferred",
+          "line": 55
+        },
+        {
+          "function": "query",
+          "line": 61
+        },
+        {
+          "function": "isSafeLeaf",
+          "line": 71
+        },
+        {
+          "function": "cells",
+          "line": 79
+        },
+        {
+          "function": "isSeparator",
+          "line": 94
+        },
+        {
+          "function": "sheetName",
+          "line": 101
+        }
+      ]
+    },
+    {
+      "path": "BossAI/ExpertCore/Resources/ExpertSkills.json",
+      "status": "新增",
+      "bytes": 14874,
+      "sha256": "147839d04b0d09f60597ec371f7397ffb3da93f834def3ef6bb91f03622324de",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/ExpertCore/SpreadsheetXMLCore.swift",
+      "status": "新增",
+      "bytes": 3276,
+      "sha256": "8770045b861a66acbda5b8b709a138b50ba8166859169848192e7fd38cc334d2",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "sharedStrings",
+          "line": 7
+        },
+        {
+          "function": "rows",
+          "line": 11
+        },
+        {
+          "function": "parse",
+          "line": 15
+        },
+        {
+          "function": "parser",
+          "line": 31
+        },
+        {
+          "function": "parser",
+          "line": 47
+        },
+        {
+          "function": "parser",
+          "line": 51
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Models/Expert.swift",
+      "status": "修改",
+      "bytes": 21531,
+      "sha256": "5864f9b487e450bf077b2864ca68cad03861c94bd3634d81fd823b806a713b02",
+      "changed_line_starts": [
+        14,
+        25,
+        110
+      ],
+      "functions": [
+        {
+          "function": "find",
+          "line": 364
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Models/Models.swift",
+      "status": "保留",
+      "bytes": 8208,
+      "sha256": "e85ac93c050afd176da3902697d4ab748d254f7944795a1ebe16a2704eda29c0",
+      "changed_line_starts": [],
+      "functions": [
+        {
+          "function": "from",
+          "line": 106
+        },
+        {
+          "function": "load",
+          "line": 222
+        },
+        {
+          "function": "save",
+          "line": 230
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/BackupService.swift",
+      "status": "修改",
+      "bytes": 27436,
+      "sha256": "2239ca134b8b0d7edbdcf118bf529066bcd2bf17c87135718991483c29918bce",
+      "changed_line_starts": [
+        59,
+        67,
+        109,
+        132,
+        181,
+        183,
+        185,
+        192,
+        196,
+        205,
+        219,
+        235,
+        247,
+        260,
+        284,
+        310,
+        325,
+        341,
+        355,
+        363,
+        364,
+        389,
+        415,
+        426,
+        430,
+        470,
+        482,
+        485,
+        502,
+        511,
+        529,
+        553
+      ],
+      "functions": [
+        {
+          "function": "export",
+          "line": 178
+        },
+        {
+          "function": "exportsDirectory",
+          "line": 268
+        },
+        {
+          "function": "assemble",
+          "line": 274
+        },
+        {
+          "function": "currentSettings",
+          "line": 289
+        },
+        {
+          "function": "importBackup",
+          "line": 318
+        },
+        {
+          "function": "parseManifest",
+          "line": 444
+        },
+        {
+          "function": "applySettings",
+          "line": 464
+        },
+        {
+          "function": "encrypt",
+          "line": 480
+        },
+        {
+          "function": "decrypt",
+          "line": 495
+        },
+        {
+          "function": "deriveKey",
+          "line": 511
+        },
+        {
+          "function": "deflate",
+          "line": 536
+        },
+        {
+          "function": "inflate",
+          "line": 552
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/BoundedHTTPClient.swift",
+      "status": "新增",
+      "bytes": 1231,
+      "sha256": "0b5ead2b7b0843599bd5111472aed7f05d0076362d5e3e3dedcfa24b99ea84c7",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "session",
+          "line": 4
+        },
+        {
+          "function": "data",
+          "line": 13
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/ChatService.swift",
+      "status": "修改",
+      "bytes": 18358,
+      "sha256": "77d03135aba1702bb9397e2f380a2f7f7e382787ddc5d7ba3d70e2a2151688a1",
+      "changed_line_starts": [
+        23,
+        28,
+        35,
+        39,
+        43,
+        46,
+        64,
+        68,
+        71,
+        82,
+        86,
+        92,
+        95,
+        110,
+        114,
+        124,
+        130,
+        135,
+        151,
+        160,
+        179,
+        182,
+        198,
+        212,
+        253
+      ],
+      "functions": [
+        {
+          "function": "stream",
+          "line": 43
+        },
+        {
+          "function": "applyTools",
+          "line": 179
+        },
+        {
+          "function": "expertSkillFunction",
+          "line": 214
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/DocumentBuilder.swift",
+      "status": "修改",
+      "bytes": 36549,
+      "sha256": "30873f3603df42ac2bfca9e25aced14da0a48567044031ab5aa48c220cd0d680",
+      "changed_line_starts": [
+        152,
+        155,
+        183,
+        186,
+        330,
+        333,
+        341,
+        346,
+        465,
+        487,
+        554,
+        556
+      ],
+      "functions": [
+        {
+          "function": "blocks",
+          "line": 59
+        },
+        {
+          "function": "inline",
+          "line": 91
+        },
+        {
+          "function": "slides",
+          "line": 114
+        },
+        {
+          "function": "flush",
+          "line": 119
+        },
+        {
+          "function": "table",
+          "line": 150
+        },
+        {
+          "function": "splitTables",
+          "line": 165
+        },
+        {
+          "function": "flushText",
+          "line": 170
+        },
+        {
+          "function": "flushTable",
+          "line": 176
+        },
+        {
+          "function": "build",
+          "line": 214
+        },
+        {
+          "function": "docx",
+          "line": 227
+        },
+        {
+          "function": "runProps",
+          "line": 230
+        },
+        {
+          "function": "paragraph",
+          "line": 236
+        },
+        {
+          "function": "wordTable",
+          "line": 302
+        },
+        {
+          "function": "pptx",
+          "line": 324
+        },
+        {
+          "function": "flush",
+          "line": 342
+        },
+        {
+          "function": "slideXML",
+          "line": 416
+        },
+        {
+          "function": "xlsx",
+          "line": 445
+        },
+        {
+          "function": "columnName",
+          "line": 500
+        },
+        {
+          "function": "pdf",
+          "line": 513
+        },
+        {
+          "function": "beginPageIfNeeded",
+          "line": 529
+        },
+        {
+          "function": "newPage",
+          "line": 535
+        },
+        {
+          "function": "draw",
+          "line": 539
+        },
+        {
+          "function": "xmlEscape",
+          "line": 615
+        },
+        {
+          "function": "safeFilename",
+          "line": 624
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/ExpertKnowledgeService.swift",
+      "status": "新增",
+      "bytes": 2245,
+      "sha256": "403a92abb7a14229e3ae88857bd4316256bcbb10ac43b3cd9f70cd06f11ff235",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "search",
+          "line": 12
+        },
+        {
+          "function": "toolResult",
+          "line": 30
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/FileImportService.swift",
+      "status": "修改",
+      "bytes": 12107,
+      "sha256": "028771d3d4d91a9a5ca3771b7d46bdd1478082b7db2f7fc2c2904bc7e183b21d",
+      "changed_line_starts": [
+        15,
+        25,
+        27,
+        60,
+        113,
+        115,
+        118,
+        120
+      ],
+      "functions": [
+        {
+          "function": "load",
+          "line": 12
+        },
+        {
+          "function": "extractText",
+          "line": 22
+        },
+        {
+          "function": "decodePlainText",
+          "line": 40
+        },
+        {
+          "function": "extractPDF",
+          "line": 52
+        },
+        {
+          "function": "extractPDFWithOCR",
+          "line": 63
+        },
+        {
+          "function": "extractOOXML",
+          "line": 82
+        },
+        {
+          "function": "plainText",
+          "line": 136
+        },
+        {
+          "function": "stripTags",
+          "line": 151
+        },
+        {
+          "function": "decodeEntities",
+          "line": 162
+        },
+        {
+          "function": "tidy",
+          "line": 171
+        },
+        {
+          "function": "extractTagContents",
+          "line": 188
+        },
+        {
+          "function": "extractSheetRows",
+          "line": 202
+        },
+        {
+          "function": "ocr",
+          "line": 239
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/FileStore.swift",
+      "status": "修改",
+      "bytes": 4288,
+      "sha256": "4811ac81ffa5d1e9c8ff9cfec69ec1fdd79509a98dfc7c0bc99ef345b6950025",
+      "changed_line_starts": [
+        21,
+        52,
+        62,
+        64,
+        74,
+        82,
+        102
+      ],
+      "functions": [
+        {
+          "function": "prepare",
+          "line": 13
+        },
+        {
+          "function": "url",
+          "line": 20
+        },
+        {
+          "function": "exists",
+          "line": 24
+        },
+        {
+          "function": "store",
+          "line": 30
+        },
+        {
+          "function": "delete",
+          "line": 62
+        },
+        {
+          "function": "cleanupOrphans",
+          "line": 79
+        },
+        {
+          "function": "contextText",
+          "line": 93
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/ImageService.swift",
+      "status": "修改",
+      "bytes": 3889,
+      "sha256": "8dc900bb2129da6eb22582b25860c9604ba6af3626293eef772e98273fee292b",
+      "changed_line_starts": [
+        7,
+        10,
+        47,
+        51,
+        57,
+        69,
+        72
+      ],
+      "functions": [
+        {
+          "function": "generate",
+          "line": 27
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/MemoryService.swift",
+      "status": "修改",
+      "bytes": 5440,
+      "sha256": "a160ff75f323416c04e27dcc4fb2ad6808408b47a19d7de955fba4a850c48607",
+      "changed_line_starts": [
+        17,
+        20,
+        33,
+        46,
+        67,
+        80,
+        87
+      ],
+      "functions": [
+        {
+          "function": "injectionFragment",
+          "line": 16
+        },
+        {
+          "function": "extract",
+          "line": 30
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/PerformanceTrace.swift",
+      "status": "新增",
+      "bytes": 706,
+      "sha256": "4eed9ee5ee42f3514453c16e3ed1710243a519370ade3fbdf48e03d74c2a0b82",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "begin",
+          "line": 7
+        },
+        {
+          "function": "end",
+          "line": 12
+        },
+        {
+          "function": "event",
+          "line": 15
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/ProviderProfiles.swift",
+      "status": "修改",
+      "bytes": 13439,
+      "sha256": "5355f56c28e1acee43beb8032ca308049e5685de091faf3947c80dc770276b93",
+      "changed_line_starts": [
+        214,
+        231,
+        288
+      ],
+      "functions": [
+        {
+          "function": "saveChatProvider",
+          "line": 71
+        },
+        {
+          "function": "saveImageProvider",
+          "line": 72
+        },
+        {
+          "function": "clearProviders",
+          "line": 75
+        },
+        {
+          "function": "saveChatModelOverride",
+          "line": 82
+        },
+        {
+          "function": "saveImageModelOverride",
+          "line": 83
+        },
+        {
+          "function": "chatModelOverride",
+          "line": 84
+        },
+        {
+          "function": "imageModelOverride",
+          "line": 85
+        },
+        {
+          "function": "storedChatProviderId",
+          "line": 94
+        },
+        {
+          "function": "storedImageProviderId",
+          "line": 97
+        },
+        {
+          "function": "currentChat",
+          "line": 102
+        },
+        {
+          "function": "currentImage",
+          "line": 114
+        },
+        {
+          "function": "limit",
+          "line": 134
+        },
+        {
+          "function": "setLimit",
+          "line": 135
+        },
+        {
+          "function": "currentMonthKey",
+          "line": 137
+        },
+        {
+          "function": "spent",
+          "line": 142
+        },
+        {
+          "function": "isExceeded",
+          "line": 152
+        },
+        {
+          "function": "estimateTokens",
+          "line": 159
+        },
+        {
+          "function": "prices",
+          "line": 164
+        },
+        {
+          "function": "add",
+          "line": 175
+        },
+        {
+          "function": "addImageGeneration",
+          "line": 182
+        },
+        {
+          "function": "addDocument",
+          "line": 188
+        },
+        {
+          "function": "restoreSpent",
+          "line": 195
+        },
+        {
+          "function": "detectChat",
+          "line": 206
+        },
+        {
+          "function": "detectImage",
+          "line": 223
+        },
+        {
+          "function": "selfCheck",
+          "line": 240
+        },
+        {
+          "function": "isUUIDLike",
+          "line": 263
+        },
+        {
+          "function": "probeModelsEndpoint",
+          "line": 268
+        },
+        {
+          "function": "probeImageEndpoint",
+          "line": 278
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/SpeechService.swift",
+      "status": "修改",
+      "bytes": 3960,
+      "sha256": "2ddfd90cb5eced73d931c16041377ce9f43477b2a919256f6f9ebf40078ce62b",
+      "changed_line_starts": [
+        10,
+        34,
+        57,
+        72,
+        86
+      ],
+      "functions": [
+        {
+          "function": "requestPermissions",
+          "line": 21
+        },
+        {
+          "function": "start",
+          "line": 33
+        },
+        {
+          "function": "stop",
+          "line": 82
+        },
+        {
+          "function": "stopTaskOnly",
+          "line": 86
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/WebSearchService.swift",
+      "status": "修改",
+      "bytes": 42937,
+      "sha256": "dc811f697684fd45f4ef2c2747ce16d5c97e00aac795647b44a870f2d71fc1df",
+      "changed_line_starts": [
+        3,
+        29,
+        65,
+        84,
+        89,
+        95,
+        102,
+        104,
+        189,
+        202,
+        215,
+        234,
+        307,
+        354,
+        358,
+        413,
+        540,
+        545,
+        553,
+        555,
+        557,
+        559,
+        565,
+        572,
+        581,
+        584,
+        593,
+        607,
+        768,
+        773,
+        775,
+        783,
+        785
+      ],
+      "functions": [
+        {
+          "function": "search",
+          "line": 65
+        },
+        {
+          "function": "score",
+          "line": 70
+        },
+        {
+          "function": "searchUnranked",
+          "line": 82
+        },
+        {
+          "function": "withFallback",
+          "line": 117
+        },
+        {
+          "function": "fusedSearch",
+          "line": 125
+        },
+        {
+          "function": "host",
+          "line": 175
+        },
+        {
+          "function": "fetchPageText",
+          "line": 185
+        },
+        {
+          "function": "redirectTarget",
+          "line": 225
+        },
+        {
+          "function": "resolvedURL",
+          "line": 240
+        },
+        {
+          "function": "extractTables",
+          "line": 249
+        },
+        {
+          "function": "looksLikeCode",
+          "line": 277
+        },
+        {
+          "function": "extractRows",
+          "line": 289
+        },
+        {
+          "function": "searchSogou",
+          "line": 320
+        },
+        {
+          "function": "search360",
+          "line": 328
+        },
+        {
+          "function": "searchBaidu",
+          "line": 336
+        },
+        {
+          "function": "searchBing",
+          "line": 344
+        },
+        {
+          "function": "searchBingRSS",
+          "line": 353
+        },
+        {
+          "function": "parseRSS",
+          "line": 365
+        },
+        {
+          "function": "tagValue",
+          "line": 387
+        },
+        {
+          "function": "stripCDATA",
+          "line": 392
+        },
+        {
+          "function": "decodeEntities",
+          "line": 396
+        },
+        {
+          "function": "searchHTML",
+          "line": 411
+        },
+        {
+          "function": "parseLinks",
+          "line": 418
+        },
+        {
+          "function": "isNoiseTitle",
+          "line": 459
+        },
+        {
+          "function": "isResultLink",
+          "line": 473
+        },
+        {
+          "function": "absolutize",
+          "line": 501
+        },
+        {
+          "function": "firstLongLine",
+          "line": 514
+        },
+        {
+          "function": "findDate",
+          "line": 527
+        },
+        {
+          "function": "percentEncode",
+          "line": 539
+        },
+        {
+          "function": "searchTavily",
+          "line": 545
+        },
+        {
+          "function": "searchBocha",
+          "line": 572
+        },
+        {
+          "function": "rawGet",
+          "line": 600
+        },
+        {
+          "function": "decodeHTML",
+          "line": 628
+        },
+        {
+          "function": "lossyDecode",
+          "line": 637
+        },
+        {
+          "function": "firstMatch",
+          "line": 661
+        },
+        {
+          "function": "firstWholeMatch",
+          "line": 677
+        },
+        {
+          "function": "plainText",
+          "line": 692
+        },
+        {
+          "function": "mainBody",
+          "line": 721
+        },
+        {
+          "function": "lineScore",
+          "line": 743
+        },
+        {
+          "function": "stripScripts",
+          "line": 757
+        },
+        {
+          "function": "format",
+          "line": 768
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Services/ZipArchive.swift",
+      "status": "修改",
+      "bytes": 10717,
+      "sha256": "c0e384bfee48f7170777b3873c17e70743f9cd1dce6ff49446c0c7003e3dc42d",
+      "changed_line_starts": [
+        2,
+        139,
+        167,
+        174,
+        183,
+        186,
+        189,
+        210,
+        217,
+        220,
+        225,
+        229,
+        233,
+        235,
+        269
+      ],
+      "functions": [
+        {
+          "function": "crc32",
+          "line": 17
+        },
+        {
+          "function": "adler32",
+          "line": 25
+        },
+        {
+          "function": "add",
+          "line": 44
+        },
+        {
+          "function": "add",
+          "line": 48
+        },
+        {
+          "function": "finalize",
+          "line": 52
+        },
+        {
+          "function": "u16",
+          "line": 143
+        },
+        {
+          "function": "u32",
+          "line": 148
+        },
+        {
+          "function": "centralEntries",
+          "line": 154
+        },
+        {
+          "function": "entryNames",
+          "line": 195
+        },
+        {
+          "function": "data",
+          "line": 199
+        },
+        {
+          "function": "inflateRaw",
+          "line": 234
+        },
+        {
+          "function": "inflateManifest",
+          "line": 238
+        },
+        {
+          "function": "inflate",
+          "line": 242
+        },
+        {
+          "function": "appendLE",
+          "line": 274
+        },
+        {
+          "function": "appendLE",
+          "line": 279
+        }
+      ]
+    },
+    {
+      "path": "BossAI/ViewModels/ChatViewModel.swift",
+      "status": "修改",
+      "bytes": 37186,
+      "sha256": "20dd9e9a4092a21ea27ab49c342fe7483e138bf6cf7d51718a38019b5b507cac",
+      "changed_line_starts": [
+        10,
+        48,
+        50,
+        62,
+        67,
+        70,
+        82,
+        88,
+        90,
+        96,
+        98,
+        108,
+        116,
+        122,
+        124,
+        170,
+        174,
+        188,
+        190,
+        193,
+        241,
+        245,
+        262,
+        278,
+        283,
+        288,
+        293,
+        301,
+        306,
+        318,
+        326,
+        335,
+        352,
+        357,
+        369,
+        380,
+        426,
+        442,
+        471,
+        482,
+        491,
+        493,
+        513,
+        517,
+        546,
+        549,
+        551,
+        554,
+        560,
+        580,
+        584,
+        591,
+        595,
+        602,
+        614,
+        626,
+        632,
+        661,
+        683,
+        702
+      ],
+      "functions": [
+        {
+          "function": "attach",
+          "line": 81
+        },
+        {
+          "function": "attach",
+          "line": 107
+        },
+        {
+          "function": "removeAttachment",
+          "line": 132
+        },
+        {
+          "function": "files",
+          "line": 136
+        },
+        {
+          "function": "ensureFileCache",
+          "line": 147
+        },
+        {
+          "function": "invalidateFileCache",
+          "line": 155
+        },
+        {
+          "function": "storedFile",
+          "line": 160
+        },
+        {
+          "function": "ensureConversation",
+          "line": 170
+        },
+        {
+          "function": "send",
+          "line": 180
+        },
+        {
+          "function": "stop",
+          "line": 233
+        },
+        {
+          "function": "clearConversation",
+          "line": 244
+        },
+        {
+          "function": "runLoop",
+          "line": 252
+        },
+        {
+          "function": "runWebSearch",
+          "line": 579
+        },
+        {
+          "function": "buildAPIMessages",
+          "line": 631
+        },
+        {
+          "function": "exportConversation",
+          "line": 698
+        },
+        {
+          "function": "timestamp",
+          "line": 724
+        },
+        {
+          "function": "ocrFriendlyJPEG",
+          "line": 733
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/BackupSheets.swift",
+      "status": "修改",
+      "bytes": 9271,
+      "sha256": "18ef44ec8a078748476c99b34ca3f2c79df51a972e2cea297086b13aa03eda68",
+      "changed_line_starts": [
+        118,
+        187
+      ],
+      "functions": [
+        {
+          "function": "start",
+          "line": 91
+        },
+        {
+          "function": "start",
+          "line": 212
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/ChatView.swift",
+      "status": "修改",
+      "bytes": 10884,
+      "sha256": "4118a664bcbc0dc769fd3e4e3fd6262c76d1a308611930f3e76738c5a2d9e1af",
+      "changed_line_starts": [
+        9,
+        49,
+        97,
+        131,
+        158,
+        177,
+        179,
+        184,
+        189,
+        215,
+        221,
+        252,
+        257,
+        259
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/ExpertSkillSheet.swift",
+      "status": "新增",
+      "bytes": 2066,
+      "sha256": "1791a377fe159057eefca0475e62411d844628308a358e2cf71b7991bb070f7f",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/ExpertWorkbenchView.swift",
+      "status": "新增",
+      "bytes": 5430,
+      "sha256": "9baee66520fad62034b313d8a2ead201172255a1f0b60afe57b13667fc38ece3",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "calculate",
+          "line": 49
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/FilePreview.swift",
+      "status": "保留",
+      "bytes": 4876,
+      "sha256": "cd75cac1f9417a166dc3fc5efb5f2ce7b4b9e764702af1f817c9e08cdb6e4a17",
+      "changed_line_starts": [],
+      "functions": [
+        {
+          "function": "makeUIViewController",
+          "line": 9
+        },
+        {
+          "function": "updateUIViewController",
+          "line": 15
+        },
+        {
+          "function": "makeCoordinator",
+          "line": 17
+        },
+        {
+          "function": "numberOfPreviewItems",
+          "line": 23
+        },
+        {
+          "function": "previewController",
+          "line": 25
+        },
+        {
+          "function": "fileTint",
+          "line": 33
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/IdentitySheet.swift",
+      "status": "修改",
+      "bytes": 7397,
+      "sha256": "a8b10ffc4a44e58e8e6b76ea0eba0a1501e9c137bcb96298fa053efdca03073b",
+      "changed_line_starts": [
+        88
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/InputBar.swift",
+      "status": "修改",
+      "bytes": 9837,
+      "sha256": "72e1aae1d68fb431038d309cd1aa65f7b7cc8170dbaea5889cd0d5ac42f78417",
+      "changed_line_starts": [
+        8,
+        13,
+        56,
+        63,
+        65,
+        75,
+        116,
+        118,
+        120,
+        171,
+        181,
+        207
+      ],
+      "functions": [
+        {
+          "function": "makeUIViewController",
+          "line": 217
+        },
+        {
+          "function": "updateUIViewController",
+          "line": 224
+        },
+        {
+          "function": "makeCoordinator",
+          "line": 226
+        },
+        {
+          "function": "imagePickerController",
+          "line": 232
+        },
+        {
+          "function": "imagePickerControllerDidCancel",
+          "line": 240
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/LibraryView.swift",
+      "status": "修改",
+      "bytes": 9136,
+      "sha256": "e37fa735f08b10876490b05c3d91b230b9bda7fb1d37a0b51baf6589e54fc453",
+      "changed_line_starts": [
+        6,
+        18,
+        80,
+        95,
+        196,
+        212
+      ],
+      "functions": [
+        {
+          "function": "toggleFavorite",
+          "line": 189
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/MainView.swift",
+      "status": "修改",
+      "bytes": 28555,
+      "sha256": "c0486f6e280334e30265f6ff45e40104f5b24151734f596020b4522d3d1e78f4",
+      "changed_line_starts": [
+        7,
+        18,
+        57,
+        89,
+        95,
+        113,
+        134,
+        141,
+        144,
+        150,
+        153,
+        155,
+        165,
+        351,
+        373,
+        416,
+        459,
+        489,
+        496,
+        499,
+        538,
+        556,
+        560,
+        591,
+        603,
+        613,
+        623
+      ],
+      "functions": [
+        {
+          "function": "startNewDraft",
+          "line": 113
+        },
+        {
+          "function": "openExpert",
+          "line": 121
+        },
+        {
+          "function": "delete",
+          "line": 132
+        },
+        {
+          "function": "ensureProvidersDetected",
+          "line": 140
+        },
+        {
+          "function": "delete",
+          "line": 331
+        },
+        {
+          "function": "registerTap",
+          "line": 338
+        },
+        {
+          "function": "create",
+          "line": 612
+        },
+        {
+          "function": "check",
+          "line": 662
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/MarkdownView.swift",
+      "status": "修改",
+      "bytes": 10428,
+      "sha256": "d6cda7732c68844e91dc525793b6a176b3cb6f8fb718b363c5d4dce2420e85cd",
+      "changed_line_starts": [
+        19,
+        22,
+        47,
+        104,
+        114,
+        171,
+        191,
+        228
+      ],
+      "functions": [
+        {
+          "function": "cachedParse",
+          "line": 32
+        },
+        {
+          "function": "blockView",
+          "line": 77
+        },
+        {
+          "function": "inlineText",
+          "line": 113
+        },
+        {
+          "function": "inlineCodeSegments",
+          "line": 135
+        },
+        {
+          "function": "parse",
+          "line": 158
+        },
+        {
+          "function": "flushParagraph",
+          "line": 164
+        }
+      ]
+    },
+    {
+      "path": "BossAI/Views/MessageRow.swift",
+      "status": "修改",
+      "bytes": 5357,
+      "sha256": "4a3370980c49e2507739bd669f22597b22ec67f823abdb93b527eeef48e326b9",
+      "changed_line_starts": [
+        6,
+        21,
+        29,
+        59,
+        62,
+        66,
+        82,
+        93
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/OfflineAcceptanceView.swift",
+      "status": "新增",
+      "bytes": 911,
+      "sha256": "840099c6ea033b401419c2de6cc637a704cb94d6d6f438b2dcbb6d6d779fa30a",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/PerformanceFixtureView.swift",
+      "status": "新增",
+      "bytes": 2499,
+      "sha256": "3be04e1954dd9ae1ca932397e91478b8ddef8f08e7cc8a8cd693a2b428f40876",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "BossAI/Views/SetupView.swift",
+      "status": "修改",
+      "bytes": 14230,
+      "sha256": "44295d553ba9390aef8ba29e21ca2d947666074af5722b1b3bdfe111bb6e0116",
+      "changed_line_starts": [
+        293
+      ],
+      "functions": [
+        {
+          "function": "prefill",
+          "line": 26
+        },
+        {
+          "function": "runSelfCheck",
+          "line": 241
+        },
+        {
+          "function": "start",
+          "line": 257
+        }
+      ]
+    },
+    {
+      "path": "docs/SideStore中文安装与排障指南.md",
+      "status": "保留",
+      "bytes": 9156,
+      "sha256": "81ad2a675fb79ff8237663aa005656b1d1ddd8eaa7feec833d1cf2c1ceef9eb4",
+      "changed_line_starts": [],
+      "functions": []
+    },
+    {
+      "path": "Package.swift",
+      "status": "新增",
+      "bytes": 487,
+      "sha256": "e9fe12e816066be38ccd74a73b9c7157745d7327204b19eb9d4ec0792cc53d81",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "project.yml",
+      "status": "修改",
+      "bytes": 2521,
+      "sha256": "8262135c35e442ab6d6d3c5ff0e5b01496bf4b047409a9ae5199945c165522db",
+      "changed_line_starts": [
+        18,
+        28,
+        39
+      ],
+      "functions": []
+    },
+    {
+      "path": "README.md",
+      "status": "修改",
+      "bytes": 977,
+      "sha256": "c6df2981a33823ced30b37390a256943a5a7d38ad8eeeb2901c1904b6b3a9950",
+      "changed_line_starts": [
+        1,
+        3,
+        5,
+        8,
+        10,
+        12,
+        16,
+        18
+      ],
+      "functions": []
+    },
+    {
+      "path": "scripts/parse_one_swift.py",
+      "status": "新增",
+      "bytes": 649,
+      "sha256": "d1c547f880b2db8583ea749dcb4a996929ae5d3b224705d1dbda12444cfc6e4a",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "scripts/requirements-desktop.txt",
+      "status": "新增",
+      "bytes": 45,
+      "sha256": "0a03c677b8e5b1565be2ac06f9121c16921dcf012898b6689903375761c65fa5",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "scripts/run-quality.sh",
+      "status": "新增",
+      "bytes": 1145,
+      "sha256": "8c0d7eea802e3f28a6976bbd72f138d41eb602da36d4088be069a56594b33f63",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "scripts/verify-desktop.py",
+      "status": "新增",
+      "bytes": 11439,
+      "sha256": "54482189ec023c90657fc801c749049670dd84de2cc685f29678ed7bca115aca",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": []
+    },
+    {
+      "path": "Tests/BossAIExpertCoreTests/ExpertCoreTests.swift",
+      "status": "新增",
+      "bytes": 7616,
+      "sha256": "417d3f75fd6871dcba2b12b5306ac7d22eecca72f19f110e8307c9b71da32c03",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "testAllElevenExpertsAreConfigured",
+          "line": 5
+        },
+        {
+          "function": "testWeightedMatrix",
+          "line": 9
+        },
+        {
+          "function": "testWeightedZeroWeightsRejected",
+          "line": 14
+        },
+        {
+          "function": "testWeightedDimensionMismatchRejected",
+          "line": 17
+        },
+        {
+          "function": "testWeightedScoreOutOfBoundsRejected",
+          "line": 20
+        },
+        {
+          "function": "testUnitEconomics",
+          "line": 23
+        },
+        {
+          "function": "testUnprofitableUnitHasNoFiniteBreakEven",
+          "line": 28
+        },
+        {
+          "function": "testFunnelScenario",
+          "line": 33
+        },
+        {
+          "function": "testZeroOrdersAndSpendDoNotDivideByZero",
+          "line": 39
+        },
+        {
+          "function": "testRateAsPercentInsteadOfFractionRejected",
+          "line": 44
+        },
+        {
+          "function": "testEquityDilution",
+          "line": 47
+        },
+        {
+          "function": "testInvalidOwnerSharesRejected",
+          "line": 51
+        },
+        {
+          "function": "testRunway",
+          "line": 54
+        },
+        {
+          "function": "testPositiveCashflowDoesNotEncodeInfinity",
+          "line": 58
+        },
+        {
+          "function": "testCommission",
+          "line": 63
+        },
+        {
+          "function": "testSpeechDuration",
+          "line": 67
+        },
+        {
+          "function": "testBooleanCannotBeNumeric",
+          "line": 71
+        },
+        {
+          "function": "testOversizedAndOverflowInputsRejected",
+          "line": 74
+        },
+        {
+          "function": "testForbiddenCalculatorDoesNotUseSpoofedExpertID",
+          "line": 78
+        },
+        {
+          "function": "testLegalImageAndSpreadsheetDenied",
+          "line": 82
+        },
+        {
+          "function": "testHeadingsMustBeHeadingsNotBodyWords",
+          "line": 87
+        },
+        {
+          "function": "testCompleteStructurePassesButDoesNotVerifyFacts",
+          "line": 92
+        },
+        {
+          "function": "testInvalidSkillConfigurationIsRejected",
+          "line": 99
+        },
+        {
+          "function": "testCalculateThousandScenariosPerformance",
+          "line": 105
+        },
+        {
+          "function": "testSkillLookupTenThousandTimesPerformance",
+          "line": 113
+        }
+      ]
+    },
+    {
+      "path": "Tests/BossAIExpertCoreTests/ReliabilityCoreTests.swift",
+      "status": "新增",
+      "bytes": 4278,
+      "sha256": "aaf0dfef5689dcdba2aaa3b2785ffeea40d7ac7d505ee11ce6da0d6238eb03e9",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "testSSEWithoutSpace",
+          "line": 5
+        },
+        {
+          "function": "testSSEMultilineAndComments",
+          "line": 10
+        },
+        {
+          "function": "testSSEOversizedEventRejected",
+          "line": 19
+        },
+        {
+          "function": "testCitationsStayStableAcrossSearches",
+          "line": 23
+        },
+        {
+          "function": "testAllCitationsRemainVisible",
+          "line": 31
+        },
+        {
+          "function": "testRecencyWindowUsesUTCDate",
+          "line": 36
+        },
+        {
+          "function": "testUnsafeFileLeavesRejected",
+          "line": 43
+        },
+        {
+          "function": "testMarkdownEscapedPipesAndEmptyColumns",
+          "line": 47
+        },
+        {
+          "function": "testDashInsideDataIsNotSeparator",
+          "line": 50
+        },
+        {
+          "function": "testSheetNameIsOfficeCompatible",
+          "line": 54
+        },
+        {
+          "function": "testRichSharedStringsRetainIndices",
+          "line": 58
+        },
+        {
+          "function": "testSparseColumnsDoNotShiftAndInlineTextSurvives",
+          "line": 62
+        },
+        {
+          "function": "testInvalidSharedIndexDoesNotInventValue",
+          "line": 66
+        },
+        {
+          "function": "testMalformedXMLFailsClosed",
+          "line": 70
+        },
+        {
+          "function": "testLocalEvidenceToolIsPermitted",
+          "line": 73
+        },
+        {
+          "function": "testSSEBatchPerformance",
+          "line": 76
+        }
+      ]
+    },
+    {
+      "path": "Tests/BossAIiOSTests/AppPerformanceTests.swift",
+      "status": "新增",
+      "bytes": 4850,
+      "sha256": "2c8c1968db23fcdae9343b03def4422ff3bbeada8094edad7ffa4c1179d3a360",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "offlineService",
+          "line": 6
+        },
+        {
+          "function": "testLengthTerminationReportsIncompleteAndRetainsDeltas",
+          "line": 12
+        },
+        {
+          "function": "testEOFWithoutTerminalMarkerReportsIncomplete",
+          "line": 26
+        },
+        {
+          "function": "testStopTerminationCompletes",
+          "line": 36
+        },
+        {
+          "function": "testSkillsResourceIsInAppBundle",
+          "line": 45
+        },
+        {
+          "function": "testNativePermissionAndFileStructureGate",
+          "line": 48
+        },
+        {
+          "function": "testWordExportClockAndMemory",
+          "line": 54
+        },
+        {
+          "function": "testLongPDFClockAndMemory",
+          "line": 64
+        },
+        {
+          "function": "testTwoHundredMarkdownMessagesParsingPerformance",
+          "line": 72
+        },
+        {
+          "function": "canInit",
+          "line": 83
+        },
+        {
+          "function": "canonicalRequest",
+          "line": 86
+        },
+        {
+          "function": "startLoading",
+          "line": 87
+        },
+        {
+          "function": "stopLoading",
+          "line": 94
+        }
+      ]
+    },
+    {
+      "path": "Tests/BossAIiOSTests/ReliabilityIntegrationTests.swift",
+      "status": "新增",
+      "bytes": 5019,
+      "sha256": "8b4fd163d3ed0996398ff90cf4ea020c1075732365ac41382910cf0acd309579",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "testMarkdownTableAndCodeBlocksRemainDistinct",
+          "line": 6
+        },
+        {
+          "function": "testLongPPTBulletIsSplitWithoutLosingCharacters",
+          "line": 12
+        },
+        {
+          "function": "testStoredZIPRoundTripAndCRC",
+          "line": 22
+        },
+        {
+          "function": "testCompressedZIPRealFixture",
+          "line": 26
+        },
+        {
+          "function": "testZIPTruncationAndCRCFailureRejected",
+          "line": 30
+        },
+        {
+          "function": "testBackupEncryptionRoundTrip",
+          "line": 36
+        },
+        {
+          "function": "testWrongPasswordAndTamperingRejected",
+          "line": 41
+        },
+        {
+          "function": "testMalformedPresentManifestArrayIsNotDropped",
+          "line": 48
+        },
+        {
+          "function": "testOldManifestMissingOptionalFieldsStillDecodes",
+          "line": 52
+        },
+        {
+          "function": "testKnowledgeRetrievalReturnsFileEvidence",
+          "line": 57
+        },
+        {
+          "function": "testSixThemesHaveSixDifferentLayouts",
+          "line": 68
+        },
+        {
+          "function": "testExcelExportsNumericCellsAndSafeSheetName",
+          "line": 72
+        }
+      ]
+    },
+    {
+      "path": "Tests/BossAIUITests/ExpertAcceptanceUITests.swift",
+      "status": "新增",
+      "bytes": 1411,
+      "sha256": "24d82dfef5753c032854683c113c2050c215a22006ee6361d794b0b2034e2a4e",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "setUp",
+          "line": 4
+        },
+        {
+          "function": "testModelExpertWorkbenchCalculation",
+          "line": 5
+        },
+        {
+          "function": "testLandscapeExpertNavigation",
+          "line": 19
+        }
+      ]
+    },
+    {
+      "path": "Tests/BossAIUITests/OfflinePerformanceUITests.swift",
+      "status": "新增",
+      "bytes": 1178,
+      "sha256": "d8f89b0a4d263fa1ea0f1e8d50dca7ab2fd8b75fe626a5ef9d47bb67791ec9e2",
+      "changed_line_starts": [
+        1
+      ],
+      "functions": [
+        {
+          "function": "setUp",
+          "line": 4
+        },
+        {
+          "function": "testOfflineLaunchPerformance",
+          "line": 5
+        },
+        {
+          "function": "testOfflineScrollClockAndMemory",
+          "line": 15
+        }
+      ]
+    }
+  ],
+  "native_test_execution": "未执行"
+}
