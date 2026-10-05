@@ -3,6 +3,12 @@ on:
   workflow_dispatch:
   push:
     paths: ['BossAI/**', 'Tests/**', 'Package.swift', 'project.yml', '.github/workflows/expert-quality.yml']
+
+# 同一分支只保留最新一次：新 run 触发时自动取消排队中的旧 run
+concurrency:
+  group: expert-quality-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   swift-core:
     runs-on: macos-14
