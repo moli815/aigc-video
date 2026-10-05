@@ -56,9 +56,12 @@ final class MemoryItem {
     var content: String = ""
     var createdAt: Date = Date()
     var hitCount: Int = 0
+    /// 来源：这条记忆从哪段对话抽取（会话标题），供查看与纠错时定位
+    var source: String = ""
 
-    init(content: String) {
+    init(content: String, source: String = "") {
         self.content = content
+        self.source = source
     }
 }
 
