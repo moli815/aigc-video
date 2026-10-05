@@ -5,10 +5,12 @@ import UIKit
 
 /// 输入条：附件（拍照 / 相册 / 文件）+ 麦克风语音输入 + 文本框 + 发送
 struct InputBar: View {
+    @Environment(\.appTheme) private var theme
     @ObservedObject var viewModel: ChatViewModel
     @StateObject private var speech = SpeechService()
 
     @State private var showSourceDialog = false
+    @State private var speechDraft = ""
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var showCamera = false
@@ -51,15 +53,17 @@ struct InputBar: View {
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 42, height: 42)
-                        .background(Color(.secondarySystemBackground), in: Circle())
+                        .background(theme.surface, in: Circle())
                 }
                 .accessibilityLabel("添加附件")
 
                 Button {
                     if speech.isRecording {
                         speech.stop()
-                        viewModel.inputText = speech.recognizedText
+                        viewModel.inputText = speechDraft + speech.recognizedText
                     } else {
+                        speechDraft = viewModel.inputText
+                        if !speechDraft.isEmpty && !speechDraft.hasSuffix("\n") { speechDraft += "\n" }
                         Task { await speech.start() }
                     }
                 } label: {
@@ -68,6 +72,7 @@ struct InputBar: View {
                         .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
                         .frame(width: 42, height: 42)
                 }
+                .disabled(speech.isStarting || viewModel.isStreaming || viewModel.isImporting)
                 .accessibilityLabel(speech.isRecording ? "停止录音" : "语音输入")
 
                 TextField("发消息…", text: inputBinding, axis: .vertical)
@@ -108,10 +113,14 @@ struct InputBar: View {
         }
         .background(.bar)
         .onChange(of: speech.recognizedText) { _, newValue in
-            if speech.isRecording { viewModel.inputText = newValue }
+            if speech.isRecording { viewModel.inputText = speechDraft + newValue }
         }
+        .onDisappear { speech.stop() }
         .confirmationDialog("添加附件", isPresented: $showSourceDialog, titleVisibility: .visible) {
-            Button("拍照") { showCamera = true }
+            Button("拍照") {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) { showCamera = true }
+                else { showPhotos = true }
+            }
             Button("从相册选择") { showPhotos = true }
             Button("选择文件") { showFiles = true }
             Button("取消", role: .cancel) {}
@@ -159,7 +168,7 @@ struct InputBar: View {
     private var canSend: Bool {
         (!viewModel.inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
          || !viewModel.pendingAttachments.isEmpty)
-            && !viewModel.isStreaming
+            && !viewModel.isStreaming && !viewModel.isImporting && !speech.isRecording && !speech.isStarting
     }
 
     private var inputBinding: Binding<String> {
@@ -169,6 +178,7 @@ struct InputBar: View {
 
 /// 附件小卡片（带删除）
 struct AttachmentChip: View {
+    @Environment(\.appTheme) private var theme
     let file: StoredFile
     var onRemove: () -> Void
 
@@ -194,7 +204,7 @@ struct AttachmentChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color(.secondarySystemBackground), in: Capsule())
+        .background(theme.surface, in: Capsule())
         .frame(maxWidth: 190)
     }
 }
