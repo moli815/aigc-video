@@ -7,6 +7,9 @@ import AVFoundation
 final class SpeechService: ObservableObject {
     @Published var isRecording = false
     @Published var recognizedText = ""
+    @Published private(set) var isStarting = false
+    private var tapInstalled = false
+    private var generation = UUID()
     @Published var errorMessage: String?
 
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
@@ -28,8 +31,14 @@ final class SpeechService: ObservableObject {
     }
 
     func start() async {
-        guard await requestPermissions() else { return }
-        stopTaskOnly()
+        guard !isStarting, !isRecording else { return }
+        isStarting = true
+        let token = UUID(); generation = token
+        defer { isStarting = false }
+        guard await requestPermissions(), generation == token, !Task.isCancelled else { return }
+        guard recognizer?.isAvailable == true else { errorMessage = "语音识别服务当前不可用，请稍后重试"; return }
+        stopTaskOnly(invalidate: false)
+        errorMessage = nil
 
         do {
             let session = AVAudioSession.sharedInstance()
@@ -45,6 +54,7 @@ final class SpeechService: ObservableObject {
             recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
                 Task { @MainActor in
+                    guard self.generation == token else { return }
                     if let result {
                         self.recognizedText = result.bestTranscription.formattedString
                     }
@@ -59,6 +69,7 @@ final class SpeechService: ObservableObject {
             inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
                 request.append(buffer)
             }
+            tapInstalled = true
             audioEngine.prepare()
             try audioEngine.start()
             isRecording = true
@@ -72,11 +83,10 @@ final class SpeechService: ObservableObject {
         stopTaskOnly()
     }
 
-    private func stopTaskOnly() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
+    private func stopTaskOnly(invalidate: Bool = true) {
+        if invalidate { generation = UUID() }
+        if audioEngine.isRunning { audioEngine.stop() }
+        if tapInstalled { audioEngine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()
