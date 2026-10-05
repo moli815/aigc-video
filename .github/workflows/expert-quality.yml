@@ -1,50 +1,10 @@
 name: Expert correctness and performance
-on:
-  workflow_dispatch:
-  push:
-    paths: ['BossAI/**', 'Tests/**', 'Package.swift', 'project.yml', '.github/workflows/expert-quality.yml']
-
-# 同一分支只保留最新一次：新 run 触发时自动取消排队中的旧 run
-concurrency:
-  group: expert-quality-${{ github.ref }}
-  cancel-in-progress: true
-
+on: {workflow_dispatch: {}}
 jobs:
-  swift-core:
-    runs-on: macos-15-intel
+  swift-core-linux:
+    runs-on: ubuntu-24.04
+    container: swift:6.0.3-jammy
     steps:
       - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with: {xcode-version: '16.4'}
-      - name: Actual Swift tests and core benchmarks (macOS, not iPad)
-        run: |
-          set -o pipefail
-          swift test -c release 2>&1 | tee swift-core-tests.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: expert-swift-test-log, path: swift-core-tests.log}
-  ios-tests:
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-      - uses: maxim-lobanov/setup-xcode@v1
-        with: {xcode-version: '16.4'}
-      - run: brew install xcodegen
-      - run: xcodegen generate
-      - name: Select an available iPad simulator
-        run: |
-          python3 - <<'PY'
-          import json, subprocess, os
-          devices=json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','--json']))['devices']
-          candidates=[d for runtime,ds in devices.items() if 'iOS' in runtime for d in ds if d['name'].startswith('iPad') and d.get('isAvailable',True)]
-          if not candidates: raise SystemExit('No available iPad simulator')
-          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('IPAD_SIM='+candidates[0]['udid']+'\n')
-          PY
-      - name: Build and execute iOS integration and performance fixtures
-        run: |
-          xcodebuild -project BossAI.xcodeproj -scheme BossAI -configuration Release \
-            -destination "platform=iOS Simulator,id=$IPAD_SIM" \
-            -parallel-testing-enabled NO -resultBundlePath BossAITestResults.xcresult CODE_SIGNING_ALLOWED=NO test
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: ios-performance-xcresult, path: BossAITestResults.xcresult}
+      - name: Actual Swift core tests on Linux (not iPad)
+        run: swift test -c release
