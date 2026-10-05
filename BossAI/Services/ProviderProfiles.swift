@@ -178,6 +178,19 @@ enum BudgetTracker {
         UserDefaults.standard.set(spent() + cost, forKey: spentKey)
     }
 
+    /// 生图计费：按张估算（Seedream 等生图模型按张计费，统一用估算单价 0.1 元/张）
+    static func addImageGeneration(_ count: Int = 1) {
+        let perImage = 0.1
+        UserDefaults.standard.set(spent() + Double(max(0, count)) * perImage, forKey: spentKey)
+    }
+
+    /// 文档生成计费：按内容 token 估算（统一按 2 元/百万 token）
+    static func addDocument(_ content: String) {
+        let tokens = estimateTokens(content)
+        let cost = (Double(tokens) / 1_000_000.0) * 2.0
+        UserDefaults.standard.set(spent() + max(0.01, cost), forKey: spentKey)
+    }
+
     /// 备份恢复用：直接写回已用金额（并锁定到当前月份）
     static func restoreSpent(_ value: Double) {
         UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
