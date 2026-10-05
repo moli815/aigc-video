@@ -102,7 +102,7 @@ struct LibraryView: View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
+                    .fill(ThemeStore.current.accentSoft)
                     .frame(width: 46, height: 46)
                 Image(systemName: "folder.fill")
                     .font(.system(size: 20))
@@ -204,11 +204,11 @@ struct FilterChip: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(active ? Color.accentColor.opacity(0.16) : Color(.secondarySystemBackground),
+            .background(active ? ThemeStore.current.accentSoft : Color(.secondarySystemBackground),
                         in: Capsule())
             .foregroundStyle(active ? Color.accentColor : Color.primary)
             .overlay(
-                Capsule().stroke(active ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 0.8)
+                Capsule().stroke(active ? ThemeStore.current.accent.opacity(0.5) : Color.clear, lineWidth: 0.8)
             )
         }
         .buttonStyle(.plain)
