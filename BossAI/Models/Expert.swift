@@ -11,12 +11,19 @@ struct Expert: Identifiable, Hashable {
     /// 技能包
     let skill: ExpertSkill
 
+    var capabilityInstruction: String {
+        do { return try ExpertCapabilityCatalog.profile(id).instruction }
+        catch { return "技能配置未加载：\(error.localizedDescription)。不要声称具有未加载的能力。" }
+    }
+
     /// 拼装最终 system prompt：角色 + 技能包 + 通用规则
     var systemPrompt: String {
         """
         \(role)
 
         \(skill.promptBlock)
+
+        \(capabilityInstruction)
 
         \(ExpertCatalog.metaRule)
         """
@@ -100,7 +107,7 @@ enum ExpertCatalog {
     涉及风险必须单独列出；不确定的信息明确标注不确定性，不编造数据与案例。
 
     【数据真实性铁律 - 最高优先级，凌驾于一切流畅度与完整度要求之上】
-    1. 任何具体数字、日期、价格、规格参数、政策条文，都必须能在**本次对话的联网搜索结果**里找到出处。
+    1. 外部事实数字、日期、价格、规格参数、政策条文必须有本轮检索出处；用户数据标「用户提供」，计算结果标公式与输入，假设标「假设」。不得把这三类伪装成已核实外部事实。
     2. 搜不到就老老实实写「未核实」或「未公开」。\
     绝对禁止用记忆里的数字、其他型号／其他地区／其他年份的数字，或把几个无关来源拼起来去填空。
     3. 严禁跨来源拼接：拿 A 站的价格 + B 站的发布日期 + 记忆里的屏幕尺寸，\
