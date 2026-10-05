@@ -28,7 +28,9 @@ enum AppConfig {
     static let imageKeyAccount = "image_api_key"
 
     // MARK: 工具调用保护
-    static let maxToolIterations = 8
+    /// 单次回答允许的工具调用轮次。
+    /// 16 = 收集类任务（如「6 款旗舰机参数」）可以做到每个实体单独搜一次再汇总。
+    static let maxToolIterations = 16
     static let memoryInjectLimit = 50
 
     /// 是否额外启用模型厂商自带的服务端搜索（默认关闭：统一用 App 自带的免费搜索，行为一致）
@@ -39,10 +41,11 @@ enum AppConfig {
         UserDefaults.standard.set(on, forKey: "bossai.prefer_provider_search")
     }
 
-    /// 每次搜索自动抓取正文的网页数（0 = 只返回摘要）
+    /// 每次搜索自动抓取正文的网页数（0 = 只返回摘要）。
+    /// 默认 3：参数/报价类信息往往分散在不同站点，只抓 2 篇容易缺字段。
     static var searchPageFetchCount: Int {
         let v = UserDefaults.standard.object(forKey: "bossai.search_page_fetch") as? Int
-        return v ?? 2
+        return v ?? 3
     }
     static func setSearchPageFetchCount(_ n: Int) {
         UserDefaults.standard.set(n, forKey: "bossai.search_page_fetch")
