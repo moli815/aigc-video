@@ -18,7 +18,7 @@ enum FileStore {
     }
 
     static func url(for file: StoredFile) -> URL {
-        rootURL.appendingPathComponent(file.storedName)
+        rootURL.appendingPathComponent(StorageBoundary.isSafeLeaf(file.storedName) ? file.storedName : "invalid-file-name")
     }
 
     static func exists(_ file: StoredFile) -> Bool {
@@ -49,24 +49,38 @@ enum FileStore {
                                 sourceConversationId: sourceConversationId,
                                 textContent: textContent)
         context.insert(record)
-        try? context.save()
+        do { try context.save() }
+        catch {
+            context.delete(record)
+            try? FileManager.default.removeItem(at: dest)
+            throw error
+        }
+        NotificationCenter.default.post(name: .bossAIFilesChanged, object: nil)
         return record
     }
 
-    static func delete(_ file: StoredFile, context: ModelContext) {
+    static func delete(_ file: StoredFile, context: ModelContext) throws {
         let path = url(for: file)
-        if FileManager.default.fileExists(atPath: path.path) {
-            try? FileManager.default.removeItem(at: path)
-        }
+        let quarantine = rootURL.appendingPathComponent("delete-" + UUID().uuidString)
+        let exists = FileManager.default.fileExists(atPath: path.path)
+        if exists { try FileManager.default.moveItem(at: path, to: quarantine) }
         context.delete(file)
-        try? context.save()
+        do { try context.save() }
+        catch {
+            context.rollback()
+            if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
+            throw error
+        }
+        if exists { try? FileManager.default.removeItem(at: quarantine) }
+        NotificationCenter.default.post(name: .bossAIFilesChanged, object: nil)
     }
 
     /// 清理没有任何元数据记录的孤儿文件
     static func cleanupOrphans(context: ModelContext) {
         prepare()
         let descriptor = FetchDescriptor<StoredFile>()
-        let known = Set(((try? context.fetch(descriptor)) ?? []).map(\.storedName))
+        guard let records = try? context.fetch(descriptor) else { return }
+        let known = Set(records.map(\.storedName))
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: rootURL.path)) ?? []
         for name in contents where !known.contains(name) {
             try? FileManager.default.removeItem(at: rootURL.appendingPathComponent(name))
@@ -85,3 +99,5 @@ extension StoredFile {
 
     var isImage: Bool { category == .image }
 }
+
+extension Notification.Name { static let bossAIFilesChanged = Notification.Name("bossai.files.changed") }
