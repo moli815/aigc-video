@@ -20,25 +20,32 @@ final class ChatService {
 
     enum ChatError: LocalizedError {
         case missingKey, badResponse(Int, String)
+        case incomplete(String)
         var errorDescription: String? {
             switch self {
             case .missingKey: return "未配置对话 API Key"
             case .badResponse(let code, let body): return "请求失败（\(code)）：\(body.prefix(300))"
+            case .incomplete(let reason): return "输出尚未完成（\(reason)），已保留收到的内容，可继续生成。"
             }
         }
     }
 
     private let profile: ChatProfile
     private let apiKeyProvider: () -> String?
-    init(profile: ChatProfile, apiKeyProvider: @escaping () -> String?) {
+    private let session: URLSession
+    init(profile: ChatProfile, apiKeyProvider: @escaping () -> String?, session: URLSession = BoundedHTTPClient.chatSession) {
         self.profile = profile
         self.apiKeyProvider = apiKeyProvider
+        self.session = session
     }
 
     /// 单次请求流。工具调用通过 toolCalls 事件交给调用方处理，调用方追加 tool 结果后再次调用本方法继续。
-    func stream(messages: [[String: Any]], enableTools: Bool) -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general") -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
+                let span = PerformanceTrace.begin("AIRequest")
+                defer { PerformanceTrace.end("AIRequest", span) }
+                var receivedFirstDelta = false
                 do {
                     guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ChatError.missingKey }
                     var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
@@ -54,14 +61,17 @@ final class ChatService {
                         "temperature": 0.6,
                     ]
                     if enableTools {
-                        applyTools(to: &body)
+                        try applyTools(to: &body, expertID: expertID)
                     }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request)
                     if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                         var errBody = ""
-                        for try await line in bytes.lines { errBody += line }
+                        for try await line in bytes.lines {
+                            errBody += line
+                            if errBody.utf8.count >= 4096 { break }
+                        }
                         throw ChatError.badResponse(
                             http.statusCode,
                             "服务商 \(profile.displayName)｜\(profile.baseURL)/chat/completions｜模型 \(profile.model)\n\(errBody)"
@@ -69,16 +79,21 @@ final class ChatService {
                     }
 
                     var text = ""
+                    var textBytes = 0
+                    var toolBytes = 0
                     var toolCallBuffer: [Int: (id: String, name: String, args: String)] = [:]
                     var searchNotified = false
+                    var sse = SSEDecoder()
+                    var sawDone = false
+                    var finishReason: String?
 
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
-                        guard line.hasPrefix("data: ") else { continue }
-                        let payload = String(line.dropFirst(6))
-                        if payload == "[DONE]" { break }
+                        guard let payload = try sse.consume(line) else { continue }
+                        if payload == "[DONE]" { sawDone = true; break }
                         guard let data = payload.data(using: .utf8),
-                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ChatError.incomplete("无效流事件") }
+                        if let failure = json["error"] { throw ChatError.incomplete(String(describing: failure).prefix(200).description) }
 
                         // B01：捕获服务端返回的真实 usage（部分厂商在结尾 chunk 返回）。
                         // 拿不到就由调用方回退到估算，不阻塞流式。
@@ -92,20 +107,36 @@ final class ChatService {
 
                         guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { continue }
+                        if let reason = choice["finish_reason"] as? String { finishReason = reason }
 
                         if let delta = choice["delta"] as? [String: Any] {
                             if let content = delta["content"] as? String, !content.isEmpty {
+                                if !receivedFirstDelta {
+                                    receivedFirstDelta = true
+                                    PerformanceTrace.event("FirstDelta", span)
+                                }
+                                textBytes += content.utf8.count
+                                guard textBytes <= 1_048_576 else { throw ChatError.incomplete("输出超过1MB上限") }
                                 text += content
                                 continuation.yield(.textDelta(content))
                             }
                             if let tcs = delta["tool_calls"] as? [[String: Any]] {
+                                if !tcs.isEmpty && !receivedFirstDelta {
+                                    receivedFirstDelta = true
+                                    PerformanceTrace.event("FirstDelta", span)
+                                }
                                 for tc in tcs {
                                     let index = tc["index"] as? Int ?? 0
+                                    guard (0..<24).contains(index) else { throw ChatError.incomplete("工具索引超过上限") }
                                     var entry = toolCallBuffer[index] ?? (id: "", name: "", args: "")
                                     if let id = tc["id"] as? String { entry.id = id }
                                     if let fn = tc["function"] as? [String: Any] {
                                         if let name = fn["name"] as? String { entry.name += name }
-                                        if let args = fn["arguments"] as? String { entry.args += args }
+                                        if let args = fn["arguments"] as? String {
+                                            toolBytes += args.utf8.count
+                                            guard toolBytes <= 1_048_576 else { throw ChatError.incomplete("工具参数总量超过1MB") }
+                                            entry.args += args
+                                        }
                                     }
                                     toolCallBuffer[index] = entry
                                     if entry.name == "$web_search", !searchNotified {
@@ -117,8 +148,18 @@ final class ChatService {
                         }
                     }
 
+                    if Task.isCancelled { throw CancellationError() }
+                    if finishReason == "length" || finishReason == "content_filter" {
+                        throw ChatError.incomplete(finishReason ?? "截断")
+                    }
+                    guard sawDone || finishReason == "stop" || finishReason == "tool_calls" else {
+                        throw ChatError.incomplete("连接提前结束，缺少完成标记")
+                    }
                     let calls = toolCallBuffer.sorted { $0.key < $1.key }
                         .map { ToolCall(id: $0.value.id, name: $0.value.name, arguments: $0.value.args) }
+                    guard calls.count <= 24, calls.allSatisfy({ !$0.id.isEmpty && !$0.name.isEmpty && $0.arguments.utf8.count <= 262144 }) else {
+                        throw ChatError.incomplete("工具调用缺少ID或超过安全上限")
+                    }
                     if !calls.isEmpty {
                         continuation.yield(.toolCalls(calls, assistantText: text))
                     } else {
@@ -135,9 +176,10 @@ final class ChatService {
 
     /// 挂载工具。联网搜索改为 App 自带的本地工具（web_search），
     /// 不再依赖模型厂商的搜索能力 —— 换任何模型商都不会掉联网功能。
-    private func applyTools(to body: inout [String: Any]) {
+    private func applyTools(to body: inout [String: Any], expertID: String) throws {
+        let capability = try ExpertCapabilityCatalog.profile(expertID)
         // 少数厂商的服务端搜索质量更高，可在设置里开启作为增强
-        if AppConfig.preferProviderSearch {
+        if capability.allowSearch && AppConfig.preferProviderSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
                 body["tools"] = [["type": "builtin_function", "function": ["name": "$web_search"]]]
@@ -153,10 +195,34 @@ final class ChatService {
         }
 
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        tools.append(["type": "function", "function": Self.webSearchFunction])
-        tools.append(["type": "function", "function": Self.generateImageFunction])
-        tools.append(["type": "function", "function": Self.createDocumentFunction])
+        if capability.allowSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if capability.allowImages { tools.append(["type": "function", "function": Self.generateImageFunction]) }
+        var document = Self.createDocumentFunction
+        var parameters = document["parameters"] as? [String: Any] ?? [:]
+        var properties = parameters["properties"] as? [String: Any] ?? [:]
+        properties["format"] = ["type": "string", "enum": capability.documentFormats]
+        parameters["properties"] = properties
+        document["parameters"] = parameters
+        if !capability.documentFormats.isEmpty { tools.append(["type": "function", "function": document]) }
+        tools.append(["type": "function", "function": Self.expertSkillFunction(capability)])
+        tools.append(["type": "function", "function": ["name": "search_library",
+            "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
+            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]])
         body["tools"] = tools
+    }
+
+    private static func expertSkillFunction(_ capability: ExpertCapability) -> [String: Any] {
+        var properties: [String: Any] = [
+            "operation": ["type": "string", "enum": capability.calculators.isEmpty ? ["plan", "validate"] : ["plan", "calculate", "validate"]],
+            "inputs_json": ["type": "string", "description": BusinessCalculators.inputGuide],
+            "content": ["type": "string", "description": "待结构校验的Markdown正文"],
+            "format": ["type": "string", "enum": capability.documentFormats],
+        ]
+        if !capability.calculators.isEmpty {
+            properties["calculator"] = ["type": "string", "enum": capability.calculators]
+        }
+        return ["name": "expert_skill", "description": "读取本专家技能契约、执行本地确定性经营计算、检查交付章节。权限由App固定专家控制，不接受模型指定专家ID；校验只保证结构，不保证事实正确。",
+                "parameters": ["type": "object", "properties": properties, "required": ["operation"]]]
     }
 
     /// 自定义联网搜索工具（App 本地执行，与模型厂商无关）
@@ -184,6 +250,7 @@ final class ChatService {
         "parameters": [
             "type": "object",
             "properties": [
+                "recency": ["type": "string", "enum": ["any", "day", "week", "month", "year"], "description": "资讯时效：今天day、本周week、最新month；无明确时效any。日期未知必须注明未核实。"],
                 "query": [
                     "type": "string",
                     "description": "具体搜索关键词：主体全名 + 要查的字段 + 年份（如「小米18 Pro 参数 屏幕 电池 影像」）",
