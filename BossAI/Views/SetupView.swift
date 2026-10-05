@@ -290,6 +290,7 @@ struct SetupView: View {
             ProviderCatalog.saveChatProvider(chat.id)
             ProviderCatalog.saveImageProvider(image.id)
             credentials.save(chatKey: c, imageKey: i)
+            if let error = credentials.saveError { detectError = error; return }
             if isModal {
                 saved = true
                 try? await Task.sleep(nanoseconds: 700_000_000)
