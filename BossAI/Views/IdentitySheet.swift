@@ -85,7 +85,10 @@ struct IdentitySheet: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach(memories, id: \.id) { item in
-                            Text(item.content)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.content)
+                                Text(item.source.isEmpty ? "来源未记录，需核对" : "来源对话：" + item.source).font(.caption).foregroundStyle(.secondary)
+                            }
                                 .font(.footnote)
                                 .swipeActions {
                                     Button(role: .destructive) {
