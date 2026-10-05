@@ -12,7 +12,8 @@ enum FileImportService {
     static func load(url: URL) async -> (data: Data, text: String) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { return (Data(), "") }
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 32 * 1024 * 1024,
+              let data = try? Data(contentsOf: url) else { return (Data(), "读取失败或超过32MB限制") }
         let ext = url.pathExtension.lowercased()
         let text = await extractText(data: data, ext: ext)
         return (data, text)
@@ -21,9 +22,10 @@ enum FileImportService {
     static func extractText(data: Data, ext: String) async -> String {
         switch ext.lowercased() {
         case "pdf":
-            return extractPDF(data: data)
+            return await extractPDFWithOCR(data: data)
         case "docx", "pptx", "xlsx", "pages", "numbers", "key":
-            return extractOOXML(data: data, ext: ext.lowercased())
+            let text = await Task.detached(priority: .userInitiated) { extractOOXML(data: data, ext: ext.lowercased()) }.value
+            return text.isEmpty ? "未抽取到正文；扫描件可能需要OCR，iWork文件请先导出PDF或Office格式。" : text
         case "txt", "md", "markdown", "csv", "json", "xml", "html", "log":
             return decodePlainText(data)
         case "png", "jpg", "jpeg", "heic", "heif", "gif", "webp", "tiff":
@@ -55,6 +57,23 @@ enum FileImportService {
                 parts.append(text)
             }
         }
+        return parts.joined(separator: "\n\n")
+    }
+
+    static func extractPDFWithOCR(data: Data) async -> String {
+        guard let document = PDFDocument(data: data), !document.isLocked else { return "PDF损坏或已加密，无法读取正文。" }
+        var parts: [String] = []
+        for index in 0..<min(document.pageCount, 40) {
+            if Task.isCancelled { break }
+            guard let page = document.page(at: index) else { continue }
+            let text = page.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !text.isEmpty { parts.append(text) }
+            else {
+                let image = page.thumbnail(of: CGSize(width: 1200, height: 1600), for: .mediaBox)
+                if let png = image.pngData() { parts.append("【第\(index + 1)页OCR，可能有误差】\n" + (await ocr(imageData: png))) }
+            }
+        }
+        if document.pageCount > 40 { parts.append("【超过40页，后续正文未读取】") }
         return parts.joined(separator: "\n\n")
     }
 
@@ -91,14 +110,14 @@ enum FileImportService {
             var shared: [String] = []
             if names.contains("xl/sharedStrings.xml"),
                let xml = String(data: (try? reader.data(for: "xl/sharedStrings.xml")) ?? Data(), encoding: .utf8) {
-                shared = extractTagContents(xml, tag: "t")
+                shared = SpreadsheetXMLCore.sharedStrings(xml)
             }
-            let sheets = names.filter { $0.hasPrefix("xl/worksheets/sheet") && $0.hasSuffix(".xml") }.sorted()
+            let sheets = names.filter { $0.hasPrefix("xl/worksheets/sheet") && $0.hasSuffix(".xml") }.sorted { (Int($0.filter(\.isNumber)) ?? 0) < (Int($1.filter(\.isNumber)) ?? 0) }
             for (index, name) in sheets.enumerated() {
                 guard let xml = String(data: (try? reader.data(for: name)) ?? Data(), encoding: .utf8) else { continue }
-                let rows = extractSheetRows(xml: xml, shared: shared)
+                let rows = SpreadsheetXMLCore.rows(xml, shared: shared)
                 if !rows.isEmpty {
-                    parts.append("【工作表 \(index + 1)】\n" + rows.joined(separator: "\n"))
+                    parts.append("【工作表 \(index + 1)】\n" + rows.joined(separator: "\n") + (rows.count >= 500 ? "\n【最多读取500行，后续行未读取】" : ""))
                 }
             }
         default:
