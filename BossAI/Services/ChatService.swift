@@ -14,6 +14,7 @@ final class ChatService {
         case textDelta(String)
         case status(String)          // 如"正在联网搜索…"
         case toolCalls([ToolCall], assistantText: String)
+        case usage(promptTokens: Int, completionTokens: Int)   // 服务端返回的真实 token 数
         case finished
     }
 
@@ -77,8 +78,19 @@ final class ChatService {
                         let payload = String(line.dropFirst(6))
                         if payload == "[DONE]" { break }
                         guard let data = payload.data(using: .utf8),
-                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                              let choices = json["choices"] as? [[String: Any]],
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                        // B01：捕获服务端返回的真实 usage（部分厂商在结尾 chunk 返回）。
+                        // 拿不到就由调用方回退到估算，不阻塞流式。
+                        if let usage = json["usage"] as? [String: Any] {
+                            let p = usage["prompt_tokens"] as? Int ?? 0
+                            let c = usage["completion_tokens"] as? Int ?? 0
+                            if p > 0 || c > 0 {
+                                continuation.yield(.usage(promptTokens: p, completionTokens: c))
+                            }
+                        }
+
+                        guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { continue }
 
                         if let delta = choice["delta"] as? [String: Any] {
@@ -148,15 +160,33 @@ final class ChatService {
     }
 
     /// 自定义联网搜索工具（App 本地执行，与模型厂商无关）
+    ///
+    /// 描述里写死「多实体逐个搜 + 宁缺毋滥」两条硬规则，
+    /// 这是「收集 6 款机型参数」这类任务做不准的主要纠正点：
+    /// 模型原本只用一句笼统关键词搜一次，然后靠记忆把空格填满。
     static let webSearchFunction: [String: Any] = [
         "name": "web_search",
-        "description": "联网搜索最新信息。查资讯、行情、政策、竞品动态、平台规则、价格、新闻时必须调用，不要凭记忆回答时效性问题。",
+        "description": """
+        联网搜索最新信息。查资讯、行情、政策、竞品动态、平台规则、价格、产品参数、发布时间、新闻时必须调用。
+
+        【使用规则，必须严格遵守】
+        1. 不要凭记忆回答任何可能随时间变化的事实（发布时间、价格、规格参数、政策条文、榜单排名），一律先搜后答。
+        2. 涉及多个实体（多个机型、多家竞品、多个平台、多个品牌）时，必须**为每个实体单独发起一次搜索**。\
+        严禁只用一句笼统关键词（如"旗舰手机参数对比"）试图一次覆盖全部实体 —— 那样必然漏字段、串行错位。
+        3. 你可以在同一轮里**同时发起多个 web_search 调用**，系统会并行执行，不会变慢。
+        4. 搜索词要带主体全名 + 具体字段，例如「小米18 Pro 参数 屏幕 电池 影像」「Mate 80 发布时间 售价」，\
+        而不是「手机参数」。查某个字段就写清那个字段。
+        5. 某个字段搜不到时，一律填「未核实」或「未公开」。\
+        绝对禁止用记忆里的数字、其他型号的数字、或从无关来源拼接出来的数字去填空。宁可空着，也不能错。
+        6. 汇总成大表格之前，先列出本轮实际引用到的来源链接清单，再输出表格。
+        7. 不同来源给出冲突数值时，保留冲突并在表格里标注「来源不一致」，不要擅自选一个。
+        """,
         "parameters": [
             "type": "object",
             "properties": [
                 "query": [
                     "type": "string",
-                    "description": "搜索关键词，尽量具体，包含主体与年份（如「2026 年 餐饮加盟 政策」）",
+                    "description": "具体搜索关键词：主体全名 + 要查的字段 + 年份（如「小米18 Pro 参数 屏幕 电池 影像」）",
                 ],
             ],
             "required": ["query"],
