@@ -56,15 +56,15 @@ enum BackupService {
         /// 容错解码：以后新增字段时，老备份依然能读进来
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            version = (try? c.decode(Int.self, forKey: .version)) ?? 1
-            exportedAt = (try? c.decode(Date.self, forKey: .exportedAt)) ?? Date()
-            conversations = (try? c.decode([ConversationDTO].self, forKey: .conversations)) ?? []
-            memories = (try? c.decode([MemoryDTO].self, forKey: .memories)) ?? []
-            files = (try? c.decode([FileDTO].self, forKey: .files)) ?? []
+            version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+            exportedAt = try c.decodeIfPresent(Date.self, forKey: .exportedAt) ?? Date()
+            conversations = try c.decodeIfPresent([ConversationDTO].self, forKey: .conversations) ?? []
+            memories = try c.decodeIfPresent([MemoryDTO].self, forKey: .memories) ?? []
+            files = try c.decodeIfPresent([FileDTO].self, forKey: .files) ?? []
             identity = try? c.decodeIfPresent(UserIdentity.self, forKey: .identity)
             chatKey = try? c.decodeIfPresent(String.self, forKey: .chatKey)
             imageKey = try? c.decodeIfPresent(String.self, forKey: .imageKey)
-            settings = (try? c.decode(SettingsDTO.self, forKey: .settings)) ?? SettingsDTO()
+            settings = try c.decodeIfPresent(SettingsDTO.self, forKey: .settings) ?? SettingsDTO()
         }
     }
 
@@ -106,6 +106,7 @@ enum BackupService {
         var content: String
         var createdAt: Date
         var hitCount: Int
+        var source: String? = nil
     }
 
     struct SettingsDTO: Codable, Sendable {
@@ -128,15 +129,15 @@ enum BackupService {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             chatProvider = try? c.decodeIfPresent(String.self, forKey: .chatProvider)
             imageProvider = try? c.decodeIfPresent(String.self, forKey: .imageProvider)
-            chatModelOverride = (try? c.decode(String.self, forKey: .chatModelOverride)) ?? ""
-            imageModelOverride = (try? c.decode(String.self, forKey: .imageModelOverride)) ?? ""
-            budgetLimit = (try? c.decode(Double.self, forKey: .budgetLimit)) ?? 0
-            budgetSpent = (try? c.decode(Double.self, forKey: .budgetSpent)) ?? 0
-            searchEngine = (try? c.decode(String.self, forKey: .searchEngine)) ?? WebSearchEngine.auto.rawValue
-            tavilyKey = (try? c.decode(String.self, forKey: .tavilyKey)) ?? ""
-            bochaKey = (try? c.decode(String.self, forKey: .bochaKey)) ?? ""
-            preferProviderSearch = (try? c.decode(Bool.self, forKey: .preferProviderSearch)) ?? false
-            searchPageFetch = (try? c.decode(Int.self, forKey: .searchPageFetch)) ?? 2
+            chatModelOverride = try c.decodeIfPresent(String.self, forKey: .chatModelOverride) ?? ""
+            imageModelOverride = try c.decodeIfPresent(String.self, forKey: .imageModelOverride) ?? ""
+            budgetLimit = try c.decodeIfPresent(Double.self, forKey: .budgetLimit) ?? 0
+            budgetSpent = try c.decodeIfPresent(Double.self, forKey: .budgetSpent) ?? 0
+            searchEngine = try c.decodeIfPresent(String.self, forKey: .searchEngine) ?? WebSearchEngine.auto.rawValue
+            tavilyKey = try c.decodeIfPresent(String.self, forKey: .tavilyKey) ?? ""
+            bochaKey = try c.decodeIfPresent(String.self, forKey: .bochaKey) ?? ""
+            preferProviderSearch = try c.decodeIfPresent(Bool.self, forKey: .preferProviderSearch) ?? false
+            searchPageFetch = try c.decodeIfPresent(Int.self, forKey: .searchPageFetch) ?? 2
         }
     }
 
@@ -177,21 +178,22 @@ enum BackupService {
     static func export(password: String, context: ModelContext) async throws -> URL {
         guard !password.isEmpty else { throw BackupError.emptyPassword }
 
-        let conversations = ((try? context.fetch(FetchDescriptor<Conversation>())) ?? [])
+        let conversations = (try context.fetch(FetchDescriptor<Conversation>()))
             .sorted { $0.createdAt < $1.createdAt }
-        let storedFiles = ((try? context.fetch(FetchDescriptor<StoredFile>())) ?? [])
+        let storedFiles = (try context.fetch(FetchDescriptor<StoredFile>()))
             .sorted { $0.createdAt < $1.createdAt }
-        let memories = ((try? context.fetch(FetchDescriptor<MemoryItem>())) ?? [])
+        let memories = (try context.fetch(FetchDescriptor<MemoryItem>()))
             .sorted { $0.createdAt < $1.createdAt }
 
         guard !conversations.isEmpty || !storedFiles.isEmpty || !memories.isEmpty else {
             throw BackupError.nothingToExport
         }
 
-        // 主线程：只做对象到 DTO 的搬运（快）
+        // SwiftData对象快照仍在主线程；大库和图片读取的耗时必须实测。
         var manifest = Manifest()
         manifest.exportedAt = Date()
         var blobs: [(String, Data)] = []
+        var diskFiles: [(String, URL)] = []
 
         for conv in conversations {
             var dto = ConversationDTO(id: conv.id, expertId: conv.expertId, title: conv.title,
@@ -200,6 +202,7 @@ enum BackupService {
                 var entry: String?
                 if let image = msg.imageData {
                     let name = "images/\(msg.id.uuidString).bin"
+                    guard image.count <= 32 * 1024 * 1024, blobs.reduce(0, { $0 + $1.1.count }) + image.count <= 120 * 1024 * 1024 else { throw BackupError.corruptArchive("图片或归档超过容量上限") }
                     blobs.append((name, image))
                     entry = name
                 }
@@ -213,11 +216,10 @@ enum BackupService {
 
         for file in storedFiles {
             var entry: String?
-            if let data = try? Data(contentsOf: FileStore.url(for: file)) {
-                let name = "files/\(file.storedName)"
-                blobs.append((name, data))
-                entry = name
-            }
+            guard StorageBoundary.isSafeLeaf(file.storedName) else { throw BackupError.corruptArchive("本地文件名不安全") }
+            let name = "files/" + file.storedName
+            diskFiles.append((name, FileStore.url(for: file)))
+            entry = name
             manifest.files.append(FileDTO(id: file.id, name: file.name, ext: file.ext,
                                           kindRaw: file.kindRaw, categoryRaw: file.categoryRaw,
                                           storedName: file.storedName, byteCount: file.byteCount,
@@ -230,7 +232,7 @@ enum BackupService {
 
         for memory in memories {
             manifest.memories.append(MemoryDTO(id: memory.id, content: memory.content,
-                                               createdAt: memory.createdAt, hitCount: memory.hitCount))
+                                               createdAt: memory.createdAt, hitCount: memory.hitCount, source: memory.source))
         }
 
         manifest.identity = UserIdentity.load()
@@ -242,11 +244,20 @@ enum BackupService {
 
         // 后台线程：打包 + 加密（PBKDF2 与压缩都在这里，避免卡界面）
         let payload = try await Task.detached(priority: .userInitiated) {
-            try assemble(manifest: manifest, blobs: blobs, password: password)
+            var allBlobs = blobs
+            var total = blobs.reduce(0) { $0 + $1.1.count }
+            for (name, url) in diskFiles {
+                let data = try Data(contentsOf: url)
+                guard data.count <= 32 * 1024 * 1024 else { throw BackupError.corruptArchive("单文件超过32MB") }
+                total += data.count
+                guard total <= 120 * 1024 * 1024 else { throw BackupError.corruptArchive("备份超过120MB") }
+                allBlobs.append((name, data))
+            }
+            return try assemble(manifest: manifest, blobs: allBlobs, password: password)
         }.value
 
         let dir = exportsDirectory()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmm"
         let url = dir.appendingPathComponent("BossAI备份-\(formatter.string(from: Date())).\(fileExtension)")
@@ -270,11 +281,8 @@ enum BackupService {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let json = try encoder.encode(manifest)
-        if let compressed = deflate(json) {
-            zip.add("manifest.json.z", compressed)
-        } else {
-            zip.add("manifest.json", json)
-        }
+        guard json.count <= 32 * 1024 * 1024, blobs.reduce(json.count, { $0 + $1.1.count }) <= 120 * 1024 * 1024 else { throw BackupError.corruptArchive("备份超过120MB上限，请分批清理资料") }
+        zip.add("manifest.json", json)
         return try encrypt(zip.finalize(), password: password)
     }
 
@@ -299,9 +307,9 @@ enum BackupService {
     /// 导入选项：控制身份 / Key / 设置是否被备份覆盖。
     /// 默认全 true 保持旧行为，UI 层可让用户单独选择，避免"合并导入却静默覆盖本地配置"。
     struct ImportOptions {
-        var overwriteIdentity: Bool = true
-        var overwriteKeys: Bool = true
-        var overwriteSettings: Bool = true
+        var overwriteIdentity: Bool = false
+        var overwriteKeys: Bool = false
+        var overwriteSettings: Bool = false
     }
 
     /// 从备份文件恢复；同 ID 跳过，不覆盖本地已有数据。
@@ -314,7 +322,8 @@ enum BackupService {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let encrypted = try? Data(contentsOf: url) else {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 128 * 1024 * 1024,
+              let encrypted = try? Data(contentsOf: url) else {
             throw BackupError.notBackupFile
         }
 
@@ -329,80 +338,81 @@ enum BackupService {
         let reader = ZipReader(data: payload.archive)
         let names = reader.entryNames()
 
-        let existingConversations = Set(((try? context.fetch(FetchDescriptor<Conversation>())) ?? []).map(\.id))
-        let existingFiles = Set(((try? context.fetch(FetchDescriptor<StoredFile>())) ?? []).map(\.id))
-        let existingMemoryTexts = Set(((try? context.fetch(FetchDescriptor<MemoryItem>())) ?? []).map(\.content))
-
-        var summary = ImportSummary()
-        summary.exportedAt = manifest.exportedAt
-
-        // 1) 对话与消息
+        guard manifest.version == 1 else { throw BackupError.corruptArchive("不支持的备份版本") }
+        // Preflight every referenced blob before touching the live database.
+        var staged: [UUID: Data] = [:]; var stagedImages: [String: Data] = [:]
+        var fileIDs = Set<UUID>(); var conversationIDs = Set<UUID>(); var messageIDs = Set<UUID>()
+        for file in manifest.files {
+            guard fileIDs.insert(file.id).inserted, StorageBoundary.isSafeLeaf(file.storedName),
+                  let entry = file.entry, entry == "files/" + file.storedName, names.contains(entry) else {
+                throw BackupError.corruptArchive("文件名称不安全、重复或缺少正文")
+            }
+            let data = try reader.data(for: entry)
+            guard data.count == file.byteCount else { throw BackupError.corruptArchive("文件大小不一致") }
+            staged[file.id] = data
+        }
         for dto in manifest.conversations {
-            if existingConversations.contains(dto.id) {
-                summary.skippedExisting += 1
-                continue
-            }
-            let conv = Conversation(expertId: dto.expertId, title: dto.title)
-            conv.id = dto.id
-            conv.createdAt = dto.createdAt
-            conv.updatedAt = dto.updatedAt
-            context.insert(conv)
-            for m in dto.messages {
-                let msg = Message(role: m.role, text: m.text)
-                msg.id = m.id
-                msg.createdAt = m.createdAt
-                msg.attachmentIds = m.attachmentIds
-                if let entry = m.imageEntry, names.contains(entry) {
-                    msg.imageData = try? reader.data(for: entry)
-                }
-                msg.conversation = conv
-                context.insert(msg)
-                summary.messages += 1
-            }
-            summary.conversations += 1
-        }
-
-        // 2) 资料库文件（写回沙盒）
-        FileStore.prepare()
-        for dto in manifest.files {
-            if existingFiles.contains(dto.id) {
-                summary.skippedExisting += 1
-                continue
-            }
-            let record = StoredFile(name: dto.name, ext: dto.ext, storedName: dto.storedName,
-                                    kind: FileKind(rawValue: dto.kindRaw) ?? .uploaded,
-                                    category: FileCategory(rawValue: dto.categoryRaw) ?? .other,
-                                    byteCount: dto.byteCount,
-                                    sourceConversationId: dto.sourceConversationId,
-                                    textContent: dto.textContent)
-            record.id = dto.id
-            record.createdAt = dto.createdAt
-            record.isFavorite = dto.isFavorite
-            if let entry = dto.entry, names.contains(entry),
-               let data = try? reader.data(for: entry) {
-                let dest = FileStore.rootURL.appendingPathComponent(dto.storedName)
-                if !FileManager.default.fileExists(atPath: dest.path) {
-                    try? data.write(to: dest, options: .atomic)
+            guard conversationIDs.insert(dto.id).inserted else { throw BackupError.corruptArchive("重复会话ID") }
+            for message in dto.messages {
+                guard messageIDs.insert(message.id).inserted, ["user", "assistant"].contains(message.role) else { throw BackupError.corruptArchive("重复消息或非法角色") }
+                if let entry = message.imageEntry {
+                    guard entry == "images/" + message.id.uuidString + ".bin", names.contains(entry) else { throw BackupError.corruptArchive("图片缺失") }
+                    stagedImages[entry] = try reader.data(for: entry)
                 }
             }
-            context.insert(record)
-            summary.files += 1
         }
-
-        // 3) 长期记忆（按内容去重）
-        for dto in manifest.memories {
-            if existingMemoryTexts.contains(dto.content) {
-                summary.skippedExisting += 1
-                continue
+        let transactionContext = ModelContext(context.container)
+        let existing = try transactionContext.fetch(FetchDescriptor<Conversation>())
+        let existingFiles = Set((try transactionContext.fetch(FetchDescriptor<StoredFile>())).map(\.id))
+        var existingMemoryTexts = Set((try transactionContext.fetch(FetchDescriptor<MemoryItem>())).map(\.content))
+        var conversationsByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        var knownMessageIDs = Set(existing.flatMap { $0.messages }.map(\.id))
+        var summary = ImportSummary(); summary.exportedAt = manifest.exportedAt
+        var createdPaths: [URL] = []
+        do {
+            for dto in manifest.conversations {
+                let conv: Conversation
+                if let current = conversationsByID[dto.id] { conv = current; summary.skippedExisting += 1 }
+                else {
+                    conv = Conversation(expertId: dto.expertId, title: dto.title)
+                    conv.id = dto.id; conv.createdAt = dto.createdAt; conv.updatedAt = dto.updatedAt
+                    transactionContext.insert(conv); conversationsByID[dto.id] = conv; summary.conversations += 1
+                }
+                for m in dto.messages where knownMessageIDs.insert(m.id).inserted {
+                    let message = Message(role: m.role, text: m.text)
+                    message.id = m.id; message.createdAt = m.createdAt; message.attachmentIds = m.attachmentIds
+                    if let entry = m.imageEntry { message.imageData = stagedImages[entry] }
+                    message.conversation = conv; transactionContext.insert(message); summary.messages += 1
+                    conv.updatedAt = max(conv.updatedAt, m.createdAt)
+                }
             }
-            let item = MemoryItem(content: dto.content)
-            item.createdAt = dto.createdAt
-            item.hitCount = dto.hitCount
-            context.insert(item)
-            summary.memories += 1
+            FileStore.prepare()
+            for dto in manifest.files {
+                if existingFiles.contains(dto.id) { summary.skippedExisting += 1; continue }
+                // New local name avoids collisions with a different existing record.
+                let localName = UUID().uuidString + "." + (dto.ext.filter { $0.isLetter || $0.isNumber }.isEmpty ? "dat" : dto.ext.filter { $0.isLetter || $0.isNumber })
+                let destination = FileStore.rootURL.appendingPathComponent(localName)
+                guard let bytes = staged[dto.id] else { throw BackupError.corruptArchive("文件正文未暂存") }
+                try bytes.write(to: destination, options: .atomic); createdPaths.append(destination)
+                let record = StoredFile(name: dto.name, ext: dto.ext, storedName: localName,
+                                        kind: FileKind(rawValue: dto.kindRaw) ?? .uploaded,
+                                        category: FileCategory(rawValue: dto.categoryRaw) ?? .other,
+                                        byteCount: bytes.count, sourceConversationId: dto.sourceConversationId, textContent: dto.textContent)
+                record.id = dto.id; record.createdAt = dto.createdAt; record.isFavorite = dto.isFavorite
+                transactionContext.insert(record); summary.files += 1
+            }
+            for dto in manifest.memories where existingMemoryTexts.insert(dto.content).inserted {
+                let item = MemoryItem(content: dto.content, source: dto.source ?? "")
+                item.id = dto.id; item.createdAt = dto.createdAt; item.hitCount = dto.hitCount
+                transactionContext.insert(item); summary.memories += 1
+            }
+            try transactionContext.save()
+        } catch {
+            transactionContext.rollback()
+            for path in createdPaths { try? FileManager.default.removeItem(at: path) }
+            throw error
         }
-
-        try? context.save()
+        NotificationCenter.default.post(name: .bossAIFilesChanged, object: nil)
 
         // 4) 身份（D03：由 options 控制是否覆盖）
         if options.overwriteIdentity, let identity = manifest.identity, !identity.isEmpty {
@@ -413,11 +423,11 @@ enum BackupService {
         // 5) API Key（D03：由 options 控制是否覆盖）
         if options.overwriteKeys {
             if let chat = manifest.chatKey, !chat.isEmpty {
-                KeychainHelper.save(chat, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
+                guard KeychainHelper.save(chat, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount) else { throw BackupError.corruptArchive("数据已导入，但对话Key写入失败；原Key保留") }
                 summary.keysRestored = true
             }
             if let image = manifest.imageKey, !image.isEmpty {
-                KeychainHelper.save(image, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+                guard KeychainHelper.save(image, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount) else { throw BackupError.corruptArchive("数据已导入，但作图Key写入失败；原Key保留") }
                 summary.keysRestored = true
             }
         }
@@ -457,7 +467,7 @@ enum BackupService {
         ProviderCatalog.saveChatModelOverride(s.chatModelOverride)
         ProviderCatalog.saveImageModelOverride(s.imageModelOverride)
         BudgetTracker.setLimit(s.budgetLimit)
-        if s.budgetSpent > 0 { BudgetTracker.restoreSpent(s.budgetSpent) }
+        if s.budgetSpent >= 0 && s.budgetSpent.isFinite { BudgetTracker.restoreSpent(s.budgetSpent) }
         WebSearchService.engine = WebSearchEngine(rawValue: s.searchEngine) ?? .auto
         WebSearchService.tavilyKey = s.tavilyKey
         WebSearchService.bochaKey = s.bochaKey
@@ -469,10 +479,11 @@ enum BackupService {
 
     nonisolated static func encrypt(_ plain: Data, password: String) throws -> Data {
         var salt = Data(count: saltLength)
-        _ = salt.withUnsafeMutableBytes { buffer in
+        let randomStatus = salt.withUnsafeMutableBytes { buffer in
             SecRandomCopyBytes(kSecRandomDefault, saltLength, buffer.baseAddress!)
         }
-        let key = deriveKey(password: password, salt: salt)
+        guard randomStatus == errSecSuccess else { throw BackupError.corruptArchive("随机盐生成失败") }
+        let key = try deriveKey(password: password, salt: salt)
         let sealed = try AES.GCM.seal(plain, using: key)
         guard let combined = sealed.combined else { throw BackupError.corruptArchive("加密失败") }
         var out = Data(magic.utf8)
@@ -488,7 +499,7 @@ enum BackupService {
         }
         let salt = encrypted.subdata(in: 8..<(8 + saltLength))
         let combined = encrypted.subdata(in: (8 + saltLength)..<encrypted.count)
-        let key = deriveKey(password: password, salt: salt)
+        let key = try deriveKey(password: password, salt: salt)
         do {
             let box = try AES.GCM.SealedBox(combined: combined)
             return try AES.GCM.open(box, using: key)
@@ -497,7 +508,7 @@ enum BackupService {
         }
     }
 
-    nonisolated private static func deriveKey(password: String, salt: Data) -> SymmetricKey {
+    nonisolated private static func deriveKey(password: String, salt: Data) throws -> SymmetricKey {
         let passwordData = Data(password.utf8)
         var derived = Data(count: keyLength)
         let status = derived.withUnsafeMutableBytes { derivedBytes -> Int32 in
@@ -515,7 +526,7 @@ enum BackupService {
             }
         }
         if status != kCCSuccess {
-            return SymmetricKey(data: SHA256.hash(data: salt + passwordData))
+            throw BackupError.corruptArchive("密码派生失败，已停止处理")
         }
         return SymmetricKey(data: derived)
     }
@@ -539,14 +550,6 @@ enum BackupService {
 
     /// 解压时逐级放大缓冲区，直到不再顶满
     nonisolated private static func inflate(_ data: Data) -> Data? {
-        var capacity = max(data.count * 8, 1 << 20)
-        for _ in 0..<7 {
-            if let result = ZipReader.inflateRaw(data, expectedSize: capacity),
-               result.count < capacity {
-                return result
-            }
-            capacity *= 4
-        }
-        return ZipReader.inflateRaw(data, expectedSize: capacity)
+        ZipReader.inflateManifest(data)
     }
 }
