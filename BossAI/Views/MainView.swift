@@ -50,11 +50,14 @@ struct MainView: View {
             ensureProvidersDetected()
         }
         .sheet(isPresented: $showNewChat) {
-            NewChatSheet { conversation in
-                showLibrary = false
-                selectedConversationId = conversation.id
-                containerKey = "conv-\(conversation.id.uuidString)"
-            }
+            NewChatSheet(
+                onSelectExpert: { expert in openExpert(expert) },
+                onOpenConversation: { conversation in
+                    showLibrary = false
+                    selectedConversationId = conversation.id
+                    containerKey = "conv-\(conversation.id.uuidString)"
+                }
+            )
         }
         .sheet(isPresented: $showPinEntry) {
             HiddenPinGate {
@@ -437,7 +440,8 @@ struct WelcomeView: View {
         VStack(spacing: 18) {
             ZStack {
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(LinearGradient(colors: [Color.accentColor, Color.accentColor.opacity(0.65)],
+                    .fill(LinearGradient(colors: [ThemeStore.current.accent,
+                                                  ThemeStore.current.accentSecondary],
                                          startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 88, height: 88)
                 Text("B")
@@ -467,10 +471,12 @@ struct WelcomeView: View {
 
 struct NewChatSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
 
-    var onCreated: (Conversation) -> Void
+    /// 选一位顾问新建对话：走草稿态（发第一条消息才落库），不在这里建空会话
+    var onSelectExpert: (Expert) -> Void
+    /// 继续最近的对话：打开已有会话
+    var onOpenConversation: (Conversation) -> Void
 
     private let columns = [GridItem(.adaptive(minimum: 200), spacing: 12)]
 
@@ -534,7 +540,7 @@ struct NewChatSheet: View {
                             ForEach(conversations.prefix(6), id: \.id) { conv in
                                 Button {
                                     dismiss()
-                                    onCreated(conv)
+                                    onOpenConversation(conv)
                                 } label: {
                                     HStack {
                                         Image(systemName: conv.expert.symbol)
@@ -573,11 +579,10 @@ struct NewChatSheet: View {
     }
 
     private func create(expert: Expert) {
-        let conv = Conversation(expertId: expert.id, title: expert.name)
-        modelContext.insert(conv)
-        try? modelContext.save()
+        // 不再在这里 insert 空会话 —— 交给 MainView.openExpert 走草稿态，
+        // 发第一条消息时才由 ChatViewModel.ensureConversation() 落库，杜绝空对话
         dismiss()
-        onCreated(conv)
+        onSelectExpert(expert)
     }
 }
 
