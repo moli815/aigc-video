@@ -1,0 +1,54 @@
+{
+  "scope": "Windows/Python真实网络探测；仅验证端点与返回标记，不是Swift搜索执行、新闻事实校验或iPad性能",
+  "query": "苹果 官方 新闻 2026 最新 after:2026-09-06",
+  "samples_per_source": 1,
+  "request_timeout_s": 8,
+  "body_limit_bytes": 2097152,
+  "results": [
+    {
+      "engine": "sogou",
+      "url": "https://www.sogou.com/web?query=%E8%8B%B9%E6%9E%9C%20%E5%AE%98%E6%96%B9%20%E6%96%B0%E9%97%BB%202026%20%E6%9C%80%E6%96%B0%20after%3A2026-09-06",
+      "http_status": 200,
+      "bytes": 5667,
+      "bounded_body": true,
+      "double_quoted_anchor_count": 9,
+      "possible_verification_page": true,
+      "status": "响应已读取",
+      "total_s": 0.4703243999974802
+    },
+    {
+      "engine": "so360",
+      "url": "https://www.so.com/s?q=%E8%8B%B9%E6%9E%9C%20%E5%AE%98%E6%96%B9%20%E6%96%B0%E9%97%BB%202026%20%E6%9C%80%E6%96%B0%20after%3A2026-09-06",
+      "http_status": 200,
+      "bytes": 384320,
+      "bounded_body": true,
+      "double_quoted_anchor_count": 277,
+      "possible_verification_page": false,
+      "status": "响应已读取",
+      "total_s": 1.7186080000246875
+    },
+    {
+      "engine": "baidu",
+      "url": "https://www.baidu.com/s?wd=%E8%8B%B9%E6%9E%9C%20%E5%AE%98%E6%96%B9%20%E6%96%B0%E9%97%BB%202026%20%E6%9C%80%E6%96%B0%20after%3A2026-09-06&rn=10",
+      "http_status": 200,
+      "bytes": 1488,
+      "bounded_body": true,
+      "double_quoted_anchor_count": 0,
+      "possible_verification_page": true,
+      "status": "响应已读取",
+      "total_s": 0.2878266999614425
+    },
+    {
+      "engine": "bing-rss",
+      "url": "https://www.bing.com/search?q=%E8%8B%B9%E6%9E%9C%20%E5%AE%98%E6%96%B9%20%E6%96%B0%E9%97%BB%202026%20%E6%9C%80%E6%96%B0%20after%3A2026-09-06&format=rss&count=10&mkt=zh-CN",
+      "http_status": 200,
+      "bytes": 7258,
+      "bounded_body": true,
+      "rss_item_count": 10,
+      "published_date_tags": 10,
+      "status": "响应已读取",
+      "total_s": 0.8693829000112601
+    }
+  ],
+  "limitations": "网络、地域与时段依赖；不据此承诺搜索覆盖率或低延迟"
+}
