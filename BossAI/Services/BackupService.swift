@@ -296,11 +296,21 @@ enum BackupService {
 
     // MARK: - 导入
 
-    /// 从备份文件恢复；同 ID 跳过，不覆盖本地已有数据
+    /// 导入选项：控制身份 / Key / 设置是否被备份覆盖。
+    /// 默认全 true 保持旧行为，UI 层可让用户单独选择，避免"合并导入却静默覆盖本地配置"。
+    struct ImportOptions {
+        var overwriteIdentity: Bool = true
+        var overwriteKeys: Bool = true
+        var overwriteSettings: Bool = true
+    }
+
+    /// 从备份文件恢复；同 ID 跳过，不覆盖本地已有数据。
+    /// 身份 / Key / 设置是否覆盖由 options 控制（默认覆盖，兼容旧行为）。
     @MainActor
     static func importBackup(from url: URL,
                              password: String,
-                             context: ModelContext) async throws -> ImportSummary {
+                             context: ModelContext,
+                             options: ImportOptions = ImportOptions()) async throws -> ImportSummary {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
@@ -394,24 +404,28 @@ enum BackupService {
 
         try? context.save()
 
-        // 4) 身份
-        if let identity = manifest.identity, !identity.isEmpty {
+        // 4) 身份（D03：由 options 控制是否覆盖）
+        if options.overwriteIdentity, let identity = manifest.identity, !identity.isEmpty {
             identity.save()
             summary.identityRestored = true
         }
 
-        // 5) API Key
-        if let chat = manifest.chatKey, !chat.isEmpty {
-            KeychainHelper.save(chat, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
-            summary.keysRestored = true
-        }
-        if let image = manifest.imageKey, !image.isEmpty {
-            KeychainHelper.save(image, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
-            summary.keysRestored = true
+        // 5) API Key（D03：由 options 控制是否覆盖）
+        if options.overwriteKeys {
+            if let chat = manifest.chatKey, !chat.isEmpty {
+                KeychainHelper.save(chat, service: AppConfig.keychainService, account: AppConfig.chatKeyAccount)
+                summary.keysRestored = true
+            }
+            if let image = manifest.imageKey, !image.isEmpty {
+                KeychainHelper.save(image, service: AppConfig.keychainService, account: AppConfig.imageKeyAccount)
+                summary.keysRestored = true
+            }
         }
 
-        // 6) 设置
-        applySettings(manifest.settings)
+        // 6) 设置（D03：由 options 控制是否覆盖）
+        if options.overwriteSettings {
+            applySettings(manifest.settings)
+        }
 
         NotificationCenter.default.post(name: .bossAIKeysChanged, object: nil)
         return summary
