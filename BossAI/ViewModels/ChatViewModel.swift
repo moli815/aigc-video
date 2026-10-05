@@ -7,8 +7,9 @@ private struct SearchOutcome: Sendable {
     /// 在本轮工具调用中的顺序，回填时按此排序
     let order: Int
     let callId: String
-    let content: String
-    let sources: [String]
+    let hits: [SearchHit]
+    let pages: [(title: String, url: String, text: String)]
+    let emptyMessage: String?
 }
 
 /// 单个会话的对话逻辑：
@@ -44,8 +45,9 @@ final class ChatViewModel: ObservableObject {
 
     private var fileCache: [UUID: StoredFile] = [:]
     private var fileCacheLoaded = false
+    private var filesObserver: NSObjectProtocol?
     /// 本轮联网搜索命中的来源链接，去重后作为「信息来源」附在回答末尾
-    private var searchSources: [String] = []
+    private var citations = CitationRegistry()
 
     init(conversation: Conversation?,
          expert: Expert,
@@ -57,32 +59,43 @@ final class ChatViewModel: ObservableObject {
         self.modelContext = modelContext
         self.chatKey = chatKey
         self.imageKey = imageKey
+        filesObserver = NotificationCenter.default.addObserver(forName: .bossAIFilesChanged, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.invalidateFileCache() }
+        }
     }
 
+    private var orderedMessageCache: [Message] = []
+    private var orderedMessageCount = -1
     var sortedMessages: [Message] {
-        (conversation?.messages ?? []).sorted { $0.createdAt < $1.createdAt }
+        let messages = conversation?.messages ?? []
+        if orderedMessageCount != messages.count {
+            orderedMessageCache = messages.sorted { $0.createdAt < $1.createdAt }
+            orderedMessageCount = messages.count
+        }
+        return orderedMessageCache
     }
 
     // MARK: - 附件
 
     /// 从文件选择器导入（支持多选、多种类型）
     func attach(urls: [URL]) {
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty, !isImporting else { return }
         isImporting = true
         Task {
             var added: [StoredFile] = []
             for url in urls {
                 let (data, text) = await FileImportService.load(url: url)
-                guard !data.isEmpty else { continue }
+                guard !data.isEmpty else { errorMessage = "文件读取失败或超过32MB：" + url.lastPathComponent; continue }
                 let name = url.lastPathComponent
-                if let record = try? FileStore.store(data: data,
+                do {
+                let record = try FileStore.store(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
                                                      sourceConversationId: conversation?.id.uuidString ?? "",
                                                      textContent: text,
-                                                     context: modelContext) {
+                                                     context: modelContext)
                     added.append(record)
-                }
+                } catch { errorMessage = "附件保存失败：" + error.localizedDescription }
             }
             pendingAttachments.append(contentsOf: added)
             invalidateFileCache()
@@ -92,7 +105,7 @@ final class ChatViewModel: ObservableObject {
 
     /// 从相册或相机导入图片
     func attach(images: [UIImage]) {
-        guard !images.isEmpty else { return }
+        guard !images.isEmpty, !isImporting else { return }
         isImporting = true
         Task {
             var added: [StoredFile] = []
@@ -100,14 +113,15 @@ final class ChatViewModel: ObservableObject {
                 guard let data = image.ocrFriendlyJPEG() else { continue }
                 let name = "照片_\(Self.timestamp())_\(index + 1).jpg"
                 let text = await FileImportService.ocr(imageData: data)
-                if let record = try? FileStore.store(data: data,
+                do {
+                let record = try FileStore.store(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
                                                      sourceConversationId: conversation?.id.uuidString ?? "",
                                                      textContent: text,
-                                                     context: modelContext) {
+                                                     context: modelContext)
                     added.append(record)
-                }
+                } catch { errorMessage = "附件保存失败：" + error.localizedDescription }
             }
             pendingAttachments.append(contentsOf: added)
             invalidateFileCache()
@@ -153,11 +167,11 @@ final class ChatViewModel: ObservableObject {
 
     /// 草稿态 -> 真正会话；已有会话直接返回
     @discardableResult
-    private func ensureConversation() -> Conversation {
+    private func ensureConversation() throws -> Conversation {
         if let conversation { return conversation }
         let created = Conversation(expertId: expert.id, title: expert.name)
         modelContext.insert(created)
-        try? modelContext.save()
+        do { try modelContext.save() } catch { modelContext.delete(created); throw error }
         conversation = created
         onConversationCreated?(created)
         return created
@@ -171,13 +185,14 @@ final class ChatViewModel: ObservableObject {
         }
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = pendingAttachments
-        guard (!text.isEmpty || !attachments.isEmpty), !isStreaming else { return }
+        guard (!text.isEmpty || !attachments.isEmpty), !isStreaming, !isImporting else { return }
 
-        inputText = ""
         errorMessage = nil
 
         // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
-        let conv = ensureConversation()
+        let conv: Conversation
+        do { conv = try ensureConversation() } catch { errorMessage = "会话保存失败：" + error.localizedDescription; return }
+        inputText = ""
         // 注意：必须先判断，再插入消息（插入后 messages 里就有本条了）
         let isFirstUserMessage = conv.messages.filter { $0.role == "user" }.isEmpty
 
@@ -223,9 +238,11 @@ final class ChatViewModel: ObservableObject {
 
     deinit {
         streamTask?.cancel()
+        if let filesObserver { NotificationCenter.default.removeObserver(filesObserver) }
     }
 
     func clearConversation() {
+        orderedMessageCount = -1
         for m in conversation?.messages ?? [] { modelContext.delete(m) }
         try? modelContext.save()
     }
@@ -242,7 +259,15 @@ final class ChatViewModel: ObservableObject {
             streamTask = nil
         }
 
-        searchSources = []
+        let turnSpan = PerformanceTrace.begin("ChatTurn")
+        defer { PerformanceTrace.end("ChatTurn", turnSpan) }
+        guard let capability = try? ExpertCapabilityCatalog.profile(expert.id) else {
+            errorMessage = "专家技能配置未加载，无法执行工具。"
+            modelContext.delete(assistantMessage)
+            try? modelContext.save()
+            return
+        }
+        citations = CitationRegistry()
         var apiMessages = buildAPIMessages()
         var lastGeneratedImage: Data? = conv.messages
             .filter { $0.imageData != nil }
@@ -250,42 +275,64 @@ final class ChatViewModel: ObservableObject {
             .last?.imageData
 
         // B01：服务端返回的真实 token 数（拿不到就回退估算）
-        var realPromptTokens = 0
-        var realCompletionTokens = 0
+        var requestPromptTokens = 0
+        var requestCompletionTokens = 0
+        var requestPromptEstimate = 0
+        var accounted = true
 
+        var fullText = ""
+        var assistantText = ""
+        var currentTextCommitted = true
         do {
             var iteration = 0
-            var fullText = ""
+            var executedToolIDs = Set<String>()
+            var exhausted = true
             loop: while iteration < AppConfig.maxToolIterations {
                 iteration += 1
                 var pendingToolCalls: [ChatService.ToolCall] = []
-                var assistantText = ""
+                assistantText = ""
+                currentTextCommitted = false
+                requestPromptTokens = 0
+                requestCompletionTokens = 0
+                requestPromptEstimate = BudgetTracker.estimateTokens(String(describing: apiMessages))
+                accounted = false
+                var lastPublishTime = ProcessInfo.processInfo.systemUptime
 
-                for try await event in chatService.stream(messages: apiMessages, enableTools: true) {
+                for try await event in chatService.stream(messages: apiMessages, enableTools: true, expertID: expert.id) {
                     if Task.isCancelled { break }
                     switch event {
                     case .textDelta(let delta):
                         assistantText += delta
-                        // 只更新内存中的流式文本，不写库、不触发整个列表重绘
-                        streamingText = fullText + assistantText
+                        // 合并发布内存缓冲，不逐delta写库；实际视图重算范围需Instruments确认。
+                        let now = ProcessInfo.processInfo.systemUptime
+                        if streamingText.isEmpty || now - lastPublishTime >= 0.08 {
+                            streamingText = fullText + assistantText
+                            lastPublishTime = now
+                        }
                     case .status(let s):
                         statusText = s
                     case .toolCalls(let calls, let text):
                         pendingToolCalls = calls
                         assistantText = text
                     case .usage(let p, let c):
-                        realPromptTokens = p
-                        realCompletionTokens = c
+                        requestPromptTokens = p
+                        requestCompletionTokens = c
                     case .finished:
                         break
                     }
                 }
 
                 fullText += assistantText
+                currentTextCommitted = true
+                BudgetTracker.add(promptTokens: requestPromptTokens > 0 ? requestPromptTokens : requestPromptEstimate,
+                                  completionTokens: requestCompletionTokens > 0 ? requestCompletionTokens : BudgetTracker.estimateTokens(assistantText),
+                                  providerId: ProviderCatalog.currentChat().id)
+                accounted = true
+                streamingText = fullText
                 assistantMessage.text = fullText
 
                 if Task.isCancelled { break loop }
-                if pendingToolCalls.isEmpty { break loop }
+                if pendingToolCalls.isEmpty { exhausted = false; break loop }
 
                 apiMessages.append([
                     "role": "assistant",
@@ -302,12 +349,12 @@ final class ChatViewModel: ObservableObject {
                 // 本轮所有联网搜索并行执行。
                 // 收集类任务（如「6 款旗舰机参数」）会一次发多个 web_search，
                 // 串行等待会让耗时翻倍，模型就会偷懒退化成"只搜一次 + 靠记忆补齐"。
-                let searchOrders = pendingToolCalls.indices.filter { pendingToolCalls[$0].name == "web_search" }
+                let searchOrders = pendingToolCalls.indices.filter { pendingToolCalls[$0].name == "web_search" && capability.allowSearch }
                 var searchOutcomes: [SearchOutcome] = []
                 if !searchOrders.isEmpty {
                     statusText = "正在联网搜索…"
                     searchOutcomes = await withTaskGroup(of: SearchOutcome.self) { group in
-                        for order in searchOrders {
+                        for order in searchOrders.prefix(4) {
                             let call = pendingToolCalls[order]
                             group.addTask { await Self.runWebSearch(call: call, order: order, fallback: userText) }
                         }
@@ -319,7 +366,33 @@ final class ChatViewModel: ObservableObject {
                 var searchCursor = 0
 
                 for call in pendingToolCalls {
+                    try Task.checkCancellation()
+                    guard executedToolIDs.insert(call.id).inserted else {
+                        apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "重复工具ID已拒绝，避免重复扣费或写入文件。"]); continue
+                    }
+                    if BudgetTracker.isExceeded() { throw ExpertSkillError.denied("本月预算已达上限，停止继续请求") }
+                    guard ExpertSkillRuntime.permits(call.name, profile: capability) else {
+                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                            "content": "当前专家禁止该工具：\(call.name)"])
+                        continue
+                    }
                     switch call.name {
+                    case "search_library":
+                        do {
+                            let args = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any]
+                            let result = try ExpertKnowledgeService.toolResult(args?["query"] as? String ?? userText, context: modelContext)
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                        } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": error.localizedDescription]) }
+                    case "expert_skill":
+                        do {
+                            let span = PerformanceTrace.begin("ExpertSkill")
+                            defer { PerformanceTrace.end("ExpertSkill", span) }
+                            let result = try ExpertSkillRuntime.execute(arguments: call.arguments, expertID: expert.id)
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                        } catch {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                "content": error.localizedDescription])
+                        }
                     case "generate_image":
                         statusText = "正在生成图片…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
@@ -350,6 +423,10 @@ final class ChatViewModel: ObservableObject {
                         statusText = "正在生成文件…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let formatRaw = (args?["format"] as? String ?? "word").lowercased()
+                        guard ["word", "docx", "ppt", "pptx", "powerpoint", "slide", "excel", "xlsx", "sheet", "table", "pdf"].contains(formatRaw) else {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "不支持该文档格式；仅支持Word/PPT/Excel/PDF。"])
+                            continue
+                        }
                         let filename = args?["filename"] as? String ?? "文档"
                         let title = (args?["title"] as? String) ?? filename
                         let content = args?["content"] as? String ?? ""
@@ -362,7 +439,15 @@ final class ChatViewModel: ObservableObject {
                             }
                         }()
                         do {
-                            let data = try DocumentBuilder.build(format: format, title: title, content: content)
+                            let validation = try ExpertSkillRuntime.validateDocument(content, format: format.rawValue, profile: capability)
+                            guard validation.structurePassed else {
+                                throw ExpertSkillError.invalidInput("交付结构未通过；缺少：\(validation.missingSections.joined(separator: "、"))；\(validation.warnings.joined(separator: "；"))")
+                            }
+                            let span = PerformanceTrace.begin("DocumentBuild")
+                            let data: Data
+                            do { data = try DocumentBuilder.build(format: format, title: title, content: content) }
+                            catch { PerformanceTrace.end("DocumentBuild", span); throw error }
+                            PerformanceTrace.end("DocumentBuild", span)
                             let safe = DocumentBuilder.safeFilename(filename, fallback: title)
                             let ext = format.ext
                             let finalName = safe.hasSuffix(".\(ext)") ? safe : "\(safe).\(ext)"
@@ -383,7 +468,7 @@ final class ChatViewModel: ObservableObject {
                             ])
                             invalidateFileCache()
                             toast = "已生成 \(finalName)"
-                            BudgetTracker.addDocument(content)   // B01：文档生成计入预算
+                            // Local document packaging has no additional model API fee.
                         } catch {
                             apiMessages.append([
                                 "role": "tool",
@@ -394,15 +479,17 @@ final class ChatViewModel: ObservableObject {
 
                     case "web_search":
                         // 结果已在上面并行取回，这里按调用顺序回填给模型
+                        if searchCursor >= searchOutcomes.count {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "本轮最多并行检索4个主题，请分轮检索剩余主题。"])
+                        }
                         if searchCursor < searchOutcomes.count {
                             let outcome = searchOutcomes[searchCursor]
                             searchCursor += 1
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": outcome.callId,
-                                "content": outcome.content,
+                                "content": outcome.emptyMessage ?? WebSearchService.format(hits: outcome.hits, pages: outcome.pages, sourceIDs: outcome.hits.map { citations.register($0.url) }),
                             ])
-                            searchSources.append(contentsOf: outcome.sources)
                         }
 
                     case "$web_search":
@@ -423,7 +510,16 @@ final class ChatViewModel: ObservableObject {
                     statusText = nil
                 }
             }
+            if exhausted && !Task.isCancelled {
+                errorMessage = "已达到工具执行上限；当前结果尚未完成，请缩小任务范围后继续。"
+            }
         } catch {
+            if !accounted && (!assistantText.isEmpty || requestPromptTokens > 0 || requestCompletionTokens > 0) {
+                BudgetTracker.add(promptTokens: requestPromptTokens > 0 ? requestPromptTokens : requestPromptEstimate,
+                                  completionTokens: requestCompletionTokens > 0 ? requestCompletionTokens : BudgetTracker.estimateTokens(assistantText),
+                                  providerId: ProviderCatalog.currentChat().id)
+            }
+            assistantMessage.text = fullText + (currentTextCommitted ? "" : assistantText)
             let isCancel = error is CancellationError
                 || (error as? URLError)?.code == .cancelled
             if !isCancel {
@@ -447,35 +543,22 @@ final class ChatViewModel: ObservableObject {
         try? modelContext.save()
 
         // 附上信息来源，方便核对。带编号，与回答里的「（来源 N）」对应，可逐条追溯。
-        if !searchSources.isEmpty, !assistantMessage.text.isEmpty {
-            var seen = Set<String>()
-            let unique = searchSources.filter { seen.insert($0).inserted }
-            let list = unique.prefix(8).enumerated()
-                .map { "[\($0.offset + 1)] \($0.element)" }.joined(separator: "\n")
-            let more = unique.count > 8 ? "（仅列出前 8 条）" : ""
-            assistantMessage.text += "\n\n---\n信息来源（联网检索，共 \(unique.count) 条\(more)）：\n\(list)"
+        if !citations.urls.isEmpty, !assistantMessage.text.isEmpty {
+            assistantMessage.text += "\n\n---\n信息来源（编号在整轮对话中保持一致）：\n" + citations.markdown
         }
-        searchSources = []
+        citations = CitationRegistry()
         try? modelContext.save()
-
-        // B01：优先用服务端返回的真实 token 计费，拿不到才回退估算
-        let promptTokens = realPromptTokens > 0
-            ? realPromptTokens
-            : BudgetTracker.estimateTokens(userText + attachments.map(\.textContent).joined())
-        let completionTokens = realCompletionTokens > 0
-            ? realCompletionTokens
-            : BudgetTracker.estimateTokens(sortedMessages.suffix(2).map { $0.text }.joined())
-        BudgetTracker.add(promptTokens: promptTokens, completionTokens: completionTokens,
-                          providerId: ProviderCatalog.currentChat().id)
 
         // R01 修复：抽取计数持久化到 UserDefaults，VM 重建后不归零
         // （旧版 roundsSinceExtraction 是实例属性，切会话重建 VM 就归零，每 3 轮抽取名存实亡）
-        let memoryRoundKey = "bossai.memory_rounds"
+        guard !Task.isCancelled, errorMessage == nil else { return }
+        let memoryRoundKey = "bossai.memory_rounds." + conv.id.uuidString
         var rounds = UserDefaults.standard.integer(forKey: memoryRoundKey) + 1
         if rounds >= 3 {
             UserDefaults.standard.set(0, forKey: memoryRoundKey)
             let recent = sortedMessages.suffix(6)
-                .map { "\($0.role == "user" ? "用户" : "AI"): \($0.text)" }
+                .filter { $0.role == "user" }
+                .map { "用户：\($0.text)" }
                 .joined(separator: "\n")
             let service = memoryService
             let context = modelContext
@@ -494,26 +577,32 @@ final class ChatViewModel: ObservableObject {
     /// 串行抓 3 篇要等 3 个 RTT，模型容易因为"太慢"而减少搜索次数。
     /// nonisolated：必须脱离 MainActor，否则多个搜索会被排到主线程上排队，并行失效
     nonisolated private static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String) async -> SearchOutcome {
+        let span = PerformanceTrace.begin("WebSearch")
+        defer { PerformanceTrace.end("WebSearch", span) }
         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
         let query = (args?["query"] as? String) ?? fallback
-        let hits = await WebSearchService.search(query: query, count: 6)
+        let recency = (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query)
+        let hits = await WebSearchService.search(query: query, count: 6, recency: recency)
 
         if hits.isEmpty {
             return SearchOutcome(
                 order: order,
                 callId: call.id,
-                content: """
+                hits: [], pages: [], emptyMessage: """
                 搜索「\(query)」无结果或网络不可用。
                 请在最终答案里把对应字段明确标注为「未核实」，\
                 不要用记忆中的数字、其他型号的数字或拼凑的数字填空 —— 留空不算错，填错才算错。
-                """,
-                sources: []
+                """
             )
         }
 
         // 并行抓取正文，多给 3 个候选。
         // 部分站点会反爬返回空，只抓前 N 个会因为个别失败而白白少拿一份资料 —— 这里凑够为止。
         let fetchCount = min(AppConfig.searchPageFetchCount, hits.count)
+        guard fetchCount > 0 else {
+            return SearchOutcome(order: order, callId: call.id,
+                                 hits: hits, pages: [], emptyMessage: nil)
+        }
         let candidates = Array(hits.prefix(fetchCount + 3))
         let raw = await withTaskGroup(of: (Int, String, String, String).self) { group in
             for (i, hit) in candidates.enumerated() {
@@ -522,7 +611,10 @@ final class ChatViewModel: ObservableObject {
                 }
             }
             var collected: [(Int, String, String, String)] = []
-            for await item in group { collected.append(item) }
+            for await item in group {
+                collected.append(item)
+                if collected.filter({ !$0.3.isEmpty }).count >= fetchCount { group.cancelAll(); break }
+            }
             return collected.sorted { $0.0 < $1.0 }
         }
 
@@ -531,13 +623,14 @@ final class ChatViewModel: ObservableObject {
             .prefix(fetchCount))
         return SearchOutcome(order: order,
                              callId: call.id,
-                             content: WebSearchService.format(hits: hits, pages: pages),
-                             sources: hits.map(\.url))
+                             hits: hits, pages: pages, emptyMessage: nil)
     }
 
     // MARK: - 上下文组装：专家 prompt + 身份 + 记忆 + 附件正文
 
     private func buildAPIMessages() -> [[String: Any]] {
+        let span = PerformanceTrace.begin("ContextBuild")
+        defer { PerformanceTrace.end("ContextBuild", span) }
         let identity = UserIdentity.load()
         let memories = memoryService.injectionFragment(context: modelContext)
         let system = expert.systemPrompt + identity.promptFragment + identity.replyStyle.prompt + memories
@@ -565,8 +658,8 @@ final class ChatViewModel: ObservableObject {
             var imageURLs: [String] = []
 
             for file in attached {
-                if file.isImage, let data = try? Data(contentsOf: FileStore.url(for: file)) {
-                    imageURLs.append("data:image/jpeg;base64,\(data.base64EncodedString())")
+                if file.isImage {
+                    textParts.append("【图片附件OCR，可能有识别误差：\(file.name)】\n" + file.contextText(limit: 3000))
                 } else {
                     let body = file.contextText()
                     guard !body.isEmpty, injectedBudget > 0 else { continue }
@@ -587,7 +680,16 @@ final class ChatViewModel: ObservableObject {
                 messages.append(["role": m.role, "content": content])
             }
         }
-        return messages
+        var remaining = 48000
+        var selected: [[String: Any]] = []
+        for message in messages.dropFirst().reversed() {
+            guard let content = message["content"] as? String else { continue }
+            guard remaining > 0 else { break }
+            let clipped = String(content.prefix(remaining))
+            remaining -= clipped.count
+            selected.append(["role": message["role"] ?? "user", "content": clipped])
+        }
+        return [messages[0]] + selected.reversed()
     }
 
     // MARK: - 导出
@@ -597,6 +699,8 @@ final class ChatViewModel: ObservableObject {
         let title = (conversation?.title.isEmpty ?? true) ? expert.name : (conversation?.title ?? expert.name)
         var lines: [String] = []
         for message in sortedMessages {
+            if message.imageData != nil { lines.append("[此消息包含图片，文字导出未嵌入图片]") }
+            for file in files(for: message) { lines.append("附件：" + file.name) }
             guard !message.text.isEmpty else { continue }
             lines.append(message.role == "user" ? "**我：**\(message.text)" : message.text)
             lines.append("")
