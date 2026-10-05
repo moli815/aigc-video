@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// 主题色板：多套主色调，切换后通过根视图 .tint() 即时全局生效
+/// 主题：不再是单一主色，而是「主色 / 渐变次色 / 浅底」三层 token。
+/// 收敛到 3 套（MVP 裁剪：六套完整主题暂缓，先做三套把 token 体系立起来）。
 enum AppTheme: String, CaseIterable, Identifiable {
     case blue
     case graphite
     case emerald
-    case violet
-    case coral
-    case gold
 
     var id: String { rawValue }
 
@@ -16,9 +14,6 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .blue: return "海蓝"
         case .graphite: return "石墨"
         case .emerald: return "翡翠"
-        case .violet: return "罗兰"
-        case .coral: return "珊瑚"
-        case .gold: return "鎏金"
         }
     }
 
@@ -27,20 +22,33 @@ enum AppTheme: String, CaseIterable, Identifiable {
         case .blue: return "drop.fill"
         case .graphite: return "circle.hexagongrid.fill"
         case .emerald: return "leaf.fill"
-        case .violet: return "sparkles"
-        case .coral: return "flame.fill"
-        case .gold: return "star.fill"
         }
     }
 
+    /// 主色（强调色）：通过根视图 .tint() 全局生效
     var accent: Color {
         switch self {
         case .blue: return Color(red: 0.20, green: 0.42, blue: 0.88)
         case .graphite: return Color(red: 0.35, green: 0.37, blue: 0.42)
         case .emerald: return Color(red: 0.07, green: 0.55, blue: 0.40)
-        case .violet: return Color(red: 0.49, green: 0.34, blue: 0.79)
-        case .coral: return Color(red: 0.90, green: 0.38, blue: 0.27)
-        case .gold: return Color(red: 0.82, green: 0.61, blue: 0.12)
+        }
+    }
+
+    /// 渐变第二色：比主色浅/亮，用于液态玻璃按钮的渐变尾部等
+    var accentSecondary: Color {
+        switch self {
+        case .blue: return Color(red: 0.44, green: 0.64, blue: 0.95)
+        case .graphite: return Color(red: 0.55, green: 0.57, blue: 0.62)
+        case .emerald: return Color(red: 0.25, green: 0.70, blue: 0.56)
+        }
+    }
+
+    /// 浅底：选中态 / 标签底 / 强调区块的极浅底色
+    var accentSoft: Color {
+        switch self {
+        case .blue: return Color(red: 0.90, green: 0.94, blue: 0.99)
+        case .graphite: return Color(red: 0.93, green: 0.93, blue: 0.95)
+        case .emerald: return Color(red: 0.90, green: 0.96, blue: 0.93)
         }
     }
 
