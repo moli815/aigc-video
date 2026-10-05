@@ -8,3 +8,8 @@ xcuserdata/
 .DS_Store
 Payload/
 *.ipa
+
+.build/
+.swiftpm/
+TestArtifacts/
+*.xcresult
