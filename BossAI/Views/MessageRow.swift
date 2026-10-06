@@ -182,6 +182,7 @@ private struct CitationSourceRow: View {
 private struct MessageImageView: View, Equatable {
     let data: Data
     @State private var thumbnail: UIImage?
+    @State private var loading = true
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
     var body: some View {
         Group {
@@ -193,17 +194,18 @@ private struct MessageImageView: View, Equatable {
                             if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
                         }
                     }
-            } else { ProgressView("正在读取图片…").frame(height: 120) }
+            } else if loading { ProgressView("正在读取图片…").frame(height: 120) }
+            else { Text("图片无法读取，可尝试重新生成。").font(.footnote).foregroundStyle(.secondary) }
         }
         .accessibilityLabel("生成的图片")
         .task(id: data) {
             let image = await ImageThumbnailWorker.shared.thumbnail(data)
-            if !Task.isCancelled { thumbnail = image.map { UIImage(cgImage: $0) } }
+            if !Task.isCancelled { thumbnail = image.map { UIImage(cgImage: $0) }; loading = false }
         }
     }
 }
 
-private actor ImageThumbnailWorker {
+actor ImageThumbnailWorker {
     static let shared = ImageThumbnailWorker()
     func thumbnail(_ data: Data) -> CGImage? {
         guard !Task.isCancelled, let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }

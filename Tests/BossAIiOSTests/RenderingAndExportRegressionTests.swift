@@ -2,6 +2,7 @@ import XCTest
 import SwiftData
 import PDFKit
 import Combine
+import UIKit
 @testable import BossAI
 
 final class RenderingAndExportRegressionTests: XCTestCase {
@@ -67,6 +68,38 @@ final class RenderingAndExportRegressionTests: XCTestCase {
         XCTAssertNil(decoded.sourcesJSON)
         var enriched = original; enriched.sourcesJSON = "[]"
         XCTAssertEqual(try JSONDecoder().decode(BackupService.MessageDTO.self, from: JSONEncoder().encode(enriched)).sourcesJSON, "[]")
+    }
+    @MainActor
+    func testGeneratedImageThumbnailIsDownsampledAndInvalidDataFails() async throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 3000, height: 2000), format: format).image { renderer in
+            UIColor.blue.setFill(); renderer.fill(CGRect(x: 0, y: 0, width: 3000, height: 2000))
+        }
+        let data = try XCTUnwrap(image.jpegData(compressionQuality: 0.8))
+        let decodedThumbnail = await ImageThumbnailWorker.shared.thumbnail(data)
+        let thumbnail = try XCTUnwrap(decodedThumbnail)
+        XCTAssertLessThanOrEqual(thumbnail.width, 1260); XCTAssertLessThanOrEqual(thumbnail.height, 1260)
+        XCTAssertGreaterThan(thumbnail.width, thumbnail.height)
+        let invalid = await ImageThumbnailWorker.shared.thumbnail(Data("invalid image".utf8))
+        XCTAssertNil(invalid)
+    }
+    @MainActor
+    func testEncryptedBackupPreservesSourceMetadataThroughRealImport() async throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let source = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, MemoryItem.self, configurations: configuration)
+        let context = source.mainContext
+        let conversation = Conversation(expertId: "general", title: "来源备份样本"); context.insert(conversation)
+        let message = Message(role: "assistant", text: "结论（来源 7）")
+        message.sourcesJSON = String(data: try JSONEncoder().encode([CitationSource(id: 7, url: "https://example.com/a", title: "实际来源标题")]), encoding: .utf8)!
+        message.conversation = conversation; context.insert(message); try context.save()
+        let url = try await BackupService.export(password: "offline-backup-password", context: context)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let destination = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, MemoryItem.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let summary = try await BackupService.importBackup(from: url, password: "offline-backup-password", context: destination.mainContext)
+        XCTAssertEqual(summary.messages, 1)
+        let messages = try destination.mainContext.fetch(FetchDescriptor<Message>())
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(CitationPresentation.projection(text: messages[0].text, json: messages[0].sourcesJSON).sources.first?.title, "实际来源标题")
     }
     func testCancelledDocumentDoesNotReturnSuccess() async {
         let task = Task { try await DocumentBuilder.buildAsync(format: .word, title: "取消", content: "正文") }

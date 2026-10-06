@@ -691,17 +691,18 @@ final class ChatViewModel: ObservableObject {
                 continue
             }
 
+            let messageText = m.role == "assistant" ? CitationPresentation.historyContext(text: m.text, json: m.sourcesJSON) : m.text
             let attached = files(for: m)
             if attached.isEmpty {
                 if !m.text.isEmpty {
-                    messages.append(["role": m.role, "content": m.text])
+                    messages.append(["role": m.role, "content": messageText])
                 }
                 continue
             }
 
             // 图片附件 → 多模态；其他附件 → 抽取文本
             var textParts: [String] = []
-            if !m.text.isEmpty { textParts.append(m.text) }
+            if !messageText.isEmpty { textParts.append(messageText) }
             var imageURLs: [String] = []
 
             for file in attached {

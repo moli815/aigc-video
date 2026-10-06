@@ -45,6 +45,13 @@ final class CitationRegressionTests: XCTestCase {
         let sources = [CitationSource(id: 1, url: "https://example.com/1"), CitationSource(id: 10, url: "https://example.com/10?utm_source=test")]
         XCTAssertEqual(CitationPresentation.cited(sources, in: "[官网](https://example.com/10)").map(\.id), [10])
     }
+    func testFollowupContextRetainsActualCitationTitlesWithoutAllSearchResults() throws {
+        let sources = [CitationSource(id: 1, url: "https://example.com/1", title: "未引用标题"), CitationSource(id: 7, url: "https://example.com/7", title: "实际引用标题")]
+        let json = String(data: try JSONEncoder().encode(sources), encoding: .utf8)!
+        let context = CitationPresentation.historyContext(text: "结论（来源 7）", json: json)
+        XCTAssertTrue(context.contains("实际引用标题")); XCTAssertTrue(context.contains("https://example.com/7"))
+        XCTAssertFalse(context.contains("未引用标题")); XCTAssertTrue(context.contains("仅对应该回答"))
+    }
     func testHundredsOfRepeatedSearchHitsBenchmark() {
         measure {
             var registry = CitationRegistry()

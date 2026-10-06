@@ -127,6 +127,15 @@ enum CitationPresentation {
         }
         return sources.isEmpty ? (text, []) : (body, sources)
     }
+    static func historyContext(text: String, json: String) -> String {
+        let projected = projection(text: text, json: json)
+        let used = cited(projected.sources, in: projected.body)
+        guard !used.isEmpty else { return projected.body }
+        let notes = markdown(used)
+        let bounded = String(notes.prefix(8000))
+        return projected.body + "\n\n【该历史回答的来源编号，仅对应该回答；追问最新事实需重新检索】\n" + bounded
+            + (notes.count > 8000 ? "\n【历史来源元数据过长，后续未注入；请重新检索核对】" : "")
+    }
     static func markdown(_ sources: [CitationSource]) -> String {
         sources.map { source in
             let title = source.label.replacingOccurrences(of: "[", with: "（").replacingOccurrences(of: "]", with: "）").replacingOccurrences(of: "\n", with: " ")

@@ -258,11 +258,15 @@ enum BackupService {
         }.value
 
         let dir = exportsDirectory()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmm"
         let url = dir.appendingPathComponent("BossAI备份-\(formatter.string(from: Date())).\(fileExtension)")
-        try payload.write(to: url, options: .atomic)
+        try Task.checkCancellation()
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try payload.write(to: url, options: .atomic)
+        }.value
+        try Task.checkCancellation()
         return url
     }
 
@@ -323,18 +327,16 @@ enum BackupService {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 128 * 1024 * 1024,
-              let encrypted = try? Data(contentsOf: url) else {
-            throw BackupError.notBackupFile
-        }
-
-        // 后台线程：解密 + 解析 manifest
+        // File reads, key derivation and archive parsing all execute off MainActor.
         let payload = try await Task.detached(priority: .userInitiated) {
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 128 * 1024 * 1024,
+                  let encrypted = try? Data(contentsOf: url) else { throw BackupError.notBackupFile }
             let archive = try decrypt(encrypted, password: password)
             let manifest = try parseManifest(reader: ZipReader(data: archive))
             return DecryptedPayload(manifest: manifest, archive: archive)
         }.value
 
+        try Task.checkCancellation()
         let manifest = payload.manifest
         let reader = ZipReader(data: payload.archive)
         let names = reader.entryNames()
