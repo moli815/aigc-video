@@ -1,10 +1,15 @@
 import XCTest
 
-final class WorkbenchUITests: XCTestCase {
+final class AppWorkbenchUITests: XCTestCase {
+    private var currentApp: XCUIApplication?
+    override func tearDown() {
+        if testRun?.hasSucceeded == false, let app = currentApp, app.state == .runningForeground { evidence(app, "failed-workbench") }
+        currentApp = nil; super.tearDown()
+    }
     override func setUp() { super.setUp(); continueAfterFailure = false }
     private func launch(_ mode: String = "workbench", theme: String = "blue") -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = ["--render-fixture", "--render-mode=" + mode, "--fixture-theme=" + theme]; app.launch()
-        return app
+        currentApp = app; return app
     }
     private func evidence(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)

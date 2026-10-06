@@ -311,31 +311,33 @@ struct EmptyStateView: View {
 private struct TaskControls: View {
     @ObservedObject var viewModel: ChatViewModel
     @Environment(\.appTheme) private var theme
+    @State private var chooseResearch = false
+    @State private var chooseStyle = false
     var body: some View {
         HStack(spacing: 10) {
-            Menu {
-                Picker("证据方式", selection: $viewModel.researchMode) {
-                    ForEach(ResearchMode.allCases) { mode in Text(mode.label).tag(mode) }
-                }
-            } label: {
+            Button { chooseResearch = true } label: {
                 Label(viewModel.researchMode.label, systemImage: "globe")
                     .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
                     .background(theme.accentSoft, in: Capsule())
             }
-                .accessibilityIdentifier("research-mode")
-            Menu {
-                Picker("回答深度", selection: $viewModel.answerStyle) {
-                    ForEach(AnswerStyle.allCases) { style in Text(style.label).tag(style) }
-                }
-            } label: {
+            .accessibilityIdentifier("research-mode")
+            .confirmationDialog("选择证据方式", isPresented: $chooseResearch, titleVisibility: .visible) {
+                ForEach(ResearchMode.allCases) { mode in Button(mode.label) { viewModel.researchMode = mode } }
+                Button("取消", role: .cancel) {}
+            }
+            Button { chooseStyle = true } label: {
                 Label(viewModel.answerStyle.label, systemImage: "text.alignleft")
                     .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
                     .background(theme.accentSoft, in: Capsule())
             }
-                .accessibilityIdentifier("answer-style")
+            .accessibilityIdentifier("answer-style")
+            .confirmationDialog("选择回答深度", isPresented: $chooseStyle, titleVisibility: .visible) {
+                ForEach(AnswerStyle.allCases) { style in Button(style.label) { viewModel.answerStyle = style } }
+                Button("取消", role: .cancel) {}
+            }
             Spacer(minLength: 0)
         }
-        .font(.footnote).padding(.horizontal, 20).padding(.vertical, 6)
+        .buttonStyle(.plain).font(.footnote).padding(.horizontal, 20).padding(.vertical, 6)
         .background(theme.surface).disabled(viewModel.isStreaming)
     }
 }
