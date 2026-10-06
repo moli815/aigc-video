@@ -1,0 +1,74 @@
+Attributes: Application, 0x10ff6df20, pid: 30768, label: 'BossAI'
+Element subtree:
+ →Application, 0x10ff6df20, pid: 30768, label: 'BossAI'
+    Window (Main), 0x10ff7ab70, {{0.0, 0.0}, {1210.0, 834.0}}
+      Other, 0x10ff74330, {{0.0, 0.0}, {1210.0, 834.0}}
+        Other, 0x10ff7fd00, {{0.0, 0.0}, {1210.0, 834.0}}
+          Other, 0x10ff741e0, {{0.0, 0.0}, {1210.0, 834.0}}
+            Other, 0x10ff72aa0, {{0.0, 0.0}, {1210.0, 834.0}}
+              Other, 0x10ff802a0, {{0.0, 0.0}, {1210.0, 834.0}}
+                Other, 0x10ff7fe20, {{0.0, 0.0}, {1210.0, 834.0}}
+                  NavigationBar, 0x10ff7ff40, {{0.0, 24.0}, {1210.0, 102.0}}, identifier: '真实对话渲染回归'
+                    StaticText, 0x10ff80060, {{20.0, 77.5}, {258.0, 41.0}}, label: '真实对话渲染回归'
+                  Other, 0x10ff80180, {{0.0, 0.0}, {1210.0, 834.0}}
+                    Other, 0x10ff803c0, {{0.0, 0.0}, {1210.0, 834.0}}
+                      Other, 0x10ff804e0, {{0.0, 0.0}, {1210.0, 834.0}}
+                        Other, 0x10ff80600, {{0.0, 0.0}, {1210.0, 834.0}}
+                          Button, 0x10ff80720, {{20.0, 132.0}, {95.0, 44.0}}, identifier: 'research-mode', label: '证据方式：自动核实', value: automatic
+                            Image, 0x10ff80840, {{31.0, 147.5}, {13.0, 13.0}}, identifier: 'globe', label: 'Globe'
+                            StaticText, 0x10ff80960, {{20.0, 132.0}, {95.0, 44.0}}, label: '自动核实'
+                          Button, 0x10ff80a80, {{125.0, 132.0}, {96.0, 44.0}}, identifier: 'answer-style', label: '回答深度：清晰简答', value: concise
+                            Image, 0x10ff80ba0, {{136.5, 148.5}, {13.0, 11.0}}, identifier: 'text.alignleft', label: 'Align Left'
+                            StaticText, 0x10ff80cc0, {{125.0, 132.0}, {96.0, 44.0}}, label: '清晰简答'
+                          ScrollView, 0x10ff80de0, {{0.0, 182.0}, {1210.0, 819.0}}, identifier: 'chat-scroll'
+                            Other, 0x10ff80f00, {{0.0, 434.0}, {1210.0, 315.0}}
+                              Other, 0x10ff81020, {{34.0, 470.0}, {732.0, 242.0}}
+                                Image, 0x10ff81140, {{35.5, 472.0}, {13.5, 13.0}}, identifier: 'text.bubble', label: 'Comment Lines'
+                                StaticText, 0x10ff81260, {{35.5, 471.0}, {47.0, 14.5}}, label: '回答'
+                                Button, 0x10ff81380, {{695.0, 470.0}, {71.0, 17.0}}, identifier: 'copy-answer', label: '复制回答'
+                                  Image, 0x10ff814a0, {{696.5, 471.0}, {12.0, 15.0}}, identifier: 'doc.on.doc', label: 'Copy'
+                                  StaticText, 0x10ff815c0, {{695.0, 470.0}, {71.0, 17.0}}, label: '复制回答'
+                                StaticText, 0x10ff816e0, {{34.0, 499.0}, {193.5, 14.5}}, label: '表格可左右滑动查看全部列，共 3 行'
+                                ScrollView, 0x10ff81800, {{34.0, 518.5}, {732.0, 193.5}}, identifier: 'table-0-scroll'
+                                  Other, 0x10ff81920, {{-123.0, 518.5}, {889.0, 193.5}}
+                                    StaticText, 0x10ff81a40, {{-113.0, 528.5}, {30.0, 18.0}}, identifier: 'table-0-cell-0-0', label: '编号'
+                                    StaticText, 0x10ff81b60, {{-5.0, 528.5}, {30.0, 18.0}}, identifier: 'table-0-cell-0-1', label: '标题'
+                                    StaticText, 0x10ff81c80, {{275.0, 528.5}, {30.0, 18.0}}, identifier: 'table-0-cell-0-2', label: '链接'
+                                    StaticText, 0x10ff81da0, {{538.0, 528.5}, {45.0, 18.0}}, identifier: 'table-0-cell-0-3', label: '第四列'
+                                    StaticText, 0x10ff81ec0, {{646.0, 528.5}, {45.0, 18.0}}, identifier: 'table-0-cell-0-4', label: '第五列'
+                                    StaticText, 0x10ff81fe0, {{-113.0, 567.0}, {8.5, 18.0}}, identifier: 'table-0-cell-1-0', label: '7'
+                                    StaticText, 0x10ff82100, {{-5.0, 567.0}, {253.5, 58.0}}, identifier: 'table-0-cell-1-1', label: '第一行长标题：这是一段用来复现来源表格换行重叠的测试数据，标题应自动撑开整行高度并保留完整文字'
+                                    StaticText, 0x10ff82220, {{275.0, 567.0}, {60.0, 18.0}}, identifier: 'table-0-cell-1-2', label: '官方规格'
+                                    StaticText, 0x10ff82340, {{538.0, 567.0}, {39.5, 18.0}}, identifier: 'table-0-cell-1-3', label: '测试4'
+                                    StaticText, 0x10ff82460, {{646.0, 567.0}, {104.5, 18.0}}, identifier: 'table-0-cell-1-4', label: '最右列可见标记'
+                                    StaticText, 0x10ff82580, {{-113.0, 645.5}, {37.0, 18.0}}, identifier: 'table-0-cell-2-0', label: '14/16'
+                                    StaticText, 0x10ff826a0, {{-5.0, 645.5}, {104.5, 18.0}}, identifier: 'table-0-cell-2-1', label: '第二行较短标题'
+                                    StaticText, 0x10ff827c0, {{275.0, 645.5}, {60.0, 18.0}}, identifier: 'table-0-cell-2-2', label: '发布公告'
+                                    StaticText, 0x10ff828e0, {{538.0, 645.5}, {39.0, 18.0}}, identifier: 'table-0-cell-2-3', label: '测试5'
+                                    StaticText, 0x10ff82a00, {{646.0, 645.5}, {104.5, 18.0}}, identifier: 'table-0-cell-2-4', label: '下一行最右内容'
+                                    StaticText, 0x10ff82b20, {{-113.0, 684.0}, {18.0, 18.0}}, identifier: 'table-0-cell-3-0', label: '23'
+                                    StaticText, 0x10ff82c40, {{-5.0, 684.0}, {45.0, 18.0}}, identifier: 'table-0-cell-3-1', label: '第三行'
+                                    StaticText, 0x10ff82d60, {{275.0, 684.0}, {45.0, 18.0}}, identifier: 'table-0-cell-3-2', label: '待核实'
+                                    StaticText, 0x10ff82e80, {{538.0, 684.0}, {39.5, 18.0}}, identifier: 'table-0-cell-3-3', label: '测试6'
+                                    StaticText, 0x10ff82fa0, {{646.0, 684.0}, {104.5, 18.0}}, identifier: 'table-0-cell-3-4', label: '第三行最右内容'
+                                  Other, 0x10ff830c0, {{34.0, 679.0}, {732.0, 30.0}}, label: 'Horizontal scroll bar, 2 pages', value: 100%
+                                    Other, 0x10ff831e0, {{165.0, 706.0}, {598.0, 3.0}}
+                                  Other, 0x10ff83300, {{34.0, 679.0}, {732.0, 30.0}}, label: 'Horizontal scroll bar, 2 pages', value: 100%
+                                    Other, 0x10ff83420, {{165.0, 706.0}, {598.0, 3.0}}
+                            Other, 0x10ff83540, {{1177.0, 434.0}, {30.0, 567.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                              Other, 0x10ff83660, {{1204.0, 1441.0}, {3.0, 309.0}}
+                            Other, 0x10ff83780, {{1177.0, 434.0}, {30.0, 567.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                              Other, 0x10ff838a0, {{1204.0, 1441.0}, {3.0, 309.0}}
+                          Button, 0x10ff839c0, {{10.0, 759.0}, {42.0, 42.0}}, identifier: 'plus', label: '添加附件'
+                          Button, 0x10ff83ae0, {{58.0, 759.0}, {42.0, 42.0}}, identifier: 'mic.fill', label: '语音输入'
+                          TextField, 0x10ff83c00, {{120.0, 768.0}, {1018.0, 22.0}}, identifier: 'task-input', placeholderValue: '描述任务、目标或需要核实的信息…'
+                            Other, 0x10ff83d20, {{120.0, 776.0}, {1018.0, 11.0}}, label: 'Horizontal scroll bar, 1 page', value: 0%
+                              Other, 0x10ff83e40, {{123.0, 784.0}, {636.0, 3.0}}
+                          Button, 0x10ff83f60, {{1158.0, 759.0}, {42.0, 42.0}}, identifier: 'arrow.up.circle.fill', label: '发送', Disabled
+Path to element:
+ →Application, 0x10ff6df20, pid: 30768, label: 'BossAI'
+Query chain:
+ →Find: Target Application 'com.bossai.app'
+  Output: {
+    Application, 0x10fe7d5e0, pid: 30768, label: 'BossAI'
+  }

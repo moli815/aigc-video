@@ -1,18 +1,29 @@
-# BossAI 本轮修复源码（待 iOS 验收）
+# BossAI：iPad 经营任务工作台
 
-基于用户2026-10-05提供的重构源码。专家技能、经营计算工作台、本机专业资料检索、联网时效/引用、流式可靠性、备份恢复、文件导入、语音、六主题与聊天表格已改造。
+面向经营者的 SwiftUI / SwiftData App，最低 iOS 17。提供任务草稿、专家技能与可靠计算、联网证据、本地资料检索、对话和 Word / Excel / PPT / PDF 交付。
 
-已执行：53项桌面源码/逻辑检查，11专家真实API工具路由测试，4搜索端点真实探测。
-未执行：Swift编译、65个原生测试、iPad模拟器/真机、Instruments。此包不能称为已验收成品或性能达标版。
+当前 build：**2026100604**；源码提交：`816d2f9efccf9ffc95c872f2324cf4bd2c551cf9`。
+实际原生测试、截图、搜索诊断和性能测量见 [本版交付说明](docs/BossAI-工作台与搜索升级说明-20261006.md)。[当前产品说明](docs/BossAI-产品说明.md)描述现在的行为；历史报告仅作追溯。
 
-完整改动、文件行号、证据与剩余工作：`docs/本轮改动与验证.md`。
+## 这次可以直接看到的变化
 
-macOS安装Xcode/XcodeGen后执行：
+- 首页三类任务卡，填写背景后再发送；专家入口可直接打开技能与计算工作台。
+- 对话可选“自动核实 / 联网研究 / 仅用现有资料”和“清晰简答 / 详细分析”。
+- 最终只保留一份答案，正文默认完整展开，用户手动折叠；有独立复制按钮及引用来源。
+- 六主题改变字体、底色、卡片、间距和阅读宽度；联网解析接入 SwiftSoup 2.13.9。
+
+任务流程、搜索与计算和模型解耦。厂商协议参数放在 ModelRequestAdapter；Chat Completions 兼容接口使用同一业务流程，其他协议需新增传输适配。
+
+“仅用现有资料”关闭网页工具，仍可能把资料发送至所选模型 API，不表示完全离线。测试凭证按用户要求保留；生产网络请求实际流向由所选服务商决定。
+
+## 原生开发与验收
+
+macOS、Xcode 16.4、XcodeGen：
 
 ```bash
 bash scripts/run-quality.sh
 ```
 
-桌面复现检查：Python环境安装`scripts/requirements-desktop.txt`后执行`python scripts/verify-desktop.py`。
+[GitHub原生测试](https://github.com/moli815/aigc-video/actions/runs/37465045756)及[未签名IPA构建](https://github.com/moli815/aigc-video/actions/runs/37465045960)来自同一提交。IPA需签名后安装；模拟器测试不代表真机帧率、发热、电量或复杂任务准确率。
 
-本轮没有上传源码或触发GitHub工作流。内置测试凭证按用户要求保留；离线测试入口使用内存数据库并跳过凭证种子。
+第三方依赖及许可证见 BossAI/Resources/ThirdPartyNotices.txt。专业资料分块/FTS索引、记忆确认机制、字段级证据和全上下文预算仍是待做项，具体方案在交付说明中。

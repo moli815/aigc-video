@@ -1,0 +1,52 @@
+Attributes: Application, 0x10ff58170, pid: 26050, label: 'BossAI'
+Element subtree:
+ →Application, 0x10ff58170, pid: 26050, label: 'BossAI'
+    Window (Main), 0x10ff504d0, {{0.0, 0.0}, {834.0, 1210.0}}
+      Other, 0x10ff51860, {{0.0, 0.0}, {834.0, 1210.0}}
+        Other, 0x10ff51980, {{0.0, 0.0}, {834.0, 1210.0}}
+          Other, 0x10ff51710, {{0.0, 0.0}, {834.0, 1210.0}}
+            Other, 0x10ff60dd0, {{0.0, 0.0}, {834.0, 1210.0}}
+              Other, 0x10ff51f20, {{0.0, 0.0}, {834.0, 1210.0}}
+                Other, 0x10ff51aa0, {{0.0, 0.0}, {834.0, 1210.0}}
+                  NavigationBar, 0x10ff51bc0, {{0.0, 24.0}, {834.0, 102.0}}, identifier: '真实对话渲染回归'
+                    StaticText, 0x10ff51ce0, {{20.0, 77.5}, {258.0, 41.0}}, label: '真实对话渲染回归'
+                  Other, 0x10ff51e00, {{0.0, 0.0}, {834.0, 1210.0}}
+                    Other, 0x10ff52040, {{0.0, 0.0}, {834.0, 1210.0}}
+                      Other, 0x10ff52160, {{0.0, 0.0}, {834.0, 1210.0}}
+                        Other, 0x10ff52280, {{0.0, 0.0}, {834.0, 1210.0}}
+                          Button, 0x10ff523a0, {{20.0, 132.0}, {95.0, 44.0}}, identifier: 'research-mode', label: '证据方式：自动核实', value: automatic
+                            Image, 0x10ff524c0, {{31.0, 147.5}, {13.0, 13.0}}, identifier: 'globe', label: 'Globe'
+                            StaticText, 0x10ff525e0, {{20.0, 132.0}, {95.0, 44.0}}, label: '自动核实'
+                          Button, 0x10ff52700, {{125.0, 132.0}, {96.0, 44.0}}, identifier: 'answer-style', label: '回答深度：清晰简答', value: concise
+                            Image, 0x10ff55ba0, {{136.5, 148.5}, {13.0, 11.0}}, identifier: 'text.alignleft', label: 'Align Left'
+                            StaticText, 0x10ff55cc0, {{125.0, 132.0}, {96.0, 44.0}}, label: '清晰简答'
+                          ScrollView, 0x10ff55de0, {{0.0, 182.0}, {834.0, 1658.0}}, identifier: 'chat-scroll'
+                            Other, 0x10ff55f00, {{0.0, 897.0}, {834.0, 228.0}}
+                              Other, 0x10ff56020, {{30.0, 929.0}, {774.0, 162.0}}
+                                Image, 0x10ff56140, {{31.5, 930.0}, {13.5, 13.0}}, identifier: 'text.bubble', label: 'Comment Lines'
+                                StaticText, 0x10ff56260, {{31.5, 929.0}, {47.0, 14.5}}, label: '回答'
+                                Button, 0x10ff56380, {{746.5, 929.5}, {57.5, 14.5}}, identifier: 'copy-answer', label: '已复制'
+                                  Image, 0x10ff564a0, {{748.0, 931.5}, {10.5, 10.5}}, identifier: 'checkmark', label: 'Selected', Selected
+                                  StaticText, 0x10ff565c0, {{746.5, 929.5}, {57.5, 14.5}}, label: '已复制'
+                                StaticText, 0x10ff566e0, {{30.0, 956.0}, {579.0, 20.5}}, label: '结论待核实（来源 7）。本段只引用第7条，其他检索记录没有声称支持结论。'
+                                StaticText, 0x10ff56800, {{30.0, 999.0}, {160.0, 18.0}}, label: '本回答引用来源（1 条）'
+                                Button, 0x10ff56920, {{30.0, 1027.0}, {136.5, 20.5}}, identifier: 'citation-7', label: '[7] 测试来源标题7'
+                                StaticText, 0x10ff56a40, {{30.0, 1050.5}, {169.0, 14.5}}, label: 'example.com · 发布时间未核实'
+                                Button, 0x10ff56b60, {{30.0, 1075.0}, {162.0, 16.0}}, identifier: 'search-records', label: '查看本轮检索记录（85 条）'
+                            Other, 0x10ff56c80, {{801.0, 897.0}, {30.0, 943.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                              Other, 0x10ff56da0, {{828.0, 1614.0}, {3.0, 222.0}}
+                            Other, 0x10ff56ec0, {{801.0, 897.0}, {30.0, 943.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                              Other, 0x10ff56fe0, {{828.0, 1614.0}, {3.0, 222.0}}
+                          Button, 0x10ff57250, {{10.0, 1135.0}, {42.0, 42.0}}, identifier: 'plus', label: '添加附件'
+                          Button, 0x10ff57370, {{58.0, 1135.0}, {42.0, 42.0}}, identifier: 'mic.fill', label: '语音输入'
+                          TextField, 0x10ff57490, {{120.0, 1144.0}, {642.0, 22.0}}, identifier: 'task-input', placeholderValue: '描述任务、目标或需要核实的信息…'
+                            Other, 0x10ff575b0, {{120.0, 1152.0}, {642.0, 11.0}}, label: 'Horizontal scroll bar, 1 page', value: 0%
+                              Other, 0x10ff576d0, {{123.0, 1160.0}, {636.0, 3.0}}
+                          Button, 0x10ff577f0, {{782.0, 1135.0}, {42.0, 42.0}}, identifier: 'arrow.up.circle.fill', label: '发送', Disabled
+Path to element:
+ →Application, 0x10ff58170, pid: 26050, label: 'BossAI'
+Query chain:
+ →Find: Target Application 'com.bossai.app'
+  Output: {
+    Application, 0x10fd51c20, pid: 26050, label: 'BossAI'
+  }

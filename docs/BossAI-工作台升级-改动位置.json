@@ -1,0 +1,1259 @@
+[
+  {
+    "file": "BossAI/BossAIApp.swift",
+    "sha256": "e58a62bd053f38f9467bf786c71d2291023799e5ab6af93bff7249c0661cf385",
+    "symbols": [
+      {
+        "line": 5,
+        "symbol": "struct BossAIApp: App {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Config/Theme.swift",
+    "sha256": "9458e754e11ae0c24c886832a76bc230a300efd8d5593422f93043d8c99c967c",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "enum AppTheme: String, CaseIterable, Identifiable {"
+      },
+      {
+        "line": 85,
+        "symbol": "private func themedSurface(card: Bool) -> Color {"
+      },
+      {
+        "line": 110,
+        "symbol": "enum ThemeStore {"
+      },
+      {
+        "line": 117,
+        "symbol": "static func set(_ theme: AppTheme) {"
+      },
+      {
+        "line": 122,
+        "symbol": "private struct AppThemeEnvironmentKey: EnvironmentKey { static let defaultValue = AppTheme.blue }"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/ExpertCore/ReliabilityCore.swift",
+    "sha256": "3fc9e1a7cf038cb8510dfd0402c2178959f55cc7185318592c2bc90fb1dc2510",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "struct SSEDecoder {"
+      },
+      {
+        "line": 27,
+        "symbol": "struct CitationSource: Codable, Equatable, Sendable, Identifiable {"
+      },
+      {
+        "line": 37,
+        "symbol": "struct CitationRegistry {"
+      },
+      {
+        "line": 52,
+        "symbol": "static func canonical(_ raw: String) -> String {"
+      },
+      {
+        "line": 65,
+        "symbol": "enum CitationPresentation {"
+      },
+      {
+        "line": 69,
+        "symbol": "static func referencedIDs(in text: String) -> Set<Int> {"
+      },
+      {
+        "line": 73,
+        "symbol": "func collect(_ value: String) {"
+      },
+      {
+        "line": 102,
+        "symbol": "static func cited(_ sources: [CitationSource], in text: String) -> [CitationSource] {"
+      },
+      {
+        "line": 112,
+        "symbol": "static func projection(text: String, json: String) -> (body: String, sources: [CitationSource]) {"
+      },
+      {
+        "line": 130,
+        "symbol": "static func historyContext(text: String, json: String) -> String {"
+      },
+      {
+        "line": 139,
+        "symbol": "static func markdown(_ sources: [CitationSource]) -> String {"
+      },
+      {
+        "line": 147,
+        "symbol": "enum SearchRecency: String, CaseIterable {"
+      },
+      {
+        "line": 152,
+        "symbol": "static func inferred(from query: String) -> SearchRecency {"
+      },
+      {
+        "line": 159,
+        "symbol": "func query(_ query: String, now: Date = Date()) -> String {"
+      },
+      {
+        "line": 168,
+        "symbol": "enum StorageBoundary {"
+      },
+      {
+        "line": 169,
+        "symbol": "static func isSafeLeaf(_ name: String) -> Bool {"
+      },
+      {
+        "line": 176,
+        "symbol": "enum MarkdownTableCore {"
+      },
+      {
+        "line": 177,
+        "symbol": "static func cells(_ line: String) -> [String] {"
+      },
+      {
+        "line": 192,
+        "symbol": "static func isSeparator(_ line: String) -> Bool {"
+      },
+      {
+        "line": 199,
+        "symbol": "static func sheetName(_ title: String) -> String {"
+      },
+      {
+        "line": 209,
+        "symbol": "struct SSEByteDecoder {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/ExpertCore/ResearchCore.swift",
+    "sha256": "77f7aaccba1a650fa7fd2b66a462c5fd19c667b8b7408058e5184dcd0cda3d72",
+    "symbols": [
+      {
+        "line": 3,
+        "symbol": "enum ResearchMode: String, CaseIterable, Identifiable {"
+      },
+      {
+        "line": 15,
+        "symbol": "enum AnswerStyle: String, CaseIterable, Identifiable {"
+      },
+      {
+        "line": 25,
+        "symbol": "enum ResearchIntent {"
+      },
+      {
+        "line": 26,
+        "symbol": "static func needsLiveEvidence(_ text: String) -> Bool {"
+      },
+      {
+        "line": 29,
+        "symbol": "static func fingerprint(_ query: String, recency: String) -> String {"
+      },
+      {
+        "line": 32,
+        "symbol": "static func keywords(_ query: String) -> [String] {"
+      },
+      {
+        "line": 45,
+        "symbol": "static func relevance(query: String, text: String) -> Int {"
+      },
+      {
+        "line": 50,
+        "symbol": "enum EvidenceRanking {"
+      },
+      {
+        "line": 53,
+        "symbol": "static func isAuthority(_ url: String) -> Bool {"
+      },
+      {
+        "line": 57,
+        "symbol": "static func score(query: String, title: String, url: String, snippet: String, publishedAt: String) -> Int {"
+      },
+      {
+        "line": 64,
+        "symbol": "struct ResearchBudget {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Models/Expert.swift",
+    "sha256": "fe34293370d1e7be24fe11265fa61c646195f41dad2f35bc090de7a41f40c4b5",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "struct Expert: Identifiable, Hashable {"
+      },
+      {
+        "line": 34,
+        "symbol": "enum ExpertTool: String, Hashable {"
+      },
+      {
+        "line": 66,
+        "symbol": "struct ExpertSkill: Hashable {"
+      },
+      {
+        "line": 99,
+        "symbol": "enum ExpertCatalog {"
+      },
+      {
+        "line": 360,
+        "symbol": "static func find(_ id: String) -> Expert {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Resources/ThirdPartyNotices.txt",
+    "sha256": "3dec984fd0ea46565be450f9c635eeff959b7e6c092dc1fc8072a6174c1d63b0",
+    "symbols": []
+  },
+  {
+    "file": "BossAI/Services/ChatService.swift",
+    "sha256": "5e948a75f90cf6dbf87888bcee7409e497c5446854442c6cf5a0bf30894d89b8",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "final class ChatService {"
+      },
+      {
+        "line": 7,
+        "symbol": "struct ToolCall {"
+      },
+      {
+        "line": 13,
+        "symbol": "enum StreamEvent {"
+      },
+      {
+        "line": 22,
+        "symbol": "enum ChatError: LocalizedError {"
+      },
+      {
+        "line": 46,
+        "symbol": "func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = \"general\", allowSearch: Bool = true) -> AsyncThrowingStream<StreamEvent, Error> {"
+      },
+      {
+        "line": 95,
+        "symbol": "func processPayload(_ payload: String) throws -> Bool {"
+      },
+      {
+        "line": 199,
+        "symbol": "private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true) throws {"
+      },
+      {
+        "line": 234,
+        "symbol": "private static func expertSkillFunction(_ capability: ExpertCapability) -> [String: Any] {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/MemoryService.swift",
+    "sha256": "d621b56dcf3b170ba6ebe0571e0a076dff1a55fb0f9420575d1ba527ab4b0fea",
+    "symbols": [
+      {
+        "line": 7,
+        "symbol": "final class MemoryService {"
+      },
+      {
+        "line": 16,
+        "symbol": "func injectionFragment(context: ModelContext) -> String {"
+      },
+      {
+        "line": 30,
+        "symbol": "func extract(from recentDialogue: String, source: String = \"\", context: ModelContext) async {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/ModelRequestAdapter.swift",
+    "sha256": "7060d2108bec8da8b11db9febb2d781b89dc390a544f4ef5accc4329b4ebf99f",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "enum ModelRequestAdapter {"
+      },
+      {
+        "line": 5,
+        "symbol": "enum Purpose: Equatable { case chat, memory }"
+      },
+      {
+        "line": 6,
+        "symbol": "static func apply(to body: inout [String: Any], profile: ChatProfile, purpose: Purpose) {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/ProviderProfiles.swift",
+    "sha256": "14fc25187657be19f1607875e7fecae9093e13b3603ac2c99b94722a63a4a6e6",
+    "symbols": [
+      {
+        "line": 5,
+        "symbol": "enum SearchStyle {"
+      },
+      {
+        "line": 13,
+        "symbol": "struct ChatProfile {"
+      },
+      {
+        "line": 22,
+        "symbol": "struct ImageProfile {"
+      },
+      {
+        "line": 23,
+        "symbol": "enum Style { case volc, zhipu }"
+      },
+      {
+        "line": 31,
+        "symbol": "enum ProviderCatalog {"
+      },
+      {
+        "line": 71,
+        "symbol": "static func saveChatProvider(_ id: String) { UserDefaults.standard.set(id, forKey: chatProviderKey) }"
+      },
+      {
+        "line": 72,
+        "symbol": "static func saveImageProvider(_ id: String) { UserDefaults.standard.set(id, forKey: imageProviderKey) }"
+      },
+      {
+        "line": 75,
+        "symbol": "static func clearProviders() {"
+      },
+      {
+        "line": 82,
+        "symbol": "static func saveChatModelOverride(_ s: String) { UserDefaults.standard.set(s, forKey: chatModelOverrideKey) }"
+      },
+      {
+        "line": 83,
+        "symbol": "static func saveImageModelOverride(_ s: String) { UserDefaults.standard.set(s, forKey: imageModelOverrideKey) }"
+      },
+      {
+        "line": 84,
+        "symbol": "static func chatModelOverride() -> String { UserDefaults.standard.string(forKey: chatModelOverrideKey) ?? \"\" }"
+      },
+      {
+        "line": 85,
+        "symbol": "static func imageModelOverride() -> String { UserDefaults.standard.string(forKey: imageModelOverrideKey) ?? \"\" }"
+      },
+      {
+        "line": 94,
+        "symbol": "static func storedChatProviderId() -> String? {"
+      },
+      {
+        "line": 97,
+        "symbol": "static func storedImageProviderId() -> String? {"
+      },
+      {
+        "line": 102,
+        "symbol": "static func currentChat() -> ChatProfile {"
+      },
+      {
+        "line": 114,
+        "symbol": "static func currentImage() -> ImageProfile {"
+      },
+      {
+        "line": 128,
+        "symbol": "enum BudgetTracker {"
+      },
+      {
+        "line": 134,
+        "symbol": "static func limit() -> Double { UserDefaults.standard.double(forKey: limitKey) }"
+      },
+      {
+        "line": 135,
+        "symbol": "static func setLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: limitKey) }"
+      },
+      {
+        "line": 137,
+        "symbol": "private static func currentMonthKey() -> String {"
+      },
+      {
+        "line": 142,
+        "symbol": "static func spent() -> Double {"
+      },
+      {
+        "line": 152,
+        "symbol": "static func isExceeded() -> Bool {"
+      },
+      {
+        "line": 159,
+        "symbol": "static func estimateTokens(_ text: String) -> Int {"
+      },
+      {
+        "line": 164,
+        "symbol": "private static func prices(providerId: String) -> (in: Double, out: Double) {"
+      },
+      {
+        "line": 175,
+        "symbol": "static func add(promptTokens: Int, completionTokens: Int, providerId: String) {"
+      },
+      {
+        "line": 182,
+        "symbol": "static func addImageGeneration(_ count: Int = 1) {"
+      },
+      {
+        "line": 188,
+        "symbol": "static func addDocument(_ content: String) {"
+      },
+      {
+        "line": 195,
+        "symbol": "static func restoreSpent(_ value: Double) {"
+      },
+      {
+        "line": 203,
+        "symbol": "enum ProviderDetector {"
+      },
+      {
+        "line": 206,
+        "symbol": "static func detectChat(key: String) async -> ChatProfile? {"
+      },
+      {
+        "line": 223,
+        "symbol": "static func detectImage(key: String) async -> ImageProfile? {"
+      },
+      {
+        "line": 240,
+        "symbol": "static func selfCheck(chatKey: String?, imageKey: String?) async -> String {"
+      },
+      {
+        "line": 263,
+        "symbol": "private static func isUUIDLike(_ s: String) -> Bool {"
+      },
+      {
+        "line": 268,
+        "symbol": "private static func probeModelsEndpoint(baseURL: String, key: String) async -> Bool {"
+      },
+      {
+        "line": 278,
+        "symbol": "private static func probeImageEndpoint(baseURL: String, key: String) async -> Bool {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/ResearchSearchService.swift",
+    "sha256": "13dc5c659d0dcfd4e489740f3b1707797b7e26332a630146627d9c3b7d6641bd",
+    "symbols": [
+      {
+        "line": 5,
+        "symbol": "func search(query: String, count: Int, recency: SearchRecency) async -> [SearchHit]"
+      },
+      {
+        "line": 6,
+        "symbol": "func page(url: String, limit: Int) async -> String"
+      },
+      {
+        "line": 8,
+        "symbol": "struct DefaultResearchSearch: ResearchSearching {"
+      },
+      {
+        "line": 9,
+        "symbol": "func search(query: String, count: Int, recency: SearchRecency) async -> [SearchHit] {"
+      },
+      {
+        "line": 12,
+        "symbol": "func page(url: String, limit: Int) async -> String { await WebSearchService.fetchPageText(url: url, limit: limit) }"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/WebEvidenceExtractor.swift",
+    "sha256": "7b01fcffcc27aa7de2c70a0a8f02c3df4310bad08faabf5b4847b9f6d209d105",
+    "symbols": [
+      {
+        "line": 5,
+        "symbol": "enum WebEvidenceExtractor {"
+      },
+      {
+        "line": 6,
+        "symbol": "struct LinkRecord { let title: String; let href: String; let snippet: String }"
+      },
+      {
+        "line": 7,
+        "symbol": "static func links(html: String) -> [LinkRecord] {"
+      },
+      {
+        "line": 30,
+        "symbol": "private static func destination(_ link: Element) throws -> String {"
+      },
+      {
+        "line": 36,
+        "symbol": "static func contentHTML(_ html: String) -> String {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Services/WebSearchService.swift",
+    "sha256": "8e0a0bf21f99e0dc96ade7cd73ffbfaa2440cb7bf1d83645ed6c65977689eb31",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "enum WebSearchEngine: String, CaseIterable, Identifiable {"
+      },
+      {
+        "line": 29,
+        "symbol": "struct SearchHit: Sendable {"
+      },
+      {
+        "line": 37,
+        "symbol": "enum WebSearchService {"
+      },
+      {
+        "line": 65,
+        "symbol": "static func search(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {"
+      },
+      {
+        "line": 70,
+        "symbol": "func score(_ hit: SearchHit) -> Int {"
+      },
+      {
+        "line": 80,
+        "symbol": "private static func searchUnranked(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {"
+      },
+      {
+        "line": 115,
+        "symbol": "private static func withFallback(_ q: String, count: Int,"
+      },
+      {
+        "line": 123,
+        "symbol": "private static func fusedSearch(_ q: String, count: Int, skipEngine: WebSearchEngine? = nil) async -> [SearchHit] {"
+      },
+      {
+        "line": 174,
+        "symbol": "private static func host(of url: String) -> String {"
+      },
+      {
+        "line": 184,
+        "symbol": "static func fetchPageText(url: String, limit: Int = 4000) async -> String {"
+      },
+      {
+        "line": 227,
+        "symbol": "private static func redirectTarget(fromHTML html: String, base: URL) -> URL? {"
+      },
+      {
+        "line": 242,
+        "symbol": "private static func resolvedURL(_ raw: String, base: URL) -> URL? {"
+      },
+      {
+        "line": 251,
+        "symbol": "static func extractTables(fromHTML html: String, budget: Int = 3000) -> [String] {"
+      },
+      {
+        "line": 279,
+        "symbol": "private static func looksLikeCode(_ row: String) -> Bool {"
+      },
+      {
+        "line": 291,
+        "symbol": "private static func extractRows(fromTableInner inner: String) -> [String]? {"
+      },
+      {
+        "line": 322,
+        "symbol": "private static func searchSogou(_ query: String, count: Int) async -> [SearchHit] {"
+      },
+      {
+        "line": 330,
+        "symbol": "private static func search360(_ query: String, count: Int) async -> [SearchHit] {"
+      },
+      {
+        "line": 338,
+        "symbol": "private static func searchBaidu(_ query: String, count: Int) async -> [SearchHit] {"
+      },
+      {
+        "line": 346,
+        "symbol": "private static func searchBing(_ query: String, count: Int) async -> [SearchHit] {"
+      },
+      {
+        "line": 355,
+        "symbol": "private static func searchBingRSS(_ query: String, count: Int) async -> [SearchHit]? {"
+      },
+      {
+        "line": 367,
+        "symbol": "private static func parseRSS(_ xml: String, count: Int) -> [SearchHit] {"
+      },
+      {
+        "line": 389,
+        "symbol": "private static func tagValue(_ tag: String, in xml: String) -> String? {"
+      },
+      {
+        "line": 394,
+        "symbol": "private static func stripCDATA(_ s: String) -> String {"
+      },
+      {
+        "line": 398,
+        "symbol": "private static func decodeEntities(_ s: String) -> String {"
+      },
+      {
+        "line": 413,
+        "symbol": "private static func searchHTML(engine: WebSearchEngine, host: String, path: String, count: Int) async -> [SearchHit] {"
+      },
+      {
+        "line": 420,
+        "symbol": "private static func parseLinks(html: String, engine: WebSearchEngine, count: Int) -> [SearchHit] {"
+      },
+      {
+        "line": 441,
+        "symbol": "static func secureSearchLink(_ raw: String) -> String {"
+      },
+      {
+        "line": 453,
+        "symbol": "private static func isNoiseTitle(_ title: String) -> Bool {"
+      },
+      {
+        "line": 467,
+        "symbol": "private static func isResultLink(_ href: String, engine: WebSearchEngine) -> Bool {"
+      },
+      {
+        "line": 495,
+        "symbol": "private static func absolutize(_ href: String, engine: WebSearchEngine) -> String {"
+      },
+      {
+        "line": 508,
+        "symbol": "private static func firstLongLine(_ text: String) -> String {"
+      },
+      {
+        "line": 521,
+        "symbol": "private static func findDate(in text: String) -> String? {"
+      },
+      {
+        "line": 533,
+        "symbol": "private static func percentEncode(_ s: String) -> String? {"
+      },
+      {
+        "line": 539,
+        "symbol": "private static func searchTavily(_ query: String, count: Int, recency: SearchRecency = .any) async -> [SearchHit] {"
+      },
+      {
+        "line": 566,
+        "symbol": "private static func searchBocha(_ query: String, count: Int, recency: SearchRecency = .any) async -> [SearchHit] {"
+      },
+      {
+        "line": 594,
+        "symbol": "private static func rawGet(_ url: URL, timeout: TimeInterval) async -> Data? {"
+      },
+      {
+        "line": 622,
+        "symbol": "private static func decodeHTML(_ data: Data) -> String? {"
+      },
+      {
+        "line": 631,
+        "symbol": "private static func lossyDecode(_ data: Data, encoding: String.Encoding) -> String? {"
+      },
+      {
+        "line": 655,
+        "symbol": "private static func firstMatch(_ text: String, pattern: String) -> String? {"
+      },
+      {
+        "line": 671,
+        "symbol": "private static func firstWholeMatch(_ text: String, pattern: String) -> String? {"
+      },
+      {
+        "line": 686,
+        "symbol": "static func plainText(fromHTML html: String) -> String {"
+      },
+      {
+        "line": 715,
+        "symbol": "static func mainBody(fromText text: String) -> String {"
+      },
+      {
+        "line": 737,
+        "symbol": "private static func lineScore(_ line: String) -> Int {"
+      },
+      {
+        "line": 751,
+        "symbol": "private static func stripScripts(_ html: String) -> String {"
+      },
+      {
+        "line": 762,
+        "symbol": "static func format(hits: [SearchHit], pages: [(title: String, url: String, text: String)], sourceIDs: [Int] = []) -> String {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/ViewModels/ChatViewModel.swift",
+    "sha256": "c21a7e13cb0b0bb59bdeed902a5ea2f6411f36bc13a57fb570f203e834ce6197",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "private struct SearchOutcome: Sendable {"
+      },
+      {
+        "line": 18,
+        "symbol": "final class ChatViewModel: ObservableObject {"
+      },
+      {
+        "line": 98,
+        "symbol": "func attach(urls: [URL]) {"
+      },
+      {
+        "line": 124,
+        "symbol": "func attach(images: [UIImage]) {"
+      },
+      {
+        "line": 149,
+        "symbol": "func removeAttachment(_ file: StoredFile) {"
+      },
+      {
+        "line": 153,
+        "symbol": "func files(for message: Message) -> [StoredFile] {"
+      },
+      {
+        "line": 164,
+        "symbol": "private func ensureFileCache() {"
+      },
+      {
+        "line": 172,
+        "symbol": "private func invalidateFileCache() {"
+      },
+      {
+        "line": 177,
+        "symbol": "private func storedFile(id: String) -> StoredFile? {"
+      },
+      {
+        "line": 187,
+        "symbol": "private func ensureConversation() throws -> Conversation {"
+      },
+      {
+        "line": 197,
+        "symbol": "func send() {"
+      },
+      {
+        "line": 252,
+        "symbol": "func retryReply() {"
+      },
+      {
+        "line": 281,
+        "symbol": "func stop() {"
+      },
+      {
+        "line": 292,
+        "symbol": "func clearConversation() {"
+      },
+      {
+        "line": 302,
+        "symbol": "private func runLoop(userText: String, attachments: [StoredFile], conv: Conversation,"
+      },
+      {
+        "line": 665,
+        "symbol": "nonisolated private static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {"
+      },
+      {
+        "line": 670,
+        "symbol": "nonisolated private static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String, provider: any ResearchSearching) async -> SearchOutcome {"
+      },
+      {
+        "line": 723,
+        "symbol": "private func buildAPIMessages() -> [[String: Any]] {"
+      },
+      {
+        "line": 793,
+        "symbol": "func exportConversation(format: DocumentFormat) async -> String {"
+      },
+      {
+        "line": 825,
+        "symbol": "static func timestamp() -> String {"
+      },
+      {
+        "line": 834,
+        "symbol": "final class StreamingReplyBuffer: ObservableObject {"
+      },
+      {
+        "line": 840,
+        "symbol": "func ocrFriendlyJPEG() -> Data? {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/ChatRenderingFixtureView.swift",
+    "sha256": "dfbe9bb177fc6dcdbc54f74bd2e0d029c304cabc9ca4d86c183c5f97fdaea3a3",
+    "symbols": [
+      {
+        "line": 5,
+        "symbol": "struct ChatRenderingFixtureView: View {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/ChatView.swift",
+    "sha256": "c4b5400217414e84e0f16615d7c02033018173235e5b521dfe4d857549155924",
+    "symbols": [
+      {
+        "line": 8,
+        "symbol": "struct ChatContainerView: View {"
+      },
+      {
+        "line": 24,
+        "symbol": "final class ViewModelHolder: ObservableObject {"
+      },
+      {
+        "line": 106,
+        "symbol": "struct ExpertBanner: View {"
+      },
+      {
+        "line": 142,
+        "symbol": "struct ChatView: View {"
+      },
+      {
+        "line": 146,
+        "symbol": "private final class ScrollClock { var lastTime: TimeInterval = 0 }"
+      },
+      {
+        "line": 245,
+        "symbol": "private struct StreamingMessageRow: View {"
+      },
+      {
+        "line": 256,
+        "symbol": "struct EmptyStateView: View {"
+      },
+      {
+        "line": 311,
+        "symbol": "private enum TaskOption: String, Identifiable {"
+      },
+      {
+        "line": 315,
+        "symbol": "private struct TaskControls: View {"
+      },
+      {
+        "line": 346,
+        "symbol": "private struct TaskOptionsSheet: View {"
+      },
+      {
+        "line": 390,
+        "symbol": "private func row(_ title: String, selected: Bool) -> some View {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/ExpertSkillSheet.swift",
+    "sha256": "3c15b6740bbc51b0876ad230462008b8748aa09342c853a06de8af18e09c7ef6",
+    "symbols": [
+      {
+        "line": 3,
+        "symbol": "struct ExpertSkillSheet: View {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/InputBar.swift",
+    "sha256": "1b55c02407c4a727cd61f08c0374075920e0ced6cbefc88f20b8a729aad8ace2",
+    "symbols": [
+      {
+        "line": 7,
+        "symbol": "struct InputBar: View {"
+      },
+      {
+        "line": 181,
+        "symbol": "struct AttachmentChip: View {"
+      },
+      {
+        "line": 214,
+        "symbol": "struct CameraPicker: UIViewControllerRepresentable {"
+      },
+      {
+        "line": 218,
+        "symbol": "func makeUIViewController(context: Context) -> UIImagePickerController {"
+      },
+      {
+        "line": 225,
+        "symbol": "func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}"
+      },
+      {
+        "line": 227,
+        "symbol": "func makeCoordinator() -> Coordinator { Coordinator(self) }"
+      },
+      {
+        "line": 229,
+        "symbol": "final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {"
+      },
+      {
+        "line": 233,
+        "symbol": "func imagePickerController(_ picker: UIImagePickerController,"
+      },
+      {
+        "line": 241,
+        "symbol": "func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/MainView.swift",
+    "sha256": "319e70a50abd442bc0b5497a2c3663c51d1a4a1a31799079a566b8788e1eefda",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "struct MainView: View {"
+      },
+      {
+        "line": 119,
+        "symbol": "private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false) {"
+      },
+      {
+        "line": 129,
+        "symbol": "private func openExpert(_ expert: Expert) {"
+      },
+      {
+        "line": 142,
+        "symbol": "private func delete(_ conv: Conversation) {"
+      },
+      {
+        "line": 150,
+        "symbol": "private func ensureProvidersDetected() {"
+      },
+      {
+        "line": 175,
+        "symbol": "struct SidebarView: View {"
+      },
+      {
+        "line": 340,
+        "symbol": "private func delete(_ conv: Conversation) {"
+      },
+      {
+        "line": 347,
+        "symbol": "private func registerTap() {"
+      },
+      {
+        "line": 359,
+        "symbol": "struct ExpertRow: View {"
+      },
+      {
+        "line": 381,
+        "symbol": "struct ConversationRow: View {"
+      },
+      {
+        "line": 424,
+        "symbol": "struct LiquidGlassButton: View {"
+      },
+      {
+        "line": 467,
+        "symbol": "struct WelcomeView: View {"
+      },
+      {
+        "line": 513,
+        "symbol": "private func taskCard(_ title: String, symbol: String, detail: String, expert: Expert, prompt: String, id: String) -> some View {"
+      },
+      {
+        "line": 528,
+        "symbol": "struct NewChatSheet: View {"
+      },
+      {
+        "line": 645,
+        "symbol": "private func create(expert: Expert) {"
+      },
+      {
+        "line": 655,
+        "symbol": "struct HiddenPinGate: View {"
+      },
+      {
+        "line": 695,
+        "symbol": "private func check() {"
+      }
+    ]
+  },
+  {
+    "file": "BossAI/Views/MessageRow.swift",
+    "sha256": "5d1b66115c3bc4c9d614d9ceff42acbf42a9b365b8541276192d4be30e6182c6",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "struct MessageRow: View {"
+      },
+      {
+        "line": 81,
+        "symbol": "struct FilePreviewSheet: View {"
+      },
+      {
+        "line": 117,
+        "symbol": "private struct AssistantAnswerView: View, Equatable {"
+      },
+      {
+        "line": 123,
+        "symbol": "static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text && lhs.sourcesJSON == rhs.sourcesJSON && lhs.streaming == rhs.streaming }"
+      },
+      {
+        "line": 144,
+        "symbol": "struct CitationSourcesView: View {"
+      },
+      {
+        "line": 179,
+        "symbol": "private struct CitationSourceRow: View {"
+      },
+      {
+        "line": 194,
+        "symbol": "private struct MessageImageView: View, Equatable {"
+      },
+      {
+        "line": 198,
+        "symbol": "static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }"
+      },
+      {
+        "line": 220,
+        "symbol": "actor ImageThumbnailWorker {"
+      },
+      {
+        "line": 222,
+        "symbol": "func thumbnail(_ data: Data) -> CGImage? {"
+      }
+    ]
+  },
+  {
+    "file": "Tests/BossAIExpertCoreTests/ReliabilityCoreTests.swift",
+    "sha256": "4f7a29bf34ae26a0dd9a7824493f789a206bd271caf89755d7f904850602ac7b",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "final class ReliabilityCoreTests: XCTestCase {"
+      },
+      {
+        "line": 5,
+        "symbol": "func testSSEWithoutSpace() throws {"
+      },
+      {
+        "line": 10,
+        "symbol": "func testSSEMultilineAndComments() throws {"
+      },
+      {
+        "line": 19,
+        "symbol": "func testSSEOversizedEventRejected() throws {"
+      },
+      {
+        "line": 23,
+        "symbol": "func testCitationsStayStableAcrossSearches() {"
+      },
+      {
+        "line": 31,
+        "symbol": "func testAllCitationsRemainVisible() {"
+      },
+      {
+        "line": 36,
+        "symbol": "func testRecencyWindowUsesUTCDate() {"
+      },
+      {
+        "line": 43,
+        "symbol": "func testUnsafeFileLeavesRejected() {"
+      },
+      {
+        "line": 47,
+        "symbol": "func testMarkdownEscapedPipesAndEmptyColumns() {"
+      },
+      {
+        "line": 50,
+        "symbol": "func testDashInsideDataIsNotSeparator() {"
+      },
+      {
+        "line": 54,
+        "symbol": "func testSheetNameIsOfficeCompatible() {"
+      },
+      {
+        "line": 58,
+        "symbol": "func testRichSharedStringsRetainIndices() {"
+      },
+      {
+        "line": 62,
+        "symbol": "func testSparseColumnsDoNotShiftAndInlineTextSurvives() {"
+      },
+      {
+        "line": 66,
+        "symbol": "func testInvalidSharedIndexDoesNotInventValue() {"
+      },
+      {
+        "line": 70,
+        "symbol": "func testMalformedXMLFailsClosed() {"
+      },
+      {
+        "line": 73,
+        "symbol": "func testLocalEvidenceToolIsPermitted() throws {"
+      },
+      {
+        "line": 76,
+        "symbol": "func testSSEBatchPerformance() {"
+      }
+    ]
+  },
+  {
+    "file": "Tests/BossAIExpertCoreTests/ResearchCoreTests.swift",
+    "sha256": "bf4f1deea8a2ab5a116a3a302a87af27e4cc5154f002233449111b566855e1bd",
+    "symbols": [
+      {
+        "line": 4,
+        "symbol": "final class ResearchCoreTests: XCTestCase {"
+      },
+      {
+        "line": 5,
+        "symbol": "func testLatestAvailableIsNotLimitedToLastThirtyDays() {"
+      },
+      {
+        "line": 10,
+        "symbol": "func testQueryDeduplicationNormalizesWhitespaceAndCase() {"
+      },
+      {
+        "line": 15,
+        "symbol": "func testRelevantEvidenceOutranksUnrelatedDatedAuthorityPage() {"
+      },
+      {
+        "line": 20,
+        "symbol": "func testAuthorityDomainCannotBeSpoofedAndRumorIsPenalized() {"
+      },
+      {
+        "line": 28,
+        "symbol": "func testEvidenceBudgetStopsDuplicateAndExcessWorkAndMarksTruncation() {"
+      },
+      {
+        "line": 37,
+        "symbol": "func testModesHaveDifferentEvidenceContractsAndNeverDeleteRequestedFields() {"
+      }
+    ]
+  },
+  {
+    "file": "Tests/BossAIUITests/WorkbenchUITests.swift",
+    "sha256": "be039c257b32fd18ac2d5020bdecf97b975a1d2f53308a67bb29d6bef4600617",
+    "symbols": [
+      {
+        "line": 3,
+        "symbol": "final class AppWorkbenchUITests: XCTestCase {"
+      },
+      {
+        "line": 10,
+        "symbol": "private func launch(_ mode: String = \"workbench\", theme: String = \"blue\") -> XCUIApplication {"
+      },
+      {
+        "line": 14,
+        "symbol": "private func evidence(_ app: XCUIApplication, _ name: String) {"
+      },
+      {
+        "line": 19,
+        "symbol": "func testWorkbenchCardCreatesDraftWithoutSendingAndModesAreSelectable() {"
+      },
+      {
+        "line": 37,
+        "symbol": "func testExpertStarterFillsUsefulContextAndTaskButtonsRemainReachable() {"
+      },
+      {
+        "line": 51,
+        "symbol": "func testGoldWorkbenchSupportsLandscapeAndUsesProductionLayout() {"
+      },
+      {
+        "line": 60,
+        "symbol": "func testFullAnswerCanBeCopiedWithoutFoldingOrHidingSources() {"
+      }
+    ]
+  },
+  {
+    "file": "Tests/BossAIiOSTests/ResearchPipelineTests.swift",
+    "sha256": "f802ffbb1caea15f91acd2b2f019f115622cf336ec23e0b83025ad85ac92248b",
+    "symbols": [
+      {
+        "line": 6,
+        "symbol": "final class ResearchPipelineTests: XCTestCase {"
+      },
+      {
+        "line": 7,
+        "symbol": "private func stream(_ delta: [String: Any], finish: String) throws -> Data {"
+      },
+      {
+        "line": 11,
+        "symbol": "private func toolFrame(query: String, duplicate: Bool = false) throws -> Data {"
+      },
+      {
+        "line": 18,
+        "symbol": "private func chat(_ responses: [Data], provider: String = \"fixture\") -> ChatService {"
+      },
+      {
+        "line": 24,
+        "symbol": "@MainActor private func vm(chat: ChatService, search: FakeResearchSearch) throws -> ChatViewModel {"
+      },
+      {
+        "line": 28,
+        "symbol": "@MainActor private func finish(_ vm: ChatViewModel) async throws {"
+      },
+      {
+        "line": 33,
+        "symbol": "@MainActor func testToolRoundNotesAndReasoningAreNotSavedAsAnswerAndDuplicateQueriesRunOnce() async throws {"
+      },
+      {
+        "line": 49,
+        "symbol": "@MainActor func testForcedOnlineResearchRunsBeforeModelWithoutModelToolChoice() async throws {"
+      },
+      {
+        "line": 58,
+        "symbol": "@MainActor func testLocalModeDoesNotExposeOrExecuteWebSearchEvenIfModelCallsIt() async throws {"
+      },
+      {
+        "line": 70,
+        "symbol": "@MainActor func testSameResearchContractWorksAfterChangingProviderAndModel() async throws {"
+      },
+      {
+        "line": 83,
+        "symbol": "func testDOMResultsDoNotStealOtherResultSnippetsAndSupportSingleQuotes() {"
+      },
+      {
+        "line": 89,
+        "symbol": "func testDOMMainContentRetainsTablesAndRemovesNavigationAndScripts() {"
+      },
+      {
+        "line": 96,
+        "symbol": "func testDOMFallbackDoesNotInventSnippet() {"
+      },
+      {
+        "line": 100,
+        "symbol": "func testProviderWireParametersStayInAdapterAndDoNotLeak() {"
+      },
+      {
+        "line": 110,
+        "symbol": "func test360ListContainerUsesOriginalURLAndKeepsItsOwnSnippet() {"
+      },
+      {
+        "line": 116,
+        "symbol": "func testInvalidOriginalURLDoesNotReplaceActualLink() {"
+      },
+      {
+        "line": 120,
+        "symbol": "func testKnownHTTPRelayUsesHTTPSWithoutChangingQueryOrRelaxingOtherHosts() {"
+      },
+      {
+        "line": 127,
+        "symbol": "func testDOMEvidenceExtractionBenchmarkWithOneHundredResults() {"
+      },
+      {
+        "line": 133,
+        "symbol": "func testCaptureRealNativeSearchDiagnosticsAndVerifyReturnedLinkContract() async throws {"
+      },
+      {
+        "line": 157,
+        "symbol": "func testMITNoticeIsIncludedInApplicationBundle() throws {"
+      },
+      {
+        "line": 162,
+        "symbol": "func testWhiteExpertBannerLabelsHaveReadableContrastInEveryTheme() {"
+      },
+      {
+        "line": 166,
+        "symbol": "func linear(_ value: CGFloat) -> Double { let x = Double(value); return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }"
+      },
+      {
+        "line": 172,
+        "symbol": "private actor FakeResearchSearch: ResearchSearching {"
+      },
+      {
+        "line": 174,
+        "symbol": "func search(query: String, count: Int, recency: SearchRecency) async -> [SearchHit] {"
+      },
+      {
+        "line": 178,
+        "symbol": "func page(url: String, limit: Int) async -> String { String(repeating: \"iPhone battery synthetic data for deterministic tests. \", count: 10) }"
+      },
+      {
+        "line": 180,
+        "symbol": "private final class ResearchChatProtocol: URLProtocol {"
+      },
+      {
+        "line": 185,
+        "symbol": "static func configure(_ data: [Data]) { lock.lock(); defer { lock.unlock() }; responses = data; bodies = [] }"
+      }
+    ]
+  },
+  {
+    "file": "project.yml",
+    "sha256": "cb5fe653e8c715b415ffe9c655adad81cee76033989ef7319dc59ec30529689b",
+    "symbols": []
+  },
+  {
+    "file": ".github/workflows/expert-quality.yml",
+    "sha256": "3822f190eae0fa6d6ac0ef6275d1069beddfa56f91e2ffeb134251a173be08e7",
+    "symbols": []
+  }
+]

@@ -1,0 +1,128 @@
+{
+  "samples" : [
+    {
+      "authority_candidates" : 6,
+      "candidate_count" : 6,
+      "first_page_characters" : 0,
+      "first_page_excerpt" : "",
+      "first_page_seconds" : 0.70935795200011853,
+      "hits" : [
+        {
+          "date_unverified" : "2025年8月6日",
+          "title" : "iPhone 17 - 技术规格 - 官方Apple 支持 (中国)",
+          "url" : "https:\/\/support.apple.com\/zh-cn\/125089"
+        },
+        {
+          "date_unverified" : "2025年8月6日",
+          "title" : "iPhone 17 Pro - 技术规格 - 官方Apple 支持 (中国)",
+          "url" : "https:\/\/support.apple.com\/zh-cn\/125090"
+        },
+        {
+          "date_unverified" : "2026年9月20日",
+          "title" : "iPhone 6s - 技术规格 - 官方Apple 支持 (中国)",
+          "url" : "https:\/\/support.apple.com\/zh-cn\/111952"
+        },
+        {
+          "date_unverified" : "2025年8月6日",
+          "title" : "iPhone 18 Pro Max - 技术规格 - 官方Apple 支持 (中国)",
+          "url" : "https:\/\/support.apple.com\/zh-cn\/148591"
+        },
+        {
+          "date_unverified" : "2024年2月21日",
+          "title" : "iPhone 11 - 技术规格(中国)",
+          "url" : "https:\/\/support.apple.com\/kb\/SP804?locale=zh_CN&viewlocale=zh_CN"
+        },
+        {
+          "date_unverified" : "2025年8月6日",
+          "title" : "iPhone 17e - 技术规格 - 官方Apple 支持 (中国)",
+          "url" : "https:\/\/support.apple.com\/zh-cn\/126470"
+        }
+      ],
+      "query" : "iPhone 官方 技术规格 site:apple.com",
+      "search_seconds" : 2.6169714640000166
+    },
+    {
+      "authority_candidates" : 6,
+      "candidate_count" : 6,
+      "first_page_characters" : 3500,
+      "first_page_excerpt" : "智慧屏\n耳机音箱\n配件\n查找零售店\n热门搜索\n推荐搜索\n请键入更多关键词\n• Africa\n• Asia Pacific\n• Europe\n• Latin America\n• Middle East\n• North America\n• Global\nfalse\nHUAWEI Mate 90 Pro Max\n踏 光 向 前\n了解更多\n购买\n非凡大师\",\"pro",
+      "first_page_seconds" : 0.82626497199998994,
+      "hits" : [
+        {
+          "date_unverified" : "2026年9月20日",
+          "title" : "华为手机 - 华为官网",
+          "url" : "https:\/\/consumer.huawei.com\/cn\/phones\/"
+        },
+        {
+          "date_unverified" : "2026年9月20日",
+          "title" : "HUAWEI Mate X6 规格参数 - 华为官网",
+          "url" : "https:\/\/consumer.huawei.com\/cn\/phones\/mate-x6\/specs\/"
+        },
+        {
+          "date_unverified" : "2024年7月11日",
+          "title" : "HUAWEI P40 规格参数- 华为官网",
+          "url" : "https:\/\/consumer.huawei.com\/cn\/phones\/p40\/specs\/"
+        },
+        {
+          "date_unverified" : "2021年6月21日",
+          "title" : "华为畅享9 规格参数- 华为官网",
+          "url" : "https:\/\/consumer.huawei.com\/cn\/phones\/changxiang9\/specs\/"
+        },
+        {
+          "date_unverified" : "周六, 20 2月 2021 18:48:00 GMT",
+          "title" : "华为 - 构建万物互联的智能世界 - Huawei",
+          "url" : "https:\/\/www.huawei.com\/cn\/"
+        },
+        {
+          "date_unverified" : "2024年11月21日",
+          "title" : "HUAWEI Mate 30 規格參數 - 華為官網",
+          "url" : "https:\/\/consumer.huawei.com\/hk\/phones\/mate30\/specs\/"
+        }
+      ],
+      "query" : "华为 官方 手机 参数 site:huawei.com",
+      "search_seconds" : 1.745225112000071
+    },
+    {
+      "authority_candidates" : 6,
+      "candidate_count" : 6,
+      "first_page_characters" : 2776,
+      "first_page_excerpt" : "Xiaomi 12S Ultra\n5999元起\nXiaomi 12S Pro\n4699元起\nXiaomi 12S\n3999元起\nXiaomi 12 Pro 天玑版\n3999元起\n•  Redmi手机\nRedmi Note 12 5G\n1199元起\nRedmi Note 12 Pro\n1699元起\nRedmi Note 12 Pro+\n2199元起\nRedmi",
+      "first_page_seconds" : 1.4224598109999533,
+      "hits" : [
+        {
+          "date_unverified" : "4天前",
+          "title" : "小米手机配置参数对比 - 小米商城",
+          "url" : "https:\/\/www.mi.com\/compare"
+        },
+        {
+          "date_unverified" : "2026年9月21日",
+          "title" : "小米手机4 配置参数 - 小米商城",
+          "url" : "https:\/\/www.mi.com\/mi4\/params"
+        },
+        {
+          "date_unverified" : "2026年9月20日",
+          "title" : "小米CC9 参数-小米商城",
+          "url" : "https:\/\/www.mi.com\/micc9\/specs"
+        },
+        {
+          "date_unverified" : "2026年9月21日",
+          "title" : "小米Note 3 参数- 小米商城",
+          "url" : "https:\/\/www.mi.com\/minote3\/specs"
+        },
+        {
+          "date_unverified" : "2026年9月21日",
+          "title" : "小米手机4S 参数- 小米商城",
+          "url" : "https:\/\/www.mi.com\/mi4s\/specs"
+        },
+        {
+          "date_unverified" : "2019年8月22日",
+          "title" : "小米9 参数- 小米商城",
+          "url" : "https:\/\/www.mi.com\/mi9\/specs\/"
+        }
+      ],
+      "query" : "小米 官方 手机 参数 site:mi.com",
+      "search_seconds" : 1.8370664910000869
+    }
+  ],
+  "scope" : "Actual App search and DOM code on iPad simulator; 3 single samples; facts and dates need human review"
+}

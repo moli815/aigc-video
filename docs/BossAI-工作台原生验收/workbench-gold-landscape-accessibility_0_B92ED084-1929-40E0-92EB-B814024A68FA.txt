@@ -1,0 +1,93 @@
+Attributes: Application, 0x10ff58050, pid: 27202, label: 'BossAI'
+Element subtree:
+ →Application, 0x10ff58050, pid: 27202, label: 'BossAI'
+    Window (Main), 0x10ff58e70, {{0.0, 0.0}, {1210.0, 834.0}}
+      Other, 0x10ff59950, {{0.0, 0.0}, {1210.0, 834.0}}
+        Other, 0x10ff59530, {{0.0, 0.0}, {1210.0, 834.0}}
+          Other, 0x10ff57d30, {{0.0, 0.0}, {1210.0, 834.0}}
+            Other, 0x10ff59d70, {{0.0, 0.0}, {1210.0, 834.0}}
+              Other, 0x10ff59110, {{0.0, 0.0}, {1210.0, 834.0}}
+                Other, 0x10ff58a50, {{0.0, 0.0}, {1210.0, 834.0}}
+                  Other, 0x10ff58410, {{0.0, 0.0}, {1210.0, 834.0}}
+                    Other, 0x10ff50090, {{0.0, 0.0}, {1210.0, 834.0}}
+                      NavigationBar, 0x10ff4fa10, {{0.0, 24.0}, {1210.0, 50.0}}, identifier: '_TtGC7SwiftUI32NavigationStackHosting'
+                        Button, 0x10ff4f5f0, {{9.0, 27.0}, {52.5, 44.0}}, identifier: 'ToggleSidebar', label: 'Show Sidebar'
+                      Other, 0x10ff57910, {{0.0, 0.0}, {1210.0, 834.0}}
+                        Other, 0x10ff5f7d0, {{0.0, 0.0}, {1210.0, 834.0}}
+                          Other, 0x10ff5f8f0, {{0.0, 0.0}, {1210.0, 834.0}}
+                            Other, 0x10ff5b350, {{0.0, 0.0}, {1210.0, 834.0}}
+                              ScrollView, 0x10ff5b470, {{0.0, 0.0}, {1210.0, 834.0}}, identifier: 'workbench'
+                                Other, 0x10ff5b590, {{0.0, 74.0}, {1210.0, 736.0}}
+                                  StaticText, 0x10ff5b6b0, {{85.0, 109.0}, {135.5, 20.5}}, label: 'BossAI 工作台'
+                                  Button, 0x10ff5b7d0, {{1026.0, 102.0}, {101.0, 34.5}}, label: '新任务'
+                                    Image, 0x10ff5b8f0, {{1040.0, 112.0}, {14.0, 14.0}}, identifier: 'plus', label: 'Add'
+                                    StaticText, 0x10ff5ba10, {{1026.0, 102.0}, {101.0, 34.5}}, label: '新任务'
+                                  StaticText, 0x10ff5bb30, {{83.0, 162.5}, {387.0, 41.0}}, label: '把问题变成可以行动的答案'
+                                  StaticText, 0x10ff5bc50, {{83.0, 213.5}, {287.5, 24.0}}, label: '提出任务，核对证据，带走成果。'
+                                  Other, 0x10ff5bd70, {{82.7, 263.1}, {780.2, 156.7}}
+                                    Button, 0x10ff5be90, {{82.7, 263.1}, {251.2, 156.7}}, identifier: 'task-research', label: '查最新信息, 产品、竞品、行业动态与价格'
+                                      Image, 0x10ff5bfb0, {{105.0, 297.5}, {22.0, 22.0}}, identifier: 'globe', label: 'Globe'
+                                      StaticText, 0x10ff5c0d0, {{103.0, 333.0}, {96.0, 24.0}}, label: '查最新信息'
+                                      StaticText, 0x10ff5c1f0, {{103.0, 369.0}, {193.5, 18.0}}, label: '产品、竞品、行业动态与价格'
+                                    Button, 0x10ff5c310, {{347.1, 263.1}, {251.2, 156.7}}, identifier: 'task-decision', label: '做一项决策, 方案比较、投入产出与行动步骤'
+                                      Image, 0x10ff5c430, {{370.0, 298.5}, {24.0, 20.0}}, identifier: 'chart.bar.xaxis', label: 'chart.bar.xaxis'
+                                      StaticText, 0x10ff5c550, {{367.5, 332.0}, {96.0, 24.0}}, label: '做一项决策'
+                                      StaticText, 0x10ff5c670, {{367.5, 368.0}, {208.5, 18.0}}, label: '方案比较、投入产出与行动步骤'
+                                    Button, 0x10ff5c790, {{611.7, 263.1}, {251.2, 156.7}}, identifier: 'task-documents', label: '分析现有资料, 上传资料、提炼重点与待确认项'
+                                      Image, 0x10ff5c8b0, {{634.5, 295.5}, {21.5, 26.5}}, identifier: 'doc.text.magnifyingglass', label: 'Search Document'
+                                      StaticText, 0x10ff5c9d0, {{632.0, 335.2}, {115.0, 24.0}}, label: '分析现有资料'
+                                      StaticText, 0x10ff5caf0, {{632.0, 371.2}, {208.5, 18.0}}, label: '上传资料、提炼重点与待确认项'
+                                  StaticText, 0x10ff5cc10, {{83.0, 445.5}, {84.0, 26.5}}, label: '专家协作'
+                                  StaticText, 0x10ff5cd30, {{83.0, 486.0}, {402.0, 18.0}}, label: '选择任务方向；计算、检索与交付工具按实际技能配置执行。'
+                                  Other, 0x10ff5ce50, {{83.0, 518.0}, {1044.0, 264.0}}
+                                    Button, 0x10ff5cf70, {{83.0, 518.0}, {252.0, 80.0}}, identifier: 'workbench-expert-decision', label: '商业决策, 市场洞察 · 数据分析 · 科学决策'
+                                      Image, 0x10ff5d090, {{100.0, 538.5}, {18.0, 15.5}}, identifier: 'chart.line.uptrend.xyaxis', label: 'Chart Line'
+                                      StaticText, 0x10ff5d1b0, {{133.0, 537.5}, {67.5, 20.5}}, label: '商业决策'
+                                      StaticText, 0x10ff5d2d0, {{133.0, 564.0}, {164.0, 14.5}}, label: '市场洞察 · 数据分析 · 科学决策'
+                                    Button, 0x10ff5d3f0, {{347.0, 518.0}, {252.0, 80.0}}, identifier: 'workbench-expert-strategy', label: '战略定位, 精准定位 · 差异化竞争 · 长期规划'
+                                      Image, 0x10ff5d510, {{363.0, 538.5}, {20.5, 20.5}}, identifier: 'scope', label: 'scope'
+                                      StaticText, 0x10ff5d630, {{397.0, 537.5}, {67.5, 20.5}}, label: '战略定位'
+                                      StaticText, 0x10ff5d750, {{397.0, 564.0}, {176.0, 14.5}}, label: '精准定位 · 差异化竞争 · 长期规划'
+                                    Button, 0x10ff5d870, {{611.0, 518.0}, {252.0, 80.0}}, identifier: 'workbench-expert-marketing', label: '营销策划, 品牌策划 · 推广策略 · 客户增长'
+                                      Image, 0x10ff5d990, {{628.0, 538.5}, {18.5, 18.0}}, identifier: 'megaphone.fill', label: 'megaphone.fill'
+                                      StaticText, 0x10ff5dab0, {{661.0, 537.5}, {67.5, 20.5}}, label: '营销策划'
+                                      StaticText, 0x10ff5dbd0, {{661.0, 564.0}, {164.0, 14.5}}, label: '品牌策划 · 推广策略 · 客户增长'
+                                    Button, 0x10ff5dcf0, {{875.0, 518.0}, {252.0, 80.0}}, identifier: 'workbench-expert-traffic', label: '流量策划, 流量获取 · 渠道优化 · 转化提升'
+                                      Image, 0x10ff5de10, {{893.0, 538.5}, {16.0, 15.0}}, identifier: 'arrow.triangle.branch', label: 'Divide'
+                                      StaticText, 0x10ff5df30, {{925.0, 537.5}, {67.5, 20.5}}, label: '流量策划'
+                                      StaticText, 0x10ff5e050, {{925.0, 564.0}, {164.0, 14.5}}, label: '流量获取 · 渠道优化 · 转化提升'
+                                    Button, 0x10ff5e170, {{83.0, 610.0}, {252.0, 80.0}}, identifier: 'workbench-expert-model', label: '商业模式, 模式设计 · 价值创新 · 持续盈利'
+                                      Image, 0x10ff5e290, {{97.0, 630.5}, {24.5, 16.0}}, identifier: 'puzzlepiece.fill', label: 'puzzlepiece.fill'
+                                      StaticText, 0x10ff5e3b0, {{133.0, 629.5}, {67.5, 20.5}}, label: '商业模式'
+                                      StaticText, 0x10ff5e4d0, {{133.0, 656.0}, {164.0, 14.5}}, label: '模式设计 · 价值创新 · 持续盈利'
+                                    Button, 0x10ff5e5f0, {{347.0, 610.0}, {252.0, 80.0}}, identifier: 'workbench-expert-funding', label: '融资招商, 项目包装 · 融资路演 · 资源对接'
+                                      Image, 0x10ff5e710, {{362.0, 630.5}, {22.0, 14.0}}, identifier: 'banknote.fill', label: 'banknote.fill'
+                                      StaticText, 0x10ff5e830, {{397.0, 629.5}, {67.5, 20.5}}, label: '融资招商'
+                                      StaticText, 0x10ff5e950, {{397.0, 656.0}, {164.0, 14.5}}, label: '项目包装 · 融资路演 · 资源对接'
+                                    Button, 0x10ff5ea70, {{611.0, 610.0}, {252.0, 80.0}}, identifier: 'workbench-expert-equity', label: '股权结构, 股权设计 · 利益平衡 · 公司治理'
+                                      Image, 0x10ff5edd0, {{628.5, 630.5}, {17.0, 17.0}}, identifier: 'chart.pie.fill', label: 'Chart Pie'
+                                      StaticText, 0x10ff5eef0, {{661.0, 629.5}, {67.5, 20.5}}, label: '股权结构'
+                                      StaticText, 0x10ff5f010, {{661.0, 656.0}, {164.0, 14.5}}, label: '股权设计 · 利益平衡 · 公司治理'
+                                    Button, 0x10ff5f130, {{875.0, 610.0}, {252.0, 80.0}}, identifier: 'workbench-expert-performance', label: '薪酬绩效, 激励设计 · 绩效管理 · 团队成长'
+                                      Image, 0x10ff5f250, {{885.5, 630.5}, {31.5, 16.5}}, identifier: 'person.3.fill', label: 'person.3.fill'
+                                      StaticText, 0x10ff5f370, {{925.0, 629.5}, {67.5, 20.5}}, label: '薪酬绩效'
+                                      StaticText, 0x10ff5f490, {{925.0, 656.0}, {164.0, 14.5}}, label: '激励设计 · 绩效管理 · 团队成长'
+                                    Button, 0x10ff5fcd0, {{83.0, 702.0}, {252.0, 80.0}}, identifier: 'workbench-expert-speech', label: '顶级演讲, 演讲表达 · 影响力 · 说服力'
+                                      Image, 0x10ff5fdf0, {{103.0, 722.5}, {12.0, 18.0}}, identifier: 'mic.fill', label: 'Microphone'
+                                      StaticText, 0x10ff5ff10, {{133.0, 721.5}, {67.5, 20.5}}, label: '顶级演讲'
+                                      StaticText, 0x10ff60230, {{133.0, 748.0}, {140.0, 14.5}}, label: '演讲表达 · 影响力 · 说服力'
+                                    Button, 0x10ff60350, {{347.0, 702.0}, {252.0, 80.0}}, identifier: 'workbench-expert-legal', label: '法务风控, 法律合规 · 风险控制 · 危机管理'
+                                      Image, 0x10ff60470, {{366.0, 722.5}, {14.0, 17.0}}, identifier: 'shield.lefthalf.filled', label: 'shield.lefthalf.filled'
+                                      StaticText, 0x10ff60590, {{397.0, 721.5}, {67.5, 20.5}}, label: '法务风控'
+                                      StaticText, 0x10ff530b0, {{397.0, 748.0}, {164.0, 14.5}}, label: '法律合规 · 风险控制 · 危机管理'
+                                Other, 0x10ff531d0, {{1177.0, 74.0}, {30.0, 738.0}}, label: 'Vertical scroll bar, 2 pages', value: 0%
+                                  Other, 0x10ff532f0, {{1204.0, 350.0}, {3.0, 834.0}}
+                                Other, 0x10ff53410, {{1177.0, 74.0}, {30.0, 738.0}}, label: 'Vertical scroll bar, 2 pages', value: 0%
+                                  Other, 0x10ff53530, {{1204.0, 350.0}, {3.0, 834.0}}
+Path to element:
+ →Application, 0x10ff58050, pid: 27202, label: 'BossAI'
+Query chain:
+ →Find: Target Application 'com.bossai.app'
+  Output: {
+    Application, 0x10fe3e230, pid: 27202, label: 'BossAI'
+  }

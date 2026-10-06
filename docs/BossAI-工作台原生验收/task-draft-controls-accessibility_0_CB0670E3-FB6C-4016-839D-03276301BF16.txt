@@ -1,0 +1,70 @@
+Attributes: Application, 0x10fd60f70, pid: 27623, label: 'BossAI'
+Element subtree:
+ →Application, 0x10fd60f70, pid: 27623, label: 'BossAI'
+    Window (Main), 0x10fd637a0, {{0.0, 0.0}, {834.0, 1210.0}}
+      Other, 0x10fd61380, {{0.0, 0.0}, {834.0, 1210.0}}
+        Other, 0x10fd5f940, {{0.0, 0.0}, {834.0, 1210.0}}
+          Other, 0x10fd52a10, {{0.0, 0.0}, {834.0, 1210.0}}
+            Other, 0x10fd63380, {{0.0, 0.0}, {834.0, 1210.0}}
+              Other, 0x10fd5fee0, {{0.0, 0.0}, {834.0, 1210.0}}
+                Other, 0x10fd5fa60, {{0.0, 0.0}, {834.0, 1210.0}}
+                  Other, 0x10fd5fb80, {{0.0, 0.0}, {834.0, 1210.0}}
+                    Other, 0x10fd5fca0, {{0.0, 0.0}, {834.0, 1210.0}}
+                      NavigationBar, 0x10fd5fdc0, {{0.0, 24.0}, {834.0, 50.0}}, identifier: '通用对话'
+                        Button, 0x10fd60000, {{9.0, 27.0}, {52.5, 44.0}}, identifier: 'ToggleSidebar', label: 'Show Sidebar'
+                        StaticText, 0x10fd60120, {{383.5, 39.0}, {67.5, 20.5}}, label: '通用对话'
+                        Button, 0x10fd60240, {{726.0, 27.0}, {48.0, 44.0}}, label: '身份设置'
+                        Other, 0x10fd60360, {{782.0, 31.0}, {32.0, 36.5}}, label: '导出对话'
+                          Other, 0x10fd5eb60, {{782.0, 31.0}, {32.0, 36.5}}
+                            Button, 0x10fd5ec80, {{782.0, 31.0}, {32.0, 36.5}}, label: '导出对话'
+                              Button, 0x10fd5eda0, {{782.0, 31.0}, {32.0, 36.5}}
+                                Other, 0x10fd5ac30, {{782.0, 31.0}, {32.0, 36.5}}
+                                  Image, 0x10fd5ad50, {{782.0, 31.0}, {32.0, 36.5}}, identifier: 'square.and.arrow.down', label: 'Download'
+                      Other, 0x10fd5ae70, {{0.0, 0.0}, {834.0, 1210.0}}
+                        Other, 0x10fd5af90, {{0.0, 0.0}, {834.0, 1210.0}}
+                          Other, 0x10fd5b0b0, {{0.0, 0.0}, {834.0, 1210.0}}
+                            Other, 0x10fd5b1d0, {{0.0, 0.0}, {834.0, 1210.0}}
+                              Button, 0x10fd67920, {{20.0, 80.0}, {120.5, 44.0}}, identifier: 'research-mode', label: '证据方式：仅用现有资料', value: local
+                                Image, 0x10fd67a40, {{31.0, 95.5}, {13.0, 13.0}}, identifier: 'globe', label: 'Globe'
+                                StaticText, 0x10fd67b60, {{20.0, 80.0}, {120.5, 44.0}}, label: '仅用现有资料'
+                              Button, 0x10fd67c80, {{150.5, 80.0}, {96.0, 44.0}}, identifier: 'answer-style', label: '回答深度：详细分析', value: detailed
+                                Image, 0x10fd67da0, {{162.0, 96.5}, {13.0, 11.0}}, identifier: 'text.alignleft', label: 'Align Left'
+                                StaticText, 0x10fd67ec0, {{150.5, 80.0}, {96.0, 44.0}}, label: '详细分析'
+                              ScrollView, 0x10fd67fe0, {{0.0, 130.0}, {834.0, 1329.0}}, identifier: 'chat-scroll'
+                                Other, 0x10fd68100, {{0.0, 530.0}, {834.0, 529.0}}
+                                  Other, 0x10fd68220, {{222.5, 649.0}, {349.5, 293.0}}
+                                    Image, 0x10fd68340, {{387.5, 649.0}, {62.0, 50.0}}, identifier: 'bubble.left.and.bubble.right.fill', label: 'Conversation'
+                                    StaticText, 0x10fd68460, {{375.0, 716.0}, {84.0, 26.5}}, label: '通用对话'
+                                    StaticText, 0x10fd68580, {{342.5, 756.5}, {149.0, 18.0}}, label: '什么都能聊的通用助手'
+                                    Image, 0x10fd686a0, {{222.5, 804.5}, {12.0, 12.0}}, identifier: 'wand.and.stars', label: 'wand.and.stars'
+                                    StaticText, 0x10fd687c0, {{242.5, 802.5}, {283.0, 16.0}}, label: '金字塔原理（结论先行 → 分组论证 → 逻辑递进）'
+                                    Image, 0x10fd688e0, {{230.0, 832.5}, {10.0, 10.0}}, identifier: 'globe', label: 'Globe'
+                                    StaticText, 0x10fd68a00, {{244.0, 830.5}, {22.0, 13.5}}, label: '联网'
+                                    Image, 0x10fd68b20, {{289.0, 832.0}, {13.0, 10.5}}, identifier: 'photo.on.rectangle.angled', label: 'photo.on.rectangle.angled'
+                                    StaticText, 0x10fd68c40, {{306.0, 830.5}, {22.0, 13.5}}, label: '生图'
+                                    Image, 0x10fd68d60, {{351.0, 832.0}, {8.5, 10.5}}, identifier: 'doc.text', label: 'Plain Text Document'
+                                    StaticText, 0x10fd68e80, {{363.5, 830.5}, {28.0, 13.5}}, label: 'Word'
+                                    Image, 0x10fd68fa0, {{414.5, 832.0}, {8.5, 10.5}}, identifier: 'doc.richtext', label: 'Rich Text Document'
+                                    StaticText, 0x10fd690c0, {{427.0, 830.5}, {21.5, 13.5}}, label: 'PDF'
+                                    Button, 0x10fd691e0, {{340.0, 876.0}, {154.5, 36.0}}, identifier: 'expert-starter', label: '填写任务背景'
+                                      Image, 0x10fd69300, {{355.0, 884.0}, {18.0, 18.0}}, identifier: 'square.and.pencil', label: 'Compose'
+                                      StaticText, 0x10fd69420, {{340.0, 876.0}, {154.5, 36.0}}, label: '填写任务背景'
+                                    StaticText, 0x10fd69540, {{262.0, 926.0}, {310.0, 16.0}}, label: '输入任务，或上传资料；需要实时事实时选择联网研究'
+                                Other, 0x10fd69660, {{801.0, 530.0}, {30.0, 929.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                                  Other, 0x10fd69780, {{828.0, 933.0}, {3.0, 523.0}}
+                                Other, 0x10fd698a0, {{801.0, 530.0}, {30.0, 929.0}}, label: 'Vertical scroll bar, 1 page', value: 0%
+                                  Other, 0x10fd699c0, {{828.0, 933.0}, {3.0, 523.0}}
+                              Button, 0x10fd69ae0, {{10.0, 1135.0}, {42.0, 42.0}}, identifier: 'plus', label: '添加附件'
+                              Button, 0x10fd69c00, {{58.0, 1135.0}, {42.0, 42.0}}, identifier: 'mic.fill', label: '语音输入'
+                              TextField, 0x10fd69d20, {{120.0, 1078.0}, {642.0, 88.0}}, identifier: 'task-input', value: 请核实以下最新信息。主题：
+截至日期...
+                                Other, 0x10fd69e40, {{120.0, 1133.0}, {642.0, 30.0}}, label: 'Horizontal scroll bar, 1 page', value: 0%
+                                  Other, 0x10fd69f60, {{123.0, 1160.0}, {636.0, 3.0}}
+                              Button, 0x10fd6a080, {{782.0, 1135.0}, {42.0, 42.0}}, identifier: 'arrow.up.circle.fill', label: '发送'
+Path to element:
+ →Application, 0x10fd60f70, pid: 27623, label: 'BossAI'
+Query chain:
+ →Find: Target Application 'com.bossai.app'
+  Output: {
+    Application, 0x10fd6a800, pid: 27623, label: 'BossAI'
+  }
