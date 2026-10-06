@@ -6,8 +6,13 @@ struct ExpertSkillSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { NavigationLink("打开经营计算工作台") { ExpertWorkbenchView(expert: expert) } }
                 if let capability = try? ExpertCapabilityCatalog.profile(expert.id) {
+                    if !capability.calculators.isEmpty {
+                        Section {
+                            NavigationLink("打开经营计算工作台") { ExpertWorkbenchView(expert: expert) }
+                                .accessibilityIdentifier("open-calculator-workbench")
+                        }
+                    }
                     Section("开始前需要") {
                         ForEach(capability.requiredInputs, id: \.self) { Text($0) }
                     }

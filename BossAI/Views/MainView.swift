@@ -122,6 +122,7 @@ struct MainView: View {
         selectedConversationId = nil
         // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
         containerKey = "draft-\(expert.id)~\(UUID().uuidString)"
+        columnVisibility = .detailOnly
     }
 
     /// 点专家：已有该专家的对话就打开；没有就进草稿态（发第一条消息时才落库）
@@ -135,6 +136,7 @@ struct MainView: View {
             selectedConversationId = nil
             containerKey = "draft-\(expert.id)"
         }
+        columnVisibility = .detailOnly
     }
 
     private func delete(_ conv: Conversation) {

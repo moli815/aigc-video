@@ -74,7 +74,7 @@ enum WebSearchService {
             return a == b ? lhs.offset < rhs.offset : a > b
         }
         var seen = Set<String>()
-        return ranked.map(\.element).filter { seen.insert(CitationRegistry.canonical($0.url)).inserted }
+        return Array(ranked.map(\.element).filter { seen.insert(CitationRegistry.canonical($0.url)).inserted }.prefix(bounded))
     }
 
     private static func searchUnranked(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
@@ -130,6 +130,7 @@ enum WebSearchService {
         let lists: [[SearchHit]] = [results.0, results.1, results.2, results.3]
             .map { $0.filter { !$0.title.isEmpty && !isNoiseTitle($0.title) } }
 
+        let candidateLimit = min(24, max(count, count * 3))
         var merged: [SearchHit] = []
         var mergedKeys = Set<String>()      // 只记「真正收录进 merged」的标题
         var domainCount: [String: Int] = [:]
@@ -148,14 +149,14 @@ enum WebSearchService {
                 domainCount[domain, default: 0] += 1
                 mergedKeys.insert(key)          // 确认收录时才记录
                 merged.append(hit)
-                if merged.count >= count { break outer }
+                if merged.count >= candidateLimit { break outer }
             }
         }
 
         // 第二轮：数量不够就放宽域名限制补齐。
         // 实测只剩单一源时（搜狗/百度/Bing 全 0、只剩 360），限流会把 6 条砍到 2 条 ——
         // 这时候宁可同域名，也不能没资料。
-        if merged.count < count {
+        if merged.count < candidateLimit {
             outer2: for i in 0..<maxLen {
                 for list in lists where i < list.count {
                     let hit = list[i]
@@ -163,7 +164,7 @@ enum WebSearchService {
                     guard !key.isEmpty, !mergedKeys.contains(key) else { continue }
                     mergedKeys.insert(key)
                     merged.append(hit)
-                    if merged.count >= count { break outer2 }
+                    if merged.count >= candidateLimit { break outer2 }
                 }
             }
         }
@@ -426,7 +427,9 @@ enum WebSearchService {
             let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard title.count >= 4, !isNoiseTitle(title), isResultLink(href, engine: engine),
                   seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
-            hits.append(SearchHit(title: title, url: absolutize(href, engine: engine), snippet: record.snippet,
+            let resolved = absolutize(href, engine: engine)
+            guard let target = URL(string: resolved), ["https", "http"].contains(target.scheme?.lowercased() ?? ""), target.host != nil else { continue }
+            hits.append(SearchHit(title: title, url: resolved, snippet: record.snippet,
                                   publishedAt: findDate(in: record.snippet) ?? ""))
         }
 

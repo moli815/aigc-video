@@ -15,7 +15,7 @@ final class WorkbenchUITests: XCTestCase {
         let app = launch(); let card = app.buttons["task-research"]
         XCTAssertTrue(card.waitForExistence(timeout: 15)); evidence(app, "workbench-portrait")
         card.tap()
-        let input = app.textFields["task-input"]
+        let input = app.descendants(matching: .any).matching(identifier: "task-input").firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10)); XCTAssertTrue((input.value as? String ?? "").contains("主题："))
         XCTAssertFalse(app.buttons["停止输出"].exists)
         app.buttons["research-mode"].tap(); app.buttons["仅用现有资料"].tap()
@@ -30,9 +30,13 @@ final class WorkbenchUITests: XCTestCase {
         XCTAssertTrue(expert.waitForExistence(timeout: 15)); if !expert.isHittable { app.scrollViews["workbench"].swipeUp() }; expert.tap()
         let starter = app.buttons["expert-starter"]
         XCTAssertTrue(starter.waitForExistence(timeout: 10)); if !starter.isHittable { app.scrollViews["chat-scroll"].swipeUp() }; starter.tap()
-        let input = app.textFields["task-input"]
+        let input = app.descendants(matching: .any).matching(identifier: "task-input").firstMatch
         XCTAssertTrue((input.value as? String ?? "").contains("预算")); XCTAssertTrue((input.value as? String ?? "").contains("目标"))
-        XCTAssertTrue(app.buttons["research-mode"].isHittable); app.terminate()
+        XCTAssertTrue(app.buttons["research-mode"].isHittable)
+        app.buttons["expert-skills"].tap()
+        XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "open-calculator-workbench").firstMatch.waitForExistence(timeout: 10))
+        evidence(app, "expert-production-skills")
+        app.buttons["完成"].tap(); app.terminate()
     }
     func testGoldWorkbenchSupportsLandscapeAndUsesProductionLayout() {
         XCUIDevice.shared.orientation = .landscapeLeft

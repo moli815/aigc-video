@@ -38,8 +38,8 @@ enum AppTheme: String, CaseIterable, Identifiable {
         switch self {
         case .blue: return Color(red: 0.20, green: 0.42, blue: 0.88)
         case .graphite: return Color(red: 0.35, green: 0.37, blue: 0.42)
-        case .emerald: return Color(red: 0.07, green: 0.55, blue: 0.40)
-        case .violet: return .purple
+        case .emerald: return Color(red: 0.07, green: 0.48, blue: 0.34)
+        case .violet: return Color(red: 0.48, green: 0.28, blue: 0.68)
         case .coral: return Color(red: 0.75, green: 0.22, blue: 0.20)
         case .gold: return Color(red: 0.56, green: 0.39, blue: 0.10)
         }

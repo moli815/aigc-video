@@ -8,24 +8,30 @@ enum WebEvidenceExtractor {
         do {
             let document = try SwiftSoup.parse(html)
             try document.select("script, style, noscript, nav, footer").remove()
-            let containers = try document.select("div.result, div.c-container, li.b_algo, div.vrwrap, div.res-list, div.resultitem").array()
+            let containers = try document.select("div.result, div.c-container, li.b_algo, div.vrwrap, li.res-list, div.res-list, div.resultitem").array()
             var result: [LinkRecord] = []
             if !containers.isEmpty {
                 for container in containers.prefix(100) {
                     let links = try container.select("h3 a[href], h2 a[href]").array()
                     let candidates = links.isEmpty ? try container.select("a[href]").array() : links
                     for link in candidates.prefix(4) {
-                        result.append(LinkRecord(title: try link.text(), href: try link.attr("href"), snippet: String(try container.text().prefix(800))))
+                        result.append(LinkRecord(title: try link.text(), href: try destination(link), snippet: String(try container.text().prefix(800))))
                     }
                 }
             } else {
                 // Explicit fallback without pretending neighboring text is an article summary.
                 for link in try document.select("h3 a[href], h2 a[href], a[href]").array().prefix(200) {
-                    result.append(LinkRecord(title: try link.text(), href: try link.attr("href"), snippet: ""))
+                    result.append(LinkRecord(title: try link.text(), href: try destination(link), snippet: ""))
                 }
             }
             return result
         } catch { return [] }
+    }
+    private static func destination(_ link: Element) throws -> String {
+        // 360 publishes the original URL separately from its tracking redirect.
+        let original = try link.attr("data-mdurl")
+        if let url = URL(string: original), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil { return original }
+        return try link.attr("href")
     }
     static func contentHTML(_ html: String) -> String {
         do {

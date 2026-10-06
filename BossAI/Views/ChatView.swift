@@ -106,6 +106,7 @@ struct ChatContainerView: View {
 struct ExpertBanner: View {
     @Environment(\.appTheme) private var theme
     let expert: Expert
+    @State private var showSkills = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -122,9 +123,9 @@ struct ExpertBanner: View {
                     .lineLimit(1)
             }
             Spacer()
-            Image(systemName: "person.crop.circle.badge.checkmark")
-                .font(.system(size: 14))
-                .foregroundStyle(.white.opacity(0.8))
+            Button("技能与工具", systemImage: "slider.horizontal.3") { showSkills = true }
+                .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                .accessibilityIdentifier("expert-skills")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -132,7 +133,8 @@ struct ExpertBanner: View {
         .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+        .sheet(isPresented: $showSkills) { ExpertSkillSheet(expert: expert) }
     }
 }
 
@@ -315,17 +317,25 @@ private struct TaskControls: View {
                 Picker("证据方式", selection: $viewModel.researchMode) {
                     ForEach(ResearchMode.allCases) { mode in Text(mode.label).tag(mode) }
                 }
-            } label: { Label(viewModel.researchMode.label, systemImage: "globe") }
+            } label: {
+                Label(viewModel.researchMode.label, systemImage: "globe")
+                    .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
+                    .background(theme.accentSoft, in: Capsule())
+            }
                 .accessibilityIdentifier("research-mode")
             Menu {
                 Picker("回答深度", selection: $viewModel.answerStyle) {
                     ForEach(AnswerStyle.allCases) { style in Text(style.label).tag(style) }
                 }
-            } label: { Label(viewModel.answerStyle.label, systemImage: "text.alignleft") }
+            } label: {
+                Label(viewModel.answerStyle.label, systemImage: "text.alignleft")
+                    .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
+                    .background(theme.accentSoft, in: Capsule())
+            }
                 .accessibilityIdentifier("answer-style")
             Spacer(minLength: 0)
         }
-        .font(.footnote).padding(.horizontal, 20).padding(.vertical, 10)
+        .font(.footnote).padding(.horizontal, 20).padding(.vertical, 6)
         .background(theme.surface).disabled(viewModel.isStreaming)
     }
 }

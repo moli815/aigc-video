@@ -117,7 +117,7 @@ enum ProviderCatalog {
         let override = imageModelOverride()
         if !override.isEmpty {
             profile = ImageProfile(id: profile.id, displayName: profile.displayName,
-                                   baseURL: profile.baseURL, model: profile.id == "deepseek" && ["deepseek-chat", "deepseek-reasoner"].contains(override) ? "deepseek-flash" : override, style: profile.style)
+                                   baseURL: profile.baseURL, model: override, style: profile.style)
         }
         return profile
     }

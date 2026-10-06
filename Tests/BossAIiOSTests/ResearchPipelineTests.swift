@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import UIKit
 @testable import BossAI
 
 final class ResearchPipelineTests: XCTestCase {
@@ -106,10 +107,59 @@ final class ResearchPipelineTests: XCTestCase {
             else { XCTAssertNil(body["thinking"]); XCTAssertNil(body["max_tokens"]) }
         }
     }
+    func test360ListContainerUsesOriginalURLAndKeepsItsOwnSnippet() {
+        let html = "<li class='res-list'><h3><a href='https://www.so.com/link?m=x' data-mdurl='https://support.apple.com/spec'>iPhone 技术规格</a></h3><p>苹果官方摘要</p></li>"
+        let hit = WebEvidenceExtractor.links(html: html).first
+        XCTAssertEqual(hit?.href, "https://support.apple.com/spec")
+        XCTAssertTrue(hit?.snippet.contains("苹果官方摘要") == true)
+    }
+    func testInvalidOriginalURLDoesNotReplaceActualLink() {
+        let html = "<div class='result'><h3><a href='https://example.com/a' data-mdurl='javascript:bad'>实际标题</a></h3><p>有效摘要</p></div>"
+        XCTAssertEqual(WebEvidenceExtractor.links(html: html).first?.href, "https://example.com/a")
+    }
+    func testDOMEvidenceExtractionBenchmarkWithOneHundredResults() {
+        let html = (0..<100).map { "<li class='res-list'><h3><a href='https://example.com/\($0)'>测试标题\($0)</a></h3><p>" + String(repeating: "同一条结果的完整摘要", count: 100) + "</p></li>" }.joined()
+        measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
+            XCTAssertEqual(WebEvidenceExtractor.links(html: html).count, 100)
+        }
+    }
+    func testCaptureRealNativeSearchDiagnosticsAndVerifyReturnedLinkContract() async throws {
+        // Live diagnostic, not an assertion that the current facts or publication dates are correct.
+        let originalEngine = WebSearchService.engine; WebSearchService.engine = .auto
+        defer { WebSearchService.engine = originalEngine }
+        var rows: [[String: Any]] = []
+        for query in ["iPhone 官方 技术规格 site:apple.com", "华为 官方 手机 参数 site:huawei.com", "小米 官方 手机 参数 site:mi.com"] {
+            let started = ProcessInfo.processInfo.systemUptime
+            let hits = await WebSearchService.search(query: query, count: 6, recency: .any)
+            let searchSeconds = ProcessInfo.processInfo.systemUptime - started
+            XCTAssertLessThanOrEqual(hits.count, 6)
+            for hit in hits { XCTAssertTrue(["https", "http"].contains(URL(string: hit.url)?.scheme ?? "")) }
+            let pageStarted = ProcessInfo.processInfo.systemUptime
+            var page = ""
+            if let first = hits.first { page = await WebSearchService.fetchPageText(url: first.url, limit: 3500) }
+            rows.append(["query": query, "search_seconds": searchSeconds, "first_page_seconds": ProcessInfo.processInfo.systemUptime - pageStarted,
+                         "candidate_count": hits.count, "authority_candidates": hits.filter { EvidenceRanking.isAuthority($0.url) }.count,
+                         "first_page_characters": page.count, "first_page_excerpt": String(page.prefix(180)),
+                         "hits": hits.map { ["title": $0.title, "url": $0.url, "date_unverified": $0.publishedAt] }])
+        }
+        let report: [String: Any] = ["scope": "Actual App search and DOM code on iPad simulator; 3 single samples; facts and dates need human review", "samples": rows]
+        let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+        let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json"); attachment.name = "native-live-search-audit"; attachment.lifetime = .keepAlways; add(attachment)
+        print("BOSSAI_NATIVE_SEARCH_AUDIT " + String(decoding: data, as: UTF8.self))
+    }
     func testMITNoticeIsIncludedInApplicationBundle() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "ThirdPartyNotices", withExtension: "txt"))
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.contains("SwiftSoup 2.13.9")); XCTAssertTrue(text.contains("The MIT License"))
+    }
+    func testWhiteExpertBannerLabelsHaveReadableContrastInEveryTheme() {
+        for theme in AppTheme.allCases {
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            XCTAssertTrue(UIColor(theme.accent).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+            func linear(_ value: CGFloat) -> Double { let x = Double(value); return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
+            let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+            XCTAssertGreaterThanOrEqual(1.05 / (luminance + 0.05), 4.5, theme.rawValue)
+        }
     }
 }
 private actor FakeResearchSearch: ResearchSearching {
