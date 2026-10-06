@@ -12,6 +12,7 @@ final class ChatService {
 
     enum StreamEvent {
         case textDelta(String)
+        case reasoningDelta(String) // API continuation only; never merged into the answer
         case status(String)          // 如"正在联网搜索…"
         case toolCalls([ToolCall], assistantText: String)
         case usage(promptTokens: Int, completionTokens: Int)   // 服务端返回的真实 token 数
@@ -39,8 +40,10 @@ final class ChatService {
         self.session = session
     }
 
+    var configurationLabel: String { profile.displayName + " / " + profile.model }
+
     /// 单次请求流。工具调用通过 toolCalls 事件交给调用方处理，调用方追加 tool 结果后再次调用本方法继续。
-    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general") -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general", allowSearch: Bool = true) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 let span = PerformanceTrace.begin("AIRequest")
@@ -61,8 +64,9 @@ final class ChatService {
                         "stream": true,
                         "temperature": 0.6,
                     ]
+                    ModelRequestAdapter.apply(to: &body, profile: profile, purpose: .chat)
                     if enableTools {
-                        try applyTools(to: &body, expertID: expertID)
+                        try applyTools(to: &body, expertID: expertID, allowSearch: allowSearch)
                     }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -109,6 +113,11 @@ final class ChatService {
                         if let reason = choice["finish_reason"] as? String { finishReason = reason }
 
                         if let delta = choice["delta"] as? [String: Any] {
+                            if let reasoning = delta["reasoning_content"] as? String, !reasoning.isEmpty {
+                                toolBytes += reasoning.utf8.count
+                                guard toolBytes <= 1_048_576 else { throw ChatError.incomplete("思考及工具内容超过上限") }
+                                continuation.yield(.reasoningDelta(reasoning))
+                            }
                             if let content = delta["content"] as? String, !content.isEmpty {
                                 if !receivedFirstDelta {
                                     receivedFirstDelta = true
@@ -187,10 +196,10 @@ final class ChatService {
 
     /// 挂载工具。联网搜索改为 App 自带的本地工具（web_search），
     /// 不再依赖模型厂商的搜索能力 —— 换任何模型商都不会掉联网功能。
-    private func applyTools(to body: inout [String: Any], expertID: String) throws {
+    private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true) throws {
         let capability = try ExpertCapabilityCatalog.profile(expertID)
         // 少数厂商的服务端搜索质量更高，可在设置里开启作为增强
-        if capability.allowSearch && AppConfig.preferProviderSearch {
+        if capability.allowSearch && allowSearch && AppConfig.preferProviderSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
                 body["tools"] = [["type": "builtin_function", "function": ["name": "$web_search"]]]
@@ -206,7 +215,7 @@ final class ChatService {
         }
 
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if capability.allowSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if capability.allowSearch && allowSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         if capability.allowImages { tools.append(["type": "function", "function": Self.generateImageFunction]) }
         var document = Self.createDocumentFunction
         var parameters = document["parameters"] as? [String: Any] ?? [:]
@@ -244,27 +253,18 @@ final class ChatService {
     static let webSearchFunction: [String: Any] = [
         "name": "web_search",
         "description": """
-        联网搜索最新信息。查资讯、行情、政策、竞品动态、平台规则、价格、产品参数、发布时间、新闻时必须调用。
-
-        【使用规则，必须严格遵守】
-        1. 不要凭记忆回答任何可能随时间变化的事实（发布时间、价格、规格参数、政策条文、榜单排名），一律先搜后答。
-        2. 涉及多个实体（多个机型、多家竞品、多个平台、多个品牌）时，必须**为每个实体单独发起一次搜索**。\
-        严禁只用一句笼统关键词（如"旗舰手机参数对比"）试图一次覆盖全部实体 —— 那样必然漏字段、串行错位。
-        3. 你可以在同一轮里**同时发起多个 web_search 调用**，系统会并行执行，不会变慢。
-        4. 搜索词要带主体全名 + 具体字段，例如「小米18 Pro 参数 屏幕 电池 影像」「Mate 80 发布时间 售价」，\
-        而不是「手机参数」。查某个字段就写清那个字段。
-        5. 某个字段搜不到时，一律填「未核实」或「未公开」。\
-        绝对禁止用记忆里的数字、其他型号的数字、或从无关来源拼接出来的数字去填空。宁可空着，也不能错。
-        6. 具体结论旁写（来源 N），表格来源列填 N。只引用支持该事实的检索编号；App 会显示对应标题、链接和日期，不要另写全量搜索清单或重复来源表。
-        7. 不同来源给出冲突数值时，保留冲突并在表格里标注「来源不一致」，不要擅自选一个。
+        联网检索可变事实。搜索词写主体全名和待核实字段，多实体分开检索，优先补缺失字段，避免重复查询；App 有限并行执行并复用本轮证据。
+        价格、规格、政策、新闻等时效信息必须核实。最新在售产品可早于近30天发布；仅当用户明确要求今天、本周、本月时限制发布时间。
+        搜索摘要仅是线索。正文与对象、地区、版本和时间必须对应；不能用记忆或其他型号填空。字段证据不足写未核实，传闻单独标注，来源冲突保留。
+        每个具体结论旁写（来源 N），表格来源列填 N。只引用真正支持结论的来源。App 显示标题与链接，不另写全量检索清单或重复来源表。
         """,
         "parameters": [
             "type": "object",
             "properties": [
-                "recency": ["type": "string", "enum": ["any", "day", "week", "month", "year"], "description": "资讯时效：今天day、本周week、最新month；无明确时效any。日期未知必须注明未核实。"],
+                "recency": ["type": "string", "enum": ["any", "day", "week", "month", "year"], "description": "发布时间窗口：今天day、本周week、本月month；最新在售或无明确窗口any。日期未知必须注明未核实。"],
                 "query": [
                     "type": "string",
-                    "description": "具体搜索关键词：主体全名 + 要查的字段 + 年份（如「小米18 Pro 参数 屏幕 电池 影像」）",
+                    "description": "具体搜索关键词：主体全名 + 要查的字段 + 年份（如「完整产品名 官方规格 电池」）",
                 ],
             ],
             "required": ["query"],

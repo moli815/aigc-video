@@ -68,9 +68,7 @@ enum WebSearchService {
         let raw = await searchUnranked(query: recency.query(query), count: bounded, recency: recency)
         let ranked = raw.enumerated().sorted { lhs, rhs in
             func score(_ hit: SearchHit) -> Int {
-                let host = URL(string: hit.url)?.host ?? ""
-                let official = host.hasSuffix(".gov.cn") || host.hasSuffix(".gov") ? 4 : 0
-                return official + (hit.publishedAt.isEmpty ? 0 : 2) + (hit.snippet.isEmpty ? 0 : 1)
+                return EvidenceRanking.score(query: query, title: hit.title, url: hit.url, snippet: hit.snippet, publishedAt: hit.publishedAt)
             }
             let a = score(lhs.element), b = score(rhs.element)
             return a == b ? lhs.offset < rhs.offset : a > b
@@ -204,10 +202,13 @@ enum WebSearchService {
         }
 
         guard let html = pageHTML, text.count > 80 else { return "" }
+        let contentHTML = WebEvidenceExtractor.contentHTML(html)
+        text = plainText(fromHTML: contentHTML)
+        guard text.count > 80 else { return "" }
 
         // 表格提取必须先剥掉 script：汽车之家等动态渲染站点，
         // HTML 里只有 JS 模板字符串（里面拼了 <td>），不剥会把 JS 代码当成"参数表"抓出来。
-        let tables = extractTables(fromHTML: stripScripts(html), budget: min(limit, 3000))
+        let tables = extractTables(fromHTML: contentHTML, budget: min(limit, 3000))
         guard !tables.isEmpty else { return String(mainBody(fromText: text).prefix(limit)) }
 
         // 表格优先占位最多 60%，剩下的额度留给正文，避免只给表格丢失上下文
@@ -419,39 +420,16 @@ enum WebSearchService {
         var hits: [SearchHit] = []
         var seenTitles = Set<String>()
 
-        let pattern = "<a[^>]+href=\\\"([^\\\"]+)\\\"[^>]*>(.*?)</a>"
-        guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.caseInsensitive, .dotMatchesLineSeparators])
-        else { return [] }
-        let range = NSRange(html.startIndex..<html.endIndex, in: html)
-        for match in regex.matches(in: html, options: [], range: range) {
+        for record in WebEvidenceExtractor.links(html: html) {
             guard hits.count < count else { break }
-            guard match.numberOfRanges >= 3,
-                  let hrefRange = Range(match.range(at: 1), in: html),
-                  let textRange = Range(match.range(at: 2), in: html) else { continue }
-
-            let href = decodeEntities(String(html[hrefRange])).trimmingCharacters(in: .whitespaces)
-            let rawTitle = String(html[textRange])
-            // 粗筛：原始标题太短的（导航、图标链接）直接跳过，省去无谓的 HTML 清洗
-            guard rawTitle.count >= 12 else { continue }
-
-            let title = plainText(fromHTML: rawTitle)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard title.count >= 10 else { continue }
-            // 实测：百度结果里会混进页脚备案号（如「京ICP证050897号」）被当成一条结果标题
-            guard !isNoiseTitle(title) else { continue }
-            guard isResultLink(href, engine: engine) else { continue }
-            guard seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
-
-            // 摘要：标题之后的文本片段（宽松提取，拿不到就算了）
-            let tail = String(html[textRange.upperBound...].prefix(900))
-            let snippet = firstLongLine(plainText(fromHTML: tail))
-
-            hits.append(SearchHit(title: title,
-                                  url: absolutize(href, engine: engine),
-                                  snippet: snippet,
-                                  publishedAt: findDate(in: snippet) ?? findDate(in: title) ?? ""))
+            let href = record.href.trimmingCharacters(in: .whitespaces)
+            let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard title.count >= 4, !isNoiseTitle(title), isResultLink(href, engine: engine),
+                  seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
+            hits.append(SearchHit(title: title, url: absolutize(href, engine: engine), snippet: record.snippet,
+                                  publishedAt: findDate(in: record.snippet) ?? ""))
         }
+
         return hits
     }
 

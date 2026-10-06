@@ -5,6 +5,12 @@ import SwiftData
 struct BossAIApp: App {
     @StateObject private var credentials = CredentialStore()
     @AppStorage(ThemeStore.key) private var themeRaw = AppTheme.blue.rawValue
+    private var activeTheme: AppTheme {
+        if ProcessInfo.processInfo.arguments.contains("--render-fixture"),
+           let flag = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--fixture-theme=") }),
+           let raw = flag.split(separator: "=").last, let theme = AppTheme(rawValue: String(raw)) { return theme }
+        return AppTheme(rawValue: themeRaw) ?? .blue
+    }
 
     init() {
         FileStore.prepare()
@@ -25,9 +31,10 @@ struct BossAIApp: App {
                     SetupView().environmentObject(credentials)
                 }
             }
-            .environment(\.appTheme, AppTheme(rawValue: themeRaw) ?? .blue)
-            .fontDesign((AppTheme(rawValue: themeRaw) ?? .blue).fontDesign)
-            .tint((AppTheme(rawValue: themeRaw) ?? .blue).accent)
+            .environmentObject(credentials)
+            .environment(\.appTheme, activeTheme)
+            .fontDesign(activeTheme.fontDesign)
+            .tint(activeTheme.accent)
         }
         .modelContainer(for: [Conversation.self, Message.self, MemoryItem.self, StoredFile.self],
                         inMemory: ProcessInfo.processInfo.arguments.contains("--render-fixture") || ProcessInfo.processInfo.arguments.contains("--performance-fixture") || ProcessInfo.processInfo.arguments.contains("--acceptance-fixture"))

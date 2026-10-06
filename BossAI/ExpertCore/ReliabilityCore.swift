@@ -152,7 +152,8 @@ enum SearchRecency: String, CaseIterable {
     static func inferred(from query: String) -> SearchRecency {
         if query.contains("今天") || query.contains("今日") || query.contains("24小时") { return .day }
         if query.contains("本周") || query.contains("最近一周") { return .week }
-        if query.contains("最新") || query.contains("近期") || query.contains("新闻") { return .month }
+        if query.contains("本月") || query.contains("最近一个月") || query.contains("近30天") { return .month }
+        // 最新在售是有效状态，不能等同于发布日期在30天内。
         return .any
     }
     func query(_ query: String, now: Date = Date()) -> String {

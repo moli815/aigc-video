@@ -57,11 +57,12 @@ final class MemoryService {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 60
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": profile.memoryModel,
             "messages": [["role": "user", "content": prompt]],
             "temperature": 0.1,
         ]
+        ModelRequestAdapter.apply(to: &body, profile: profile, purpose: .memory)
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),

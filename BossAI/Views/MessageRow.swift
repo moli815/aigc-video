@@ -48,7 +48,7 @@ struct MessageRow: View {
                             .padding(theme.cardPadding)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
-                                theme.surface.opacity(0.45),
+                                theme.surface,
                                 in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous)
                             )
                             .overlay(
@@ -118,9 +118,21 @@ private struct AssistantAnswerView: View, Equatable {
     let text: String
     let sourcesJSON: String
     let streaming: Bool
+    @Environment(\.appTheme) private var theme
+    @State private var copied = false
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text && lhs.sourcesJSON == rhs.sourcesJSON && lhs.streaming == rhs.streaming }
     var body: some View {
         let projection = CitationPresentation.projection(text: text, json: sourcesJSON)
         VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("回答", systemImage: "text.bubble").font(.caption.weight(.semibold)).fontDesign(theme.headingDesign).foregroundStyle(.secondary)
+                Spacer()
+                if !streaming {
+                    Button(copied ? "已复制" : "复制回答", systemImage: copied ? "checkmark" : "doc.on.doc") {
+                        UIPasteboard.general.string = text; copied = true
+                    }.font(.caption).accessibilityIdentifier("copy-answer")
+                }
+            }
             MarkdownView(projection.body, collapseDisabled: streaming).equatable()
             if !streaming && !projection.sources.isEmpty {
                 CitationSourcesView(sources: projection.sources, answer: projection.body)

@@ -34,7 +34,7 @@ enum ProviderCatalog {
     static let chatCandidates: [ChatProfile] = [
         ChatProfile(id: "deepseek", displayName: "DeepSeek",
                     baseURL: "https://api.deepseek.com/v1",
-                    model: "deepseek-chat", memoryModel: "deepseek-chat",
+                    model: "deepseek-flash", memoryModel: "deepseek-flash",
                     searchStyle: .none),
         ChatProfile(id: "kimi", displayName: "Kimi（Moonshot）",
                     baseURL: "https://api.moonshot.cn/v1",
@@ -105,7 +105,7 @@ enum ProviderCatalog {
         let override = chatModelOverride()
         if !override.isEmpty {
             profile = ChatProfile(id: profile.id, displayName: profile.displayName,
-                                  baseURL: profile.baseURL, model: override,
+                                  baseURL: profile.baseURL, model: profile.id == "deepseek" && ["deepseek-chat", "deepseek-reasoner"].contains(override) ? "deepseek-flash" : override,
                                   memoryModel: profile.memoryModel, searchStyle: profile.searchStyle)
         }
         return profile
@@ -117,7 +117,7 @@ enum ProviderCatalog {
         let override = imageModelOverride()
         if !override.isEmpty {
             profile = ImageProfile(id: profile.id, displayName: profile.displayName,
-                                   baseURL: profile.baseURL, model: override, style: profile.style)
+                                   baseURL: profile.baseURL, model: profile.id == "deepseek" && ["deepseek-chat", "deepseek-reasoner"].contains(override) ? "deepseek-flash" : override, style: profile.style)
         }
         return profile
     }

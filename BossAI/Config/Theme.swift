@@ -77,9 +77,28 @@ enum AppTheme: String, CaseIterable, Identifiable {
     var cardRadius: CGFloat { self == .graphite ? 6 : self == .gold ? 8 : self == .coral ? 24 : self == .emerald ? 20 : self == .violet ? 18 : 14 }
     var messageWidth: CGFloat { self == .graphite ? 860 : self == .gold ? 800 : self == .emerald ? 780 : self == .violet ? 720 : self == .coral ? 740 : 760 }
     var cardPadding: CGFloat { self == .graphite ? 10 : self == .coral ? 18 : self == .emerald ? 16 : self == .violet ? 15 : 14 }
-    var fontDesign: Font.Design { self == .gold ? .serif : self == .coral ? .rounded : self == .graphite ? .monospaced : .default }
-    var canvas: Color { Color(UIColor.systemGroupedBackground) }
-    var surface: Color { Color(UIColor.secondarySystemGroupedBackground) }
+    // Long answers retain a readable system body; theme identity lives in headings and surfaces.
+    var fontDesign: Font.Design { self == .coral ? .rounded : .default }
+    var headingDesign: Font.Design { self == .gold ? .serif : self == .coral ? .rounded : self == .graphite ? .monospaced : .default }
+    var canvas: Color { themedSurface(card: false) }
+    var surface: Color { themedSurface(card: true) }
+    private func themedSurface(card: Bool) -> Color {
+        let light: (Double, Double, Double)
+        let dark: (Double, Double, Double)
+        switch self {
+        case .blue: light = (0.94, 0.96, 0.99); dark = (0.05, 0.07, 0.11)
+        case .graphite: light = (0.93, 0.93, 0.94); dark = (0.08, 0.08, 0.09)
+        case .emerald: light = (0.93, 0.97, 0.95); dark = (0.05, 0.09, 0.08)
+        case .violet: light = (0.96, 0.94, 0.99); dark = (0.08, 0.06, 0.11)
+        case .coral: light = (0.99, 0.95, 0.93); dark = (0.11, 0.07, 0.06)
+        case .gold: light = (0.97, 0.95, 0.90); dark = (0.10, 0.09, 0.06)
+        }
+        return Color(UIColor { trait in
+            let rgb = trait.userInterfaceStyle == .dark ? dark : light
+            let offset = card ? (trait.userInterfaceStyle == .dark ? 0.045 : 0.02) : 0
+            return UIColor(red: CGFloat(min(1, rgb.0 + offset)), green: CGFloat(min(1, rgb.1 + offset)), blue: CGFloat(min(1, rgb.2 + offset)), alpha: 1)
+        })
+    }
     var border: Color { self == .graphite || self == .gold ? accent.opacity(0.35) : Color(UIColor.separator).opacity(0.55) }
     var userBubble: Color { accentSoft }
 

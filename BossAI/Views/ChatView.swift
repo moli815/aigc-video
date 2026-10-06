@@ -19,6 +19,7 @@ struct ChatContainerView: View {
     let conversation: Conversation?
     let expert: Expert
     var onConversationCreated: (Conversation) -> Void = { _ in }
+    var initialText: String = ""
 
     final class ViewModelHolder: ObservableObject {
         @Published var vm: ChatViewModel?
@@ -42,6 +43,7 @@ struct ChatContainerView: View {
                 chatKey: { credentials.chatKey },
                 imageKey: { credentials.imageKey }
             )
+            vm.inputText = initialText
             vm.onConversationCreated = { created in
                 onConversationCreated(created)
             }
@@ -114,7 +116,7 @@ struct ExpertBanner: View {
                 Text(expert.name)
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.white)
-                Text(expert.skill.framework)
+                Text(expert.subtitle)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.85))
                     .lineLimit(1)
@@ -149,11 +151,12 @@ struct ChatView: View {
             if viewModel.expert.id != ExpertCatalog.general.id {
                 ExpertBanner(expert: viewModel.expert)
             }
+            TaskControls(viewModel: viewModel)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         if viewModel.sortedMessages.isEmpty {
-                            EmptyStateView(expert: viewModel.expert)
+                            EmptyStateView(expert: viewModel.expert, onStarter: { viewModel.inputText = $0 })
                         }
                         ForEach(viewModel.sortedMessages, id: \.id) { message in
                             Group {
@@ -208,6 +211,11 @@ struct ChatView: View {
                 }
             }
 
+            if let summary = viewModel.researchSummary {
+                Text(summary + " · 来源仍需原文核对").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 20).padding(.vertical, 5)
+                    .accessibilityIdentifier("research-summary")
+            }
             if let error = viewModel.errorMessage {
                 Text(error)
                     .font(.footnote)
@@ -246,6 +254,7 @@ private struct StreamingMessageRow: View {
 struct EmptyStateView: View {
     @Environment(\.appTheme) private var theme
     let expert: Expert
+    var onStarter: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -285,12 +294,38 @@ struct EmptyStateView: View {
             .background(theme.surface.opacity(0.6),
                         in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous))
 
-            Text("直接提问，或点输入框左侧「+」上传文件、拍照")
+            Button("填写任务背景", systemImage: "square.and.pencil") {
+                onStarter("请协助我完成\(expert.name)任务。\n背景：\n目标：\n已知资料与数据：\n时间和预算限制：\n请先说明缺少哪些关键资料，再给出可核对的结论与行动步骤。")
+            }.buttonStyle(.borderedProminent).accessibilityIdentifier("expert-starter")
+            Text("输入任务，或上传资料；需要实时事实时选择联网研究")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 90)
         }
         .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct TaskControls: View {
+    @ObservedObject var viewModel: ChatViewModel
+    @Environment(\.appTheme) private var theme
+    var body: some View {
+        HStack(spacing: 10) {
+            Menu {
+                Picker("证据方式", selection: $viewModel.researchMode) {
+                    ForEach(ResearchMode.allCases) { mode in Text(mode.label).tag(mode) }
+                }
+            } label: { Label(viewModel.researchMode.label, systemImage: "globe") }
+                .accessibilityIdentifier("research-mode")
+            Menu {
+                Picker("回答深度", selection: $viewModel.answerStyle) {
+                    ForEach(AnswerStyle.allCases) { style in Text(style.label).tag(style) }
+                }
+            } label: { Label(viewModel.answerStyle.label, systemImage: "text.alignleft") }
+                .accessibilityIdentifier("answer-style")
+            Spacer(minLength: 0)
+        }
+        .font(.footnote).padding(.horizontal, 20).padding(.vertical, 10)
+        .background(theme.surface).disabled(viewModel.isStreaming)
     }
 }

@@ -8,14 +8,19 @@ struct ChatRenderingFixtureView: View {
     @State private var preview: StoredFile?
     private let mode = ProcessInfo.processInfo.arguments.first { $0.hasPrefix("--render-mode=") }?.split(separator: "=").last.map(String.init) ?? "table"
     var body: some View {
-        NavigationStack {
+        Group {
+            if mode == "workbench" { MainView() }
+            else { NavigationStack {
             Group {
                 if let vm { ChatView(viewModel: vm, previewFile: $preview) }
                 else { ProgressView() }
             }
             .navigationTitle("真实对话渲染回归")
         }
+        }
+        }
         .task {
+            guard mode != "workbench" else { return }
             guard vm == nil else { return }
             let conversation = Conversation(expertId: "general", title: "离线渲染样本")
             context.insert(conversation)

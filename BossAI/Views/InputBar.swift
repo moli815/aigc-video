@@ -75,7 +75,8 @@ struct InputBar: View {
                 .disabled(speech.isStarting || viewModel.isStreaming || viewModel.isImporting)
                 .accessibilityLabel(speech.isRecording ? "停止录音" : "语音输入")
 
-                TextField("发消息…", text: inputBinding, axis: .vertical)
+                TextField("描述任务、目标或需要核实的信息…", text: inputBinding, axis: .vertical)
+                    .accessibilityIdentifier("task-input")
                     .lineLimit(1...6)
                     .focused($focused)
                     .padding(.horizontal, 14)

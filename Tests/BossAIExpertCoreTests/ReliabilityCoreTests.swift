@@ -38,7 +38,7 @@ final class ReliabilityCoreTests: XCTestCase {
         XCTAssertTrue(SearchRecency.week.query("政策", now: now).contains("after:"))
         XCTAssertEqual(SearchRecency.any.query("固定概念", now: now), "固定概念")
         XCTAssertEqual(SearchRecency.inferred(from: "今天新闻"), .day)
-        XCTAssertEqual(SearchRecency.inferred(from: "最新动态"), .month)
+        XCTAssertEqual(SearchRecency.inferred(from: "最新动态"), .any)
     }
     func testUnsafeFileLeavesRejected() {
         for leaf in ["../foo", "a/b", "a\\b", ".", "..", "", "C:secret", "x\0y"] { XCTAssertFalse(StorageBoundary.isSafeLeaf(leaf)) }

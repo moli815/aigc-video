@@ -15,6 +15,7 @@ struct MainView: View {
     /// 与 selectedConversationId 分开，避免草稿建出会话时把正在流式输出的 VM 换掉。
     @State private var containerKey: String?
     @State private var showLibrary = false
+    @State private var draftPrompt = ""
     @State private var draftConversationID: UUID?
     @State private var providerTask: Task<Void, Never>?
     @State private var showNewChat = false
@@ -48,6 +49,7 @@ struct MainView: View {
             detailContent
         }
         .navigationSplitViewStyle(.balanced)
+        .environmentObject(credentials)
         .task { ensureProvidersDetected() }
         .onReceive(NotificationCenter.default.publisher(for: .bossAIKeysChanged)) { _ in
             ensureProvidersDetected()
@@ -93,7 +95,7 @@ struct MainView: View {
                                       // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
                                       selectedConversationId = created.id
                                       draftConversationID = created.id
-                                  })
+                                  }, initialText: draftPrompt)
                     .id(key)
             } else {
                 let raw = String(key.dropFirst("conv-".count))
@@ -102,15 +104,20 @@ struct MainView: View {
                     ChatContainerView(conversation: conv, expert: conv.expert)
                         .id(key)
                 } else {
-                    WelcomeView(onNewChat: { showNewChat = true })
+                    WelcomeView(onNewChat: { showNewChat = true }, onTask: { expert, prompt in
+                        draftPrompt = prompt; startNewDraft(expert, keepPrompt: true)
+                    })
                 }
             }
         } else {
-            WelcomeView(onNewChat: { showNewChat = true })
+            WelcomeView(onNewChat: { showNewChat = true }, onTask: { expert, prompt in
+                        draftPrompt = prompt; startNewDraft(expert, keepPrompt: true)
+                    })
         }
     }
 
-    private func startNewDraft(_ expert: Expert) {
+    private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false) {
+        if !keepPrompt { draftPrompt = "" }
         showLibrary = false
         selectedConversationId = nil
         // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
@@ -119,6 +126,7 @@ struct MainView: View {
 
     /// 点专家：已有该专家的对话就打开；没有就进草稿态（发第一条消息时才落库）
     private func openExpert(_ expert: Expert) {
+        draftPrompt = ""
         showLibrary = false
         if let existing = conversations.first(where: { $0.expertId == expert.id }) {
             selectedConversationId = existing.id
@@ -138,7 +146,8 @@ struct MainView: View {
 
     /// 首次启动：用内置 Key 自动识别服务商（无需任何手动配置）
     private func ensureProvidersDetected() {
-        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
+        guard !ProcessInfo.processInfo.arguments.contains("--render-fixture"),
+              ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil,
               NSClassFromString("XCTestCase") == nil else { return }
         guard !ProviderCatalog.providersDetected else { return }
         providerTask?.cancel()
@@ -290,7 +299,9 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 78)
+                Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
+                    .buttonStyle(.borderedProminent).padding(12).background(theme.surface)
+                    .accessibilityIdentifier("new-task")
             }
             .safeAreaInset(edge: .top) {
                 HStack {
@@ -305,11 +316,7 @@ struct SidebarView: View {
                 .accessibilityLabel("Boss AI")
             }
 
-            LiquidGlassButton(title: "新对话", symbol: "plus") {
-                onNewChat()
-            }
-            .padding(.leading, 14)
-            .padding(.bottom, 14)
+
         }
         .alert("重命名对话", isPresented: Binding(
             get: { renaming != nil },
@@ -360,9 +367,9 @@ struct ExpertRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)
-                Text(expert.skill.framework)
+                Text(expert.subtitle)
                     .font(.caption2)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
         }
@@ -458,35 +465,59 @@ struct LiquidGlassButton: View {
 struct WelcomeView: View {
     @Environment(\.appTheme) private var theme
     var onNewChat: () -> Void
-
+    var onTask: (Expert, String) -> Void = { _, _ in }
     var body: some View {
-        VStack(spacing: 18) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(LinearGradient(colors: [ThemeStore.current.accent,
-                                                  ThemeStore.current.accentSecondary],
-                                         startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 88, height: 88)
-                Text("B")
-                    .font(.system(size: 46, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-            }
-            Text("Boss AI")
-                .font(.largeTitle.bold())
-            Text("企业经营者的 AI 顾问矩阵")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Button(action: onNewChat) {
-                Label("开始一个新对话", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.canvas)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                HStack {
+                    Label("BossAI 工作台", systemImage: "square.grid.2x2.fill").font(.headline).foregroundStyle(theme.accent)
+                    Spacer()
+                    Button("新任务", systemImage: "plus", action: onNewChat).buttonStyle(.bordered)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("把问题变成可以行动的答案").font(.largeTitle.bold()).fontDesign(theme.headingDesign).fixedSize(horizontal: false, vertical: true)
+                    Text("提出任务，核对证据，带走成果。").font(.title3).foregroundStyle(.secondary)
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 14)], spacing: 14) {
+                    taskCard("查最新信息", symbol: "globe", detail: "产品、竞品、行业动态与价格", expert: ExpertCatalog.general,
+                             prompt: "请核实以下最新信息。主题：\n截至日期：今天\n需要的字段：\n优先官方资料，区分已发布事实、未核实信息与传闻，逐项注明依据。", id: "task-research")
+                    taskCard("做一项决策", symbol: "chart.bar.xaxis", detail: "方案比较、投入产出与行动步骤", expert: ExpertCatalog.experts.first ?? ExpertCatalog.general,
+                             prompt: "请帮我比较方案并做决策。背景：\n备选方案：\n目标：\n预算与时间：\n已知数据：\n请区分事实与假设，列清计算依据、风险和下一步。", id: "task-decision")
+                    taskCard("分析现有资料", symbol: "doc.text.magnifyingglass", detail: "上传资料、提炼重点与待确认项", expert: ExpertCatalog.general,
+                             prompt: "请分析我上传的资料。关注问题：\n期望成果：\n请按资料中的证据给结论，指出矛盾和缺失；需要外部核实时先明确说明。", id: "task-documents")
+                }
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("专家协作").font(.title2.bold())
+                    Text("选择任务方向；计算、检索与交付工具按实际技能配置执行。").font(.subheadline).foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], spacing: 12) {
+                        ForEach(ExpertCatalog.experts) { expert in
+                            Button { onTask(expert, "") } label: {
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: expert.symbol).foregroundStyle(theme.accent).frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(expert.name).font(.headline).foregroundStyle(.primary)
+                                        Text(expert.subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                }.padding(theme.cardPadding).frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
+                                    .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cardRadius))
+                            }.buttonStyle(.plain).accessibilityIdentifier("workbench-expert-" + expert.id)
+                        }
+                    }
+                }
+            }.padding(28).frame(maxWidth: 1100, alignment: .leading).frame(maxWidth: .infinity)
+        }.background(theme.canvas).accessibilityIdentifier("workbench")
+    }
+    private func taskCard(_ title: String, symbol: String, detail: String, expert: Expert, prompt: String, id: String) -> some View {
+        Button { onTask(expert, prompt) } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                Image(systemName: symbol).font(.title2).foregroundStyle(theme.accent)
+                Text(title).font(.title3.bold()).foregroundStyle(.primary)
+                Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }.padding(20).frame(maxWidth: .infinity, minHeight: 156, alignment: .leading)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cardRadius))
+                .overlay(RoundedRectangle(cornerRadius: theme.cardRadius).stroke(theme.border, lineWidth: 0.7))
+        }.buttonStyle(.plain).accessibilityIdentifier(id)
     }
 }
 
