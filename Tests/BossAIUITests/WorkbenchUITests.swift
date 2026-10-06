@@ -4,16 +4,17 @@ final class AppWorkbenchUITests: XCTestCase {
     private var currentApp: XCUIApplication?
     override func tearDown() {
         if testRun?.hasSucceeded == false, let app = currentApp, app.state == .runningForeground { evidence(app, "failed-workbench") }
-        currentApp = nil; super.tearDown()
+        currentApp = nil; XCUIDevice.shared.orientation = .portrait; super.tearDown()
     }
-    override func setUp() { super.setUp(); continueAfterFailure = false }
+    override func setUp() { super.setUp(); continueAfterFailure = false; executionTimeAllowance = 180 }
     private func launch(_ mode: String = "workbench", theme: String = "blue") -> XCUIApplication {
         let app = XCUIApplication(); app.launchArguments = ["--render-fixture", "--render-mode=" + mode, "--fixture-theme=" + theme]; app.launch()
         currentApp = app; return app
     }
     private func evidence(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
-        let tree = XCTAttachment(string: app.debugDescription); tree.name = name + "-accessibility"; tree.lifetime = .keepAlways; add(tree)
+        let description = app.debugDescription; print("BOSSAI_UI_TREE " + name + "\n" + description)
+        let tree = XCTAttachment(string: description); tree.name = name + "-accessibility"; tree.lifetime = .keepAlways; add(tree)
     }
     func testWorkbenchCardCreatesDraftWithoutSendingAndModesAreSelectable() {
         XCUIDevice.shared.orientation = .portrait
@@ -23,9 +24,13 @@ final class AppWorkbenchUITests: XCTestCase {
         let input = app.descendants(matching: .any).matching(identifier: "task-input").firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10)); XCTAssertTrue((input.value as? String ?? "").contains("主题："))
         XCTAssertFalse(app.buttons["停止输出"].exists)
-        app.buttons["research-mode"].tap(); app.buttons["仅用现有资料"].tap()
+        app.buttons["research-mode"].tap()
+        let local = app.buttons["research-choice-local"]; XCTAssertTrue(local.waitForExistence(timeout: 10)); local.tap()
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "local"), object: app.buttons["research-mode"])], timeout: 10) == .completed)
         XCTAssertTrue(app.buttons["research-mode"].label.contains("仅用现有资料"))
-        app.buttons["answer-style"].tap(); app.buttons["详细分析"].tap()
+        app.buttons["answer-style"].tap()
+        let detailed = app.buttons["style-choice-detailed"]; XCTAssertTrue(detailed.waitForExistence(timeout: 10)); detailed.tap()
+        XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "detailed"), object: app.buttons["answer-style"])], timeout: 10) == .completed)
         XCTAssertTrue(app.buttons["answer-style"].label.contains("详细分析"))
         evidence(app, "task-draft-controls"); app.terminate()
     }
@@ -44,8 +49,10 @@ final class AppWorkbenchUITests: XCTestCase {
         app.buttons["完成"].tap(); app.terminate()
     }
     func testGoldWorkbenchSupportsLandscapeAndUsesProductionLayout() {
-        XCUIDevice.shared.orientation = .landscapeLeft
+        XCUIDevice.shared.orientation = .portrait
         let app = launch(theme: "gold")
+        XCTAssertTrue(app.buttons["task-research"].waitForExistence(timeout: 15))
+        XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(app.buttons["task-research"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.buttons["task-documents"].isHittable)
         evidence(app, "workbench-gold-landscape"); app.terminate(); XCUIDevice.shared.orientation = .portrait

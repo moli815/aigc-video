@@ -308,36 +308,90 @@ struct EmptyStateView: View {
     }
 }
 
+private enum TaskOption: String, Identifiable {
+    case research, style
+    var id: String { rawValue }
+}
 private struct TaskControls: View {
     @ObservedObject var viewModel: ChatViewModel
     @Environment(\.appTheme) private var theme
-    @State private var chooseResearch = false
-    @State private var chooseStyle = false
+    @State private var option: TaskOption?
     var body: some View {
         HStack(spacing: 10) {
-            Button { chooseResearch = true } label: {
+            Button { option = .research } label: {
                 Label(viewModel.researchMode.label, systemImage: "globe")
                     .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
                     .background(theme.accentSoft, in: Capsule())
             }
             .accessibilityIdentifier("research-mode")
-            .confirmationDialog("选择证据方式", isPresented: $chooseResearch, titleVisibility: .visible) {
-                ForEach(ResearchMode.allCases) { mode in Button(mode.label) { viewModel.researchMode = mode } }
-                Button("取消", role: .cancel) {}
-            }
-            Button { chooseStyle = true } label: {
+            .accessibilityLabel("证据方式：" + viewModel.researchMode.label)
+            .accessibilityValue(viewModel.researchMode.rawValue)
+            Button { option = .style } label: {
                 Label(viewModel.answerStyle.label, systemImage: "text.alignleft")
                     .padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
                     .background(theme.accentSoft, in: Capsule())
             }
             .accessibilityIdentifier("answer-style")
-            .confirmationDialog("选择回答深度", isPresented: $chooseStyle, titleVisibility: .visible) {
-                ForEach(AnswerStyle.allCases) { style in Button(style.label) { viewModel.answerStyle = style } }
-                Button("取消", role: .cancel) {}
-            }
+            .accessibilityLabel("回答深度：" + viewModel.answerStyle.label)
+            .accessibilityValue(viewModel.answerStyle.rawValue)
             Spacer(minLength: 0)
         }
         .buttonStyle(.plain).font(.footnote).padding(.horizontal, 20).padding(.vertical, 6)
         .background(theme.surface).disabled(viewModel.isStreaming)
+        .sheet(item: $option) { selected in
+            TaskOptionsSheet(viewModel: viewModel, option: selected)
+        }
+    }
+}
+private struct TaskOptionsSheet: View {
+    @ObservedObject var viewModel: ChatViewModel
+    let option: TaskOption
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                if option == .research {
+                    Section {
+                        ForEach(ResearchMode.allCases) { mode in
+                            Button {
+                                viewModel.researchMode = mode
+                                dismiss()
+                            } label: {
+                                row(mode.label, selected: viewModel.researchMode == mode)
+                            }
+                            .accessibilityLabel(mode.label)
+                            .accessibilityIdentifier("research-choice-" + mode.rawValue)
+                        }
+                    } footer: {
+                        Text("仅用现有资料关闭网页检索，仍通过所选模型API处理资料；不代表完全离线。")
+                    }
+                } else {
+                    Section {
+                        ForEach(AnswerStyle.allCases) { style in
+                            Button {
+                                viewModel.answerStyle = style
+                                dismiss()
+                            } label: {
+                                row(style.label, selected: viewModel.answerStyle == style)
+                            }
+                            .accessibilityLabel(style.label)
+                            .accessibilityIdentifier("style-choice-" + style.rawValue)
+                        }
+                    } footer: {
+                        Text("两种深度都保留要求的对象、字段、证据和未核实项。")
+                    }
+                }
+            }
+            .navigationTitle(option == .research ? "选择证据方式" : "选择回答深度")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+        }
+    }
+    private func row(_ title: String, selected: Bool) -> some View {
+        HStack {
+            Text(title).foregroundStyle(.primary)
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+        }.frame(minHeight: 44).contentShape(Rectangle())
     }
 }
