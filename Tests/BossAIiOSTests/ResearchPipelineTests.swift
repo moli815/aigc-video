@@ -117,6 +117,13 @@ final class ResearchPipelineTests: XCTestCase {
         let html = "<div class='result'><h3><a href='https://example.com/a' data-mdurl='javascript:bad'>实际标题</a></h3><p>有效摘要</p></div>"
         XCTAssertEqual(WebEvidenceExtractor.links(html: html).first?.href, "https://example.com/a")
     }
+    func testKnownHTTPRelayUsesHTTPSWithoutChangingQueryOrRelaxingOtherHosts() {
+        XCTAssertEqual(WebSearchService.secureSearchLink("http://www.baidu.com/link?url=a%2Fb&wd=x"), "https://www.baidu.com/link?url=a%2Fb&wd=x")
+        XCTAssertEqual(WebSearchService.secureSearchLink("http://www.so.com:80/link?m=x"), "https://www.so.com/link?m=x")
+        for url in ["http://www.baidu.com.evil.invalid/link?url=x", "http://example.com/article", "http://www.sogou.com/antispider", "https://www.baidu.com/link?url=x"] {
+            XCTAssertEqual(WebSearchService.secureSearchLink(url), url)
+        }
+    }
     func testDOMEvidenceExtractionBenchmarkWithOneHundredResults() {
         let html = (0..<100).map { "<li class='res-list'><h3><a href='https://example.com/\($0)'>测试标题\($0)</a></h3><p>" + String(repeating: "同一条结果的完整摘要", count: 100) + "</p></li>" }.joined()
         measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {

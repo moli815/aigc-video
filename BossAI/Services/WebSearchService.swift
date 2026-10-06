@@ -182,7 +182,7 @@ enum WebSearchService {
     /// 而纯文本转换会把单元格挤成一团，导致模型把「屏幕尺寸」的值填到「电池容量」列。
     /// 所以这里先把表格**结构化提取**出来放在最前面，正文再补充。
     static func fetchPageText(url: String, limit: Int = 4000) async -> String {
-        guard let target = URL(string: url), target.scheme?.hasPrefix("http") == true else { return "" }
+        guard let target = URL(string: secureSearchLink(url)), ["http", "https"].contains(target.scheme?.lowercased() ?? "") else { return "" }
 
         var current = target
         var pageHTML = await rawGet(current, timeout: 8).flatMap { decodeHTML($0) }
@@ -427,13 +427,26 @@ enum WebSearchService {
             let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard title.count >= 4, !isNoiseTitle(title), isResultLink(href, engine: engine),
                   seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
-            let resolved = absolutize(href, engine: engine)
+            let resolved = secureSearchLink(absolutize(href, engine: engine))
             guard let target = URL(string: resolved), ["https", "http"].contains(target.scheme?.lowercased() ?? ""), target.host != nil else { continue }
             hits.append(SearchHit(title: title, url: resolved, snippet: record.snippet,
                                   publishedAt: findDate(in: record.snippet) ?? ""))
         }
 
         return hits
+    }
+
+    /// Known search relays support HTTPS. HTTP relay links are blocked by iOS ATS
+    /// before any article is read; keep ATS enabled and preserve the exact query.
+    static func secureSearchLink(_ raw: String) -> String {
+        guard var parts = URLComponents(string: raw), parts.scheme?.lowercased() == "http",
+              let host = parts.host?.lowercased(),
+              ["baidu.com", "www.baidu.com", "www.sogou.com", "www.so.com"].contains(host),
+              parts.path == "/link", parts.port == nil || parts.port == 80,
+              parts.user == nil, parts.password == nil else { return raw }
+        parts.scheme = "https"
+        if parts.port == 80 { parts.port = nil }
+        return parts.url?.absoluteString ?? raw
     }
 
     /// 页脚 / 备案 / 版权之类的噪音标题，不是真实搜索结果
