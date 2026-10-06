@@ -64,9 +64,12 @@ final class AppPerformanceTests: XCTestCase {
     func testLongPDFClockAndMemory() {
         let markdown = String(repeating: "这是用于测试分页的数据，不是实际经营结论。", count: 2000)
         var lastCount = 0
+        var failure: Error?
         measure(metrics: [XCTClockMetric(), XCTMemoryMetric()]) {
-            lastCount = DocumentBuilder.pdf(title: "离线分页样本", markdown: markdown).count
+            do { lastCount = try DocumentBuilder.pdf(title: "离线分页样本", markdown: markdown).count }
+            catch { failure = error }
         }
+        XCTAssertNil(failure)
         XCTAssertGreaterThan(lastCount, 0)
     }
     func testTwoHundredMarkdownMessagesParsingPerformance() {

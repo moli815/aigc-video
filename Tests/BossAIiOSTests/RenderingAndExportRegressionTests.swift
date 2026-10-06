@@ -6,6 +6,11 @@ import UIKit
 @testable import BossAI
 
 final class RenderingAndExportRegressionTests: XCTestCase {
+    @MainActor private final class Heartbeat {
+        var finished = false
+        var ticks = 0
+        var maxGap: TimeInterval = 0
+    }
     @MainActor
     func testStreamDeltasDoNotInvalidateWholeConversationViewModel() throws {
         let container = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
@@ -28,25 +33,34 @@ final class RenderingAndExportRegressionTests: XCTestCase {
     @MainActor
     func testBackgroundPDFKeepsMainActorResponsiveAndRetainsText() async throws {
         let content = String(repeating: "后台导出测试文字，必须保留完整内容。", count: 2000) + "最终导出标记"
-        var finished = false; var ticks = 0; var maxGap: TimeInterval = 0
+        let pulse = Heartbeat()
         let heartbeat = Task { @MainActor in
             var previous = ProcessInfo.processInfo.systemUptime
-            while !finished {
+            while !pulse.finished {
                 try? await Task.sleep(nanoseconds: 20_000_000)
                 let now = ProcessInfo.processInfo.systemUptime
-                maxGap = max(maxGap, now - previous); previous = now; ticks += 1
+                pulse.maxGap = max(pulse.maxGap, now - previous); previous = now; pulse.ticks += 1
             }
         }
         let start = ProcessInfo.processInfo.systemUptime
         let data = try await DocumentBuilder.buildAsync(format: .pdf, title: "后台导出样本", content: content)
         let duration = ProcessInfo.processInfo.systemUptime - start
-        finished = true; await heartbeat.value
-        print("BOSSAI_BACKGROUND_PDF duration=\(duration) mainActorTicks=\(ticks) maxHeartbeatGap=\(maxGap)")
-        XCTAssertGreaterThan(ticks, 5, "生成期间主线程必须能调度其他任务")
-        XCTAssertLessThan(maxGap, max(1.0, duration * 0.5), "不得阻塞整个导出期间")
+        pulse.finished = true; await heartbeat.value
+        print("BOSSAI_BACKGROUND_PDF duration=\(duration) mainActorTicks=\(pulse.ticks) maxHeartbeatGap=\(pulse.maxGap)")
+        XCTAssertGreaterThan(pulse.ticks, 5, "生成期间主线程必须能调度其他任务")
+        XCTAssertLessThan(pulse.maxGap, max(1.0, duration * 0.5), "不得阻塞整个导出期间")
         let doc = try XCTUnwrap(PDFDocument(data: data))
         let text = (0..<doc.pageCount).compactMap { doc.page(at: $0)?.string }.joined()
-        XCTAssertTrue(text.contains("最终导出标记")); XCTAssertGreaterThan(doc.pageCount, 1)
+        let normalized = text.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
+        let expected = content.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
+        if !normalized.contains(expected) {
+            let pdf = XCTAttachment(data: data, uniformTypeIdentifier: "com.adobe.pdf")
+            pdf.name = "background-pdf-content-evidence"; pdf.lifetime = .keepAlways; add(pdf)
+            let tail = XCTAttachment(string: "expected=\(expected.count) actual=\(normalized.count)\n" + String(normalized.suffix(1500)))
+            tail.name = "background-pdf-extraction-tail"; tail.lifetime = .keepAlways; add(tail)
+        }
+        XCTAssertTrue(normalized.contains(expected), "跨页全文必须完整，不能只核对文件存在")
+        XCTAssertGreaterThan(doc.pageCount, 1)
     }
     @MainActor
     func testAsyncStorageAndSourcesPersistenceRoundTrip() async throws {

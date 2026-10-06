@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import CoreText
 
 /// 文档生成：把 AI 输出的 Markdown 转成可直接使用的办公文件。
 /// 全部用系统能力手写生成，不依赖任何第三方库：
@@ -204,9 +205,11 @@ enum MarkdownParser {
 enum DocumentBuilder {
     enum BuildError: Error, LocalizedError {
         case emptyContent
+        case pdfLayoutFailed
         var errorDescription: String? {
             switch self {
             case .emptyContent: return "文档内容为空"
+            case .pdfLayoutFailed: return "PDF分页失败，未生成文件；请缩短异常段落后重试"
             }
         }
     }
@@ -234,7 +237,7 @@ enum DocumentBuilder {
         case .word: return docx(title: title, markdown: body)
         case .ppt: return pptx(title: title, markdown: body)
         case .excel: return xlsx(title: title, markdown: body)
-        case .pdf: return pdf(title: title, markdown: body)
+        case .pdf: return try pdf(title: title, markdown: body)
         }
     }
 
@@ -526,104 +529,73 @@ enum DocumentBuilder {
 
     // MARK: - PDF
 
-    static func pdf(title: String, markdown: String) -> Data {
+    static func pdf(title: String, markdown: String) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
-        let contentWidth = pageSize.width - margin * 2
-        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize))
-
-        let titleStyle = NSMutableParagraphStyle()
-        titleStyle.lineSpacing = 4
-        let bodyStyle = NSMutableParagraphStyle()
-        bodyStyle.lineSpacing = 6
-        bodyStyle.paragraphSpacing = 8
-
-        return renderer.pdfData { context in
-            var y: CGFloat = margin
-            var pageStarted = false
-
-            func beginPageIfNeeded() {
-                if !pageStarted {
-                    context.beginPage()
-                    pageStarted = true
-                }
-            }
-            func newPage() {
-                context.beginPage()
-                y = margin
-            }
-            func draw(_ text: String, font: UIFont, color: UIColor, style: NSParagraphStyle,
-                      spacingAfter: CGFloat, indent: CGFloat = 0) {
-                guard !text.isEmpty else { return }
-                let width = contentWidth - indent
-                let attributed = NSAttributedString(string: text, attributes: [
-                    .font: font, .foregroundColor: color, .paragraphStyle: style,
-                ])
-                let height = attributed.boundingRect(
-                    with: CGSize(width: width, height: .greatestFiniteMagnitude),
-                    options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil
-                ).height
-                let usable = pageSize.height - margin * 2
-
-                // F04 修复：单个文本块（超长段落）超过一页时，按比例切成能放进一页的块，
-                // 逐块绘制。旧版整体 draw 会溢出页面、内容丢失。
-                if height > usable && text.count > 1 {
-                    let chars = Array(text)
-                    let chunkSize = max(1, min(chars.count - 1, Int(Double(chars.count) * (usable / height) * 0.9)))
-                    var i = 0
-                    while i < chars.count {
-                        let end = min(i + chunkSize, chars.count)
-                        draw(String(chars[i..<end]), font: font, color: color, style: style,
-                             spacingAfter: 0, indent: indent)
-                        i = end
-                    }
-                    y += spacingAfter
-                    return
-                }
-
-                beginPageIfNeeded()
-                if y + height > pageSize.height - margin {
-                    newPage()
-                }
-                attributed.draw(with: CGRect(x: margin + indent, y: y, width: width, height: height),
-                                options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
-                y += height + spacingAfter
-            }
-
-            draw(title, font: .systemFont(ofSize: 26, weight: .bold), color: .black,
-                 style: titleStyle, spacingAfter: 6)
-            draw(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none),
-                 font: .systemFont(ofSize: 11), color: .gray, style: bodyStyle, spacingAfter: 20)
-
-            for block in MarkdownParser.blocks(from: markdown) {
-                switch block.kind {
-                case .title, .heading1:
-                    draw(block.text, font: .systemFont(ofSize: 19, weight: .bold), color: .black,
-                         style: bodyStyle, spacingAfter: 8)
-                case .heading2:
-                    draw(block.text, font: .systemFont(ofSize: 16, weight: .semibold), color: .black,
-                         style: bodyStyle, spacingAfter: 6)
-                case .heading3:
-                    draw(block.text, font: .systemFont(ofSize: 13.5, weight: .semibold), color: .black,
-                         style: bodyStyle, spacingAfter: 4)
-                case .bullet:
-                    draw("•  " + block.text, font: .systemFont(ofSize: 12), color: .black,
-                         style: bodyStyle, spacingAfter: 4, indent: 16)
-                case .numbered:
-                    draw(block.text, font: .systemFont(ofSize: 12), color: .black,
-                         style: bodyStyle, spacingAfter: 4, indent: 16)
-                case .quote:
-                    draw("“" + block.text + "”", font: .italicSystemFont(ofSize: 12),
-                         color: .darkGray, style: bodyStyle, spacingAfter: 6, indent: 16)
-                case .paragraph:
-                    draw(block.text, font: .systemFont(ofSize: 12), color: .black,
-                         style: bodyStyle, spacingAfter: 8)
-                case .pageBreak:
-                    newPage()
-                }
-            }
-            if !pageStarted { context.beginPage() }
+        var sections: [NSAttributedString] = []
+        var section = NSMutableAttributedString(string: "")
+        func append(_ text: String, size: CGFloat, weight: UIFont.Weight = .regular,
+                    color: UIColor = .black, indent: CGFloat = 0, italic: Bool = false) {
+            guard !text.isEmpty else { return }
+            let style = NSMutableParagraphStyle()
+            style.lineSpacing = 6; style.paragraphSpacing = 8
+            style.headIndent = indent; style.firstLineHeadIndent = indent
+            let font = italic ? UIFont.italicSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size, weight: weight)
+            section.append(NSAttributedString(string: text + "\n", attributes: [
+                .font: font, .foregroundColor: color, .paragraphStyle: style
+            ]))
         }
+        append(title, size: 26, weight: .bold)
+        append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
+        for block in MarkdownParser.blocks(from: markdown) {
+            switch block.kind {
+            case .title, .heading1: append(block.text, size: 19, weight: .bold)
+            case .heading2: append(block.text, size: 16, weight: .semibold)
+            case .heading3: append(block.text, size: 13.5, weight: .semibold)
+            case .bullet: append("•  " + block.text, size: 12, indent: 16)
+            case .numbered: append(block.text, size: 12, indent: 16)
+            case .quote: append("“" + block.text + "”", size: 12, color: .darkGray, indent: 16, italic: true)
+            case .paragraph: append(block.text, size: 12)
+            case .pageBreak:
+                if section.length > 0 { sections.append(section.copy() as! NSAttributedString) }
+                section = NSMutableAttributedString(string: "")
+            }
+        }
+        if section.length > 0 { sections.append(section.copy() as! NSAttributedString) }
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize))
+        let path = CGPath(rect: CGRect(x: margin, y: margin, width: pageSize.width - margin * 2,
+                                      height: pageSize.height - margin * 2), transform: nil)
+        var layoutError: Error?
+        let result = renderer.pdfData { rendererContext in
+            // Advance by the actual visible UTF-16 range. No character-count estimation
+            // or recursive substring measurement, and no page can silently lose text.
+            for attributed in sections {
+                let framesetter = CTFramesetterCreateWithAttributedString(attributed as CFAttributedString)
+                var position = 0
+                while position < attributed.length {
+                    if Task.isCancelled { layoutError = CancellationError(); return }
+                    let advanced = autoreleasepool { () -> Int in
+                        let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: position, length: 0), path, nil)
+                        let visible = CTFrameGetVisibleStringRange(frame)
+                        guard visible.length > 0, visible.location == position else { return 0 }
+                        rendererContext.beginPage()
+                        let graphics = rendererContext.cgContext
+                        graphics.saveGState()
+                        graphics.textMatrix = .identity
+                        graphics.translateBy(x: 0, y: pageSize.height)
+                        graphics.scaleBy(x: 1, y: -1)
+                        CTFrameDraw(frame, graphics)
+                        graphics.restoreGState()
+                        return visible.length
+                    }
+                    guard advanced > 0 else { layoutError = BuildError.pdfLayoutFailed; return }
+                    position += advanced
+                }
+            }
+            if sections.isEmpty { rendererContext.beginPage() }
+        }
+        if let layoutError { throw layoutError }
+        return result
     }
 
     // MARK: - 工具
