@@ -26,9 +26,14 @@ final class ChatViewModel: ObservableObject {
     /// 待发送的附件
     @Published var pendingAttachments: [StoredFile] = []
     @Published var isImporting = false
+    @Published private(set) var isExporting = false
     @Published var toast: String?
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
-    @Published var streamingText = ""
+    let replyBuffer = StreamingReplyBuffer()
+    var streamingText: String {
+        get { replyBuffer.text }
+        set { replyBuffer.text = newValue }
+    }
     /// 正在流式输出的消息 id
     @Published var streamingMessageId: UUID?
 
@@ -94,7 +99,7 @@ final class ChatViewModel: ObservableObject {
                 guard !data.isEmpty else { errorMessage = "文件读取失败或超过32MB：" + url.lastPathComponent; continue }
                 let name = url.lastPathComponent
                 do {
-                let record = try FileStore.store(data: data,
+                let record = try await FileStore.storeAsync(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
                                                      sourceConversationId: conversation?.id.uuidString ?? "",
@@ -120,7 +125,7 @@ final class ChatViewModel: ObservableObject {
                 let name = "照片_\(Self.timestamp())_\(index + 1).jpg"
                 let text = await FileImportService.ocr(imageData: data)
                 do {
-                let record = try FileStore.store(data: data,
+                let record = try await FileStore.storeAsync(data: data,
                                                      filename: name,
                                                      kind: .uploaded,
                                                      sourceConversationId: conversation?.id.uuidString ?? "",
@@ -484,13 +489,13 @@ final class ChatViewModel: ObservableObject {
                             }
                             let span = PerformanceTrace.begin("DocumentBuild")
                             let data: Data
-                            do { data = try DocumentBuilder.build(format: format, title: title, content: content) }
+                            do { data = try await DocumentBuilder.buildAsync(format: format, title: title, content: content) }
                             catch { PerformanceTrace.end("DocumentBuild", span); throw error }
                             PerformanceTrace.end("DocumentBuild", span)
                             let safe = DocumentBuilder.safeFilename(filename, fallback: title)
                             let ext = format.ext
                             let finalName = safe.hasSuffix(".\(ext)") ? safe : "\(safe).\(ext)"
-                            let record = try FileStore.store(data: data,
+                            let record = try await FileStore.storeAsync(data: data,
                                                             filename: finalName,
                                                             kind: .generated,
                                                             sourceConversationId: conv.id.uuidString,
@@ -527,7 +532,7 @@ final class ChatViewModel: ObservableObject {
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": outcome.callId,
-                                "content": outcome.emptyMessage ?? WebSearchService.format(hits: outcome.hits, pages: outcome.pages, sourceIDs: outcome.hits.map { citations.register($0.url) }),
+                                "content": outcome.emptyMessage ?? WebSearchService.format(hits: outcome.hits, pages: outcome.pages, sourceIDs: outcome.hits.map { citations.register($0.url, title: $0.title, publishedAt: $0.publishedAt) }),
                             ])
                         }
 
@@ -586,7 +591,7 @@ final class ChatViewModel: ObservableObject {
 
         // 附上信息来源，方便核对。带编号，与回答里的「（来源 N）」对应，可逐条追溯。
         if !citations.urls.isEmpty, !assistantMessage.text.isEmpty {
-            assistantMessage.text += "\n\n---\n信息来源（编号在整轮对话中保持一致）：\n" + citations.markdown
+            assistantMessage.sourcesJSON = String(data: (try? JSONEncoder().encode(citations.sources)) ?? Data(), encoding: .utf8) ?? ""
         }
         citations = CitationRegistry()
         try? modelContext.save()
@@ -737,23 +742,29 @@ final class ChatViewModel: ObservableObject {
     // MARK: - 导出
 
     /// 把当前会话导出为文件并存入资料库，返回提示文案
-    func exportConversation(format: DocumentFormat) -> String {
+    func exportConversation(format: DocumentFormat) async -> String {
+        guard !isExporting else { return "正在导出，请稍候" }
+        isExporting = true
+        defer { isExporting = false }
         let title = (conversation?.title.isEmpty ?? true) ? expert.name : (conversation?.title ?? expert.name)
         var lines: [String] = []
         for message in sortedMessages {
             if message.imageData != nil { lines.append("[此消息包含图片，文字导出未嵌入图片]") }
             for file in files(for: message) { lines.append("附件：" + file.name) }
             guard !message.text.isEmpty else { continue }
-            lines.append(message.role == "user" ? "**我：**\(message.text)" : message.text)
+            let projection = CitationPresentation.projection(text: message.text, json: message.sourcesJSON)
+            lines.append(message.role == "user" ? "**我：**\(message.text)" : projection.body)
+            let cited = CitationPresentation.cited(projection.sources, in: projection.body)
+            if !cited.isEmpty { lines.append("\n信息来源：\n" + CitationPresentation.markdown(cited)) }
             lines.append("")
         }
         guard !lines.isEmpty else { return "当前对话没有可导出的内容" }
         let markdown = "# \(title)\n\n" + lines.joined(separator: "\n")
         do {
-            let data = try DocumentBuilder.build(format: format, title: title, content: markdown)
+            let data = try await DocumentBuilder.buildAsync(format: format, title: title, content: markdown)
             let name = DocumentBuilder.safeFilename(title, fallback: "对话导出")
             let file = "\(name)-\(Self.timestamp()).\(format.ext)"
-            _ = try FileStore.store(data: data, filename: file, kind: .generated,
+            _ = try await FileStore.storeAsync(data: data, filename: file, kind: .generated,
                                     sourceConversationId: conversation?.id.uuidString ?? "",
                                     textContent: markdown, context: modelContext)
             invalidateFileCache()
@@ -768,6 +779,12 @@ final class ChatViewModel: ObservableObject {
         formatter.dateFormat = "yyyyMMdd_HHmmss"
         return formatter.string(from: Date())
     }
+}
+
+/// High-frequency deltas update only the active message, not the whole conversation VM.
+@MainActor
+final class StreamingReplyBuffer: ObservableObject {
+    @Published var text = ""
 }
 
 extension UIImage {

@@ -59,6 +59,32 @@ enum FileStore {
         return record
     }
 
+    /// Write bytes off the main thread, then insert only metadata on MainActor.
+    @discardableResult
+    static func storeAsync(data: Data, filename: String, kind: FileKind,
+                           category: FileCategory? = nil, sourceConversationId: String = "",
+                           textContent: String = "", context: ModelContext) async throws -> StoredFile {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let storedName = "\(UUID().uuidString).\(ext.isEmpty ? "dat" : ext)"
+        let directory = rootURL
+        let destination = directory.appendingPathComponent(storedName)
+        try await FileIOWorker.shared.write(data, to: destination, directory: directory)
+        let record = StoredFile(name: filename, ext: ext, storedName: storedName, kind: kind,
+                                category: category ?? FileCategory.from(ext: ext), byteCount: data.count,
+                                sourceConversationId: sourceConversationId, textContent: textContent)
+        do {
+            try Task.checkCancellation()
+            context.insert(record)
+            try context.save()
+        } catch {
+            context.delete(record)
+            await FileIOWorker.shared.remove(destination)
+            throw error
+        }
+        NotificationCenter.default.post(name: .bossAIFilesChanged, object: nil)
+        return record
+    }
+
     static func delete(_ file: StoredFile, context: ModelContext) throws {
         let path = url(for: file)
         let quarantine = rootURL.appendingPathComponent("delete-" + UUID().uuidString)
@@ -101,3 +127,13 @@ extension StoredFile {
 }
 
 extension Notification.Name { static let bossAIFilesChanged = Notification.Name("bossai.files.changed") }
+
+private actor FileIOWorker {
+    static let shared = FileIOWorker()
+    func write(_ data: Data, to destination: URL, directory: URL) throws {
+        try Task.checkCancellation()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
+    }
+    func remove(_ url: URL) { try? FileManager.default.removeItem(at: url) }
+}

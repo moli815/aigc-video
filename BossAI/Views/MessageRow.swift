@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 /// 消息行：用户右对齐气泡，AI 全宽正文 + 图片 + 文件卡片
 struct MessageRow: View {
@@ -32,20 +33,8 @@ struct MessageRow: View {
                 .padding(.vertical, 6)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
-                    if let data = message.imageData, let uiImage = UIImage(data: data) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 420)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .contextMenu {
-                                Button {
-                                    UIImageWriteToSavedPhotosAlbum(uiImage, nil, nil, nil)
-                                } label: {
-                                    Label("保存到相册", systemImage: "square.and.arrow.down")
-                                }
-                            }
-                            .accessibilityLabel("生成的图片")
+                    if let data = message.imageData {
+                        MessageImageView(data: data).equatable()
                     }
 
                     ForEach(files, id: \.id) { file in
@@ -55,7 +44,7 @@ struct MessageRow: View {
                     let content = streamingText ?? message.text
                     if !content.isEmpty {
                         // AI 输出区：带清晰边框的卡片
-                        MarkdownView(content, collapseDisabled: streamingText != nil)
+                        AssistantAnswerView(text: content, sourcesJSON: message.sourcesJSON, streaming: streamingText != nil).equatable()
                             .padding(theme.cardPadding)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
@@ -120,5 +109,109 @@ struct FilePreviewSheet: View {
                 }
             }
         }
+    }
+}
+
+
+/// Value-only subview: streaming a new message does not reparse historical answers.
+private struct AssistantAnswerView: View, Equatable {
+    let text: String
+    let sourcesJSON: String
+    let streaming: Bool
+    var body: some View {
+        let projection = CitationPresentation.projection(text: text, json: sourcesJSON)
+        VStack(alignment: .leading, spacing: 12) {
+            MarkdownView(projection.body, collapseDisabled: streaming).equatable()
+            if !streaming && !projection.sources.isEmpty {
+                CitationSourcesView(sources: projection.sources, answer: projection.body)
+            }
+        }
+    }
+}
+
+struct CitationSourcesView: View {
+    let sources: [CitationSource]
+    let answer: String
+    @State private var showSearchRecords = false
+    var body: some View {
+        let cited = CitationPresentation.cited(sources, in: answer)
+        let known = Set(sources.map(\.id))
+        let unknown = CitationPresentation.referencedIDs(in: answer).subtracting(known).sorted()
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Text("本回答引用来源（\(cited.count) 条）").font(.subheadline.bold())
+            if cited.isEmpty {
+                Text("本轮检索了 \(sources.count) 条结果，但回答未标明具体引用，请核对原文。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(cited) { source in CitationSourceRow(source: source) }
+            if !unknown.isEmpty {
+                Text("引用编号 \(unknown.map(String.init).joined(separator: "、")) 未匹配到检索记录，不能作为已核实证据。")
+                    .font(.footnote).foregroundStyle(.orange)
+            }
+            if sources.count > cited.count {
+                Button("查看本轮检索记录（\(sources.count) 条）") { showSearchRecords = true }
+                    .font(.footnote).accessibilityIdentifier("search-records")
+            }
+        }
+        .sheet(isPresented: $showSearchRecords) {
+            NavigationStack {
+                List(sources) { source in CitationSourceRow(source: source) }
+                    .navigationTitle("本轮检索记录")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { showSearchRecords = false } } }
+            }
+        }
+    }
+}
+
+private struct CitationSourceRow: View {
+    let source: CitationSource
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let url = URL(string: source.url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+                Link("[\(source.id)] \(source.label)", destination: url)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("citation-\(source.id)")
+            } else { Text("[\(source.id)] \(source.label) · 链接不可用") }
+            Text(source.domain + " · " + source.dateLabel).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MessageImageView: View, Equatable {
+    let data: Data
+    @State private var thumbnail: UIImage?
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
+    var body: some View {
+        Group {
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().scaledToFit().frame(maxWidth: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .contextMenu {
+                        Button("保存到相册", systemImage: "square.and.arrow.down") {
+                            if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
+                        }
+                    }
+            } else { ProgressView("正在读取图片…").frame(height: 120) }
+        }
+        .accessibilityLabel("生成的图片")
+        .task(id: data) {
+            let image = await ImageThumbnailWorker.shared.thumbnail(data)
+            if !Task.isCancelled { thumbnail = image.map { UIImage(cgImage: $0) } }
+        }
+    }
+}
+
+private actor ImageThumbnailWorker {
+    static let shared = ImageThumbnailWorker()
+    func thumbnail(_ data: Data) -> CGImage? {
+        guard !Task.isCancelled, let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1260,
+            kCGImageSourceShouldCacheImmediately: true
+        ] as CFDictionary)
     }
 }

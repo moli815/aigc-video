@@ -30,6 +30,7 @@ final class Message {
     var id: UUID = UUID()
     var role: String = "user"          // user / assistant
     var text: String = ""
+    var sourcesJSON: String = ""
     var imageData: Data? = nil         // 生成的图片（assistant 消息）
     /// 附件（StoredFile.id 的字符串形式，逗号分隔）
     var attachmentIds: String = ""

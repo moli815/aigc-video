@@ -13,7 +13,9 @@ struct BossAIApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if ProcessInfo.processInfo.arguments.contains("--acceptance-fixture") {
+                if ProcessInfo.processInfo.arguments.contains("--render-fixture") {
+                    ChatRenderingFixtureView()
+                } else if ProcessInfo.processInfo.arguments.contains("--acceptance-fixture") {
                     OfflineAcceptanceView()
                 } else if ProcessInfo.processInfo.arguments.contains("--performance-fixture") {
                     PerformanceFixtureView()
@@ -28,6 +30,6 @@ struct BossAIApp: App {
             .tint((AppTheme(rawValue: themeRaw) ?? .blue).accent)
         }
         .modelContainer(for: [Conversation.self, Message.self, MemoryItem.self, StoredFile.self],
-                        inMemory: ProcessInfo.processInfo.arguments.contains("--performance-fixture") || ProcessInfo.processInfo.arguments.contains("--acceptance-fixture"))
+                        inMemory: ProcessInfo.processInfo.arguments.contains("--render-fixture") || ProcessInfo.processInfo.arguments.contains("--performance-fixture") || ProcessInfo.processInfo.arguments.contains("--acceptance-fixture"))
     }
 }

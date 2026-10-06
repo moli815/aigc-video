@@ -211,6 +211,22 @@ enum DocumentBuilder {
         }
     }
 
+    /// Heavy CPU work runs on a serialized actor, never the MainActor caller.
+    private actor BuildWorker {
+        func build(format: DocumentFormat, title: String, content: String) throws -> Data {
+            try Task.checkCancellation()
+            let span = PerformanceTrace.begin("DocumentBuildBackground")
+            defer { PerformanceTrace.end("DocumentBuildBackground", span) }
+            let result = try autoreleasepool { try DocumentBuilder.build(format: format, title: title, content: content) }
+            try Task.checkCancellation()
+            return result
+        }
+    }
+    private static let worker = BuildWorker()
+    static func buildAsync(format: DocumentFormat, title: String, content: String) async throws -> Data {
+        try await worker.build(format: format, title: title, content: content)
+    }
+
     static func build(format: DocumentFormat, title: String, content: String) throws -> Data {
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw BuildError.emptyContent }

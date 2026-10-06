@@ -24,13 +24,30 @@ struct SSEDecoder {
 }
 
 /// Stable identifiers across all searches in one assistant turn. Never renumber.
+struct CitationSource: Codable, Equatable, Sendable, Identifiable {
+    let id: Int
+    let url: String
+    var title: String = ""
+    var publishedAt: String = ""
+    var domain: String { URLComponents(string: url)?.host ?? "域名未记录" }
+    var label: String { title.isEmpty ? domain + "（标题未记录）" : title }
+    var dateLabel: String { publishedAt.isEmpty ? "发布时间未核实" : "检索返回日期：" + publishedAt + "（原文需核对）" }
+}
+
 struct CitationRegistry {
-    private(set) var urls: [String] = []
-    mutating func register(_ url: String) -> Int {
+    private(set) var sources: [CitationSource] = []
+    private var indices: [String: Int] = [:]
+    var urls: [String] { sources.map(\.url) }
+    mutating func register(_ url: String, title: String = "", publishedAt: String = "") -> Int {
         let key = Self.canonical(url)
-        if let index = urls.firstIndex(where: { Self.canonical($0) == key }) { return index + 1 }
-        urls.append(url)
-        return urls.count
+        if let index = indices[key] {
+            if sources[index].title.isEmpty { sources[index].title = title }
+            if sources[index].publishedAt.isEmpty { sources[index].publishedAt = publishedAt }
+            return sources[index].id
+        }
+        indices[key] = sources.count
+        sources.append(CitationSource(id: sources.count + 1, url: url, title: title, publishedAt: publishedAt))
+        return sources.count
     }
     static func canonical(_ raw: String) -> String {
         guard var parts = URLComponents(string: raw) else { return raw }
@@ -42,8 +59,79 @@ struct CitationRegistry {
         if parts.queryItems?.isEmpty == true { parts.queryItems = nil }
         return parts.string ?? raw
     }
-    var markdown: String {
-        urls.enumerated().map { "[\($0.offset + 1)] [查看来源](\($0.element))" }.joined(separator: "\n")
+    var markdown: String { CitationPresentation.markdown(sources) }
+}
+
+enum CitationPresentation {
+    static let legacyMarker = "\n\n---\n信息来源（编号在整轮对话中保持一致）：\n"
+    private static let numberPattern = try! NSRegularExpression(pattern: #"\d{1,4}"#)
+    private static let references = try! NSRegularExpression(pattern: #"(?i)(?:来源|检索结果|source(?:s)?)\s*[:：]?\s*([0-9][0-9/、，,;；\s和与\-–]*[0-9]|[0-9])|\[([0-9][0-9/、，,\s\-–]*[0-9]|[0-9])\]"#)
+    static func referencedIDs(in text: String) -> Set<Int> {
+        let body = text.components(separatedBy: legacyMarker).first ?? text
+        let clean = body.replacingOccurrences(of: #"```[\s\S]*?```|`[^`\n]*`"#, with: "", options: .regularExpression)
+        var result: Set<Int> = []
+        func collect(_ value: String) {
+            let ns = value as NSString
+            for match in numberPattern.matches(in: value, range: NSRange(location: 0, length: ns.length)) {
+                if let number = Int(ns.substring(with: match.range)) { result.insert(number) }
+            }
+            // Explicit source ranges, bounded to avoid expanding malformed enormous ranges.
+            let rangePattern = #"(\d{1,4})\s*[-–]\s*(\d{1,4})"#
+            if let pattern = try? NSRegularExpression(pattern: rangePattern) {
+                for match in pattern.matches(in: value, range: NSRange(location: 0, length: ns.length)) {
+                    if let lower = Int(ns.substring(with: match.range(at: 1))), let upper = Int(ns.substring(with: match.range(at: 2))), upper >= lower, upper - lower < 500 {
+                        result.formUnion(lower...upper)
+                    }
+                }
+            }
+        }
+        let ns = clean as NSString
+        for match in references.matches(in: clean, range: NSRange(location: 0, length: ns.length)) { collect(ns.substring(with: match.range)) }
+        // Source columns also support model-generated plain IDs such as "14/16".
+        var sourceColumns: [Int] = []
+        for line in clean.components(separatedBy: .newlines) {
+            guard line.contains("|") else { sourceColumns = []; continue }
+            let cells = MarkdownTableCore.cells(line)
+            let columns = cells.indices.filter { ["来源", "引用", "出处", "source"].contains(cells[$0].lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "* "))) }
+            if !columns.isEmpty { sourceColumns = columns; continue }
+            if MarkdownTableCore.isSeparator(line) { continue }
+            for index in sourceColumns where cells.indices.contains(index) { collect(cells[index]) }
+        }
+        return result
+    }
+    static func cited(_ sources: [CitationSource], in text: String) -> [CitationSource] {
+        let ids = referencedIDs(in: text)
+        let body = text.components(separatedBy: legacyMarker).first ?? text
+        let pattern = try! NSRegularExpression(pattern: #"https?://[^\s<>\]\)]+"#)
+        let ns = body as NSString
+        let links = Set(pattern.matches(in: body, range: NSRange(location: 0, length: ns.length)).map {
+            CitationRegistry.canonical(ns.substring(with: $0.range).trimmingCharacters(in: CharacterSet(charactersIn: "。，；、\"")))
+        })
+        return sources.filter { ids.contains($0.id) || links.contains(CitationRegistry.canonical($0.url)) }
+    }
+    static func projection(text: String, json: String) -> (body: String, sources: [CitationSource]) {
+        if let data = json.data(using: .utf8), let sources = try? JSONDecoder().decode([CitationSource].self, from: data) {
+            return (text, sources)
+        }
+        // Old conversations keep their original data; only the known App footer is projected.
+        guard let marker = text.range(of: legacyMarker) else { return (text, []) }
+        let body = String(text[..<marker.lowerBound])
+        let footer = String(text[marker.upperBound...])
+        let pattern = try! NSRegularExpression(pattern: #"\[(\d+)\] \[查看来源\]\((https?://[^\s)]+)\)"#)
+        let ns = footer as NSString
+        var sources: [CitationSource] = []
+        for match in pattern.matches(in: footer, range: NSRange(location: 0, length: ns.length)) {
+            if let id = Int(ns.substring(with: match.range(at: 1))) {
+                sources.append(CitationSource(id: id, url: ns.substring(with: match.range(at: 2))))
+            }
+        }
+        return sources.isEmpty ? (text, []) : (body, sources)
+    }
+    static func markdown(_ sources: [CitationSource]) -> String {
+        sources.map { source in
+            let title = source.label.replacingOccurrences(of: "[", with: "（").replacingOccurrences(of: "]", with: "）").replacingOccurrences(of: "\n", with: " ")
+            return "[\(source.id)] [\(title)](\(source.url)) · \(source.domain) · \(source.dateLabel)"
+        }.joined(separator: "\n\n")
     }
 }
 

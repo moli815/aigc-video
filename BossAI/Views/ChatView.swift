@@ -13,6 +13,7 @@ struct ChatContainerView: View {
     @State private var showIdentity = false
     @State private var showExportAlert = false
     @State private var exportMessage = ""
+    @State private var exporting = false
     @State private var previewFile: StoredFile?
 
     let conversation: Conversation?
@@ -63,11 +64,17 @@ struct ChatContainerView: View {
                     ForEach(DocumentFormat.allCases) { format in
                         Button {
                             if let vm = viewModelHolder.vm {
-                                exportMessage = vm.exportConversation(format: format)
+                                guard !exporting else { return }
+                                exporting = true
+                                Task {
+                                    exportMessage = await vm.exportConversation(format: format)
+                                    exporting = false
+                                    showExportAlert = true
+                                }
                             } else {
                                 exportMessage = "对话尚未就绪"
                             }
-                            showExportAlert = true
+                            if viewModelHolder.vm == nil { showExportAlert = true }
                         } label: {
                             Label("导出为 \(format.displayName)", systemImage: format.symbol)
                         }
@@ -75,7 +82,8 @@ struct ChatContainerView: View {
                 } label: {
                     Image(systemName: "square.and.arrow.down")
                 }
-                .accessibilityLabel("导出对话")
+                .accessibilityLabel(exporting ? "正在导出" : "导出对话")
+                .disabled(exporting)
             }
         }
         .alert("导出", isPresented: $showExportAlert) {
@@ -130,7 +138,8 @@ struct ExpertBanner: View {
 struct ChatView: View {
     @Environment(\.appTheme) private var theme
     @State private var followOutput = true
-    @State private var lastScrollTime: TimeInterval = 0
+    @State private var scrollClock = ScrollClock()
+    private final class ScrollClock { var lastTime: TimeInterval = 0 }
     @ObservedObject var viewModel: ChatViewModel
     @Binding var previewFile: StoredFile?
 
@@ -147,16 +156,17 @@ struct ChatView: View {
                             EmptyStateView(expert: viewModel.expert)
                         }
                         ForEach(viewModel.sortedMessages, id: \.id) { message in
-                            MessageRow(
-                                message: message,
-                                streamingText: message.id == viewModel.streamingMessageId ? viewModel.streamingText : nil,
-                                files: viewModel.files(for: message),
-                                onPreview: { previewFile = $0 }
-                            )
-                            .id(message.id)
+                            Group {
+                                if message.id == viewModel.streamingMessageId {
+                                    StreamingMessageRow(message: message, buffer: viewModel.replyBuffer,
+                                                        files: viewModel.files(for: message), onPreview: { previewFile = $0 })
+                                } else {
+                                    MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 })
+                                }
+                            }.id(message.id)
                         }
                         Color.clear.frame(height: 1).id("conversation-bottom")
-                            .onAppear { followOutput = true }
+
 
                         if let status = viewModel.statusText {
                             HStack(spacing: 8) {
@@ -174,21 +184,19 @@ struct ChatView: View {
                     .padding(.vertical, 12)
                 }
                 .defaultScrollAnchor(.bottom)
-                .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { _ in followOutput = false })
+                .accessibilityIdentifier("chat-scroll")
+                .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { value in
+                    if abs(value.translation.height) > abs(value.translation.width), value.translation.height > 5 { followOutput = false }
+                })
                 .onChange(of: viewModel.sortedMessages.count) { _, _ in
-                    if followOutput, let last = viewModel.sortedMessages.last {
-                        withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
-                    }
-                }
-                .onChange(of: viewModel.sortedMessages.last?.text) { _, _ in
                     if followOutput, let last = viewModel.sortedMessages.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
-                .onChange(of: viewModel.streamingText) { _, _ in
+                .onReceive(viewModel.replyBuffer.$text) { _ in
                     let now = ProcessInfo.processInfo.systemUptime
-                    if followOutput && now - lastScrollTime >= 0.25 {
-                        lastScrollTime = now
+                    if followOutput && now - scrollClock.lastTime >= 0.25 {
+                        scrollClock.lastTime = now
                         proxy.scrollTo("conversation-bottom", anchor: .bottom)
                     }
                 }
@@ -221,6 +229,16 @@ struct ChatView: View {
             InputBar(viewModel: viewModel)
         }
         .background(theme.canvas)
+    }
+}
+
+private struct StreamingMessageRow: View {
+    let message: Message
+    @ObservedObject var buffer: StreamingReplyBuffer
+    let files: [StoredFile]
+    let onPreview: (StoredFile) -> Void
+    var body: some View {
+        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview)
     }
 }
 

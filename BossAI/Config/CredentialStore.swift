@@ -18,7 +18,7 @@ final class CredentialStore: ObservableObject {
     }
 
     init() {
-        if ProcessInfo.processInfo.arguments.contains("--performance-fixture") || ProcessInfo.processInfo.arguments.contains("--acceptance-fixture") || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
+        if ProcessInfo.processInfo.arguments.contains("--render-fixture") || ProcessInfo.processInfo.arguments.contains("--performance-fixture") || ProcessInfo.processInfo.arguments.contains("--acceptance-fixture") || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         seedBakedKeys()
         reload()
     }

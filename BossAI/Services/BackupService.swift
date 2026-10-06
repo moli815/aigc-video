@@ -84,6 +84,7 @@ enum BackupService {
         var createdAt: Date
         var attachmentIds: String
         var imageEntry: String?
+        var sourcesJSON: String? = nil
     }
 
     struct FileDTO: Codable, Sendable {
@@ -209,7 +210,7 @@ enum BackupService {
                 dto.messages.append(MessageDTO(id: msg.id, role: msg.role, text: msg.text,
                                                createdAt: msg.createdAt,
                                                attachmentIds: msg.attachmentIds,
-                                               imageEntry: entry))
+                                               imageEntry: entry, sourcesJSON: msg.sourcesJSON))
             }
             manifest.conversations.append(dto)
         }
@@ -380,6 +381,7 @@ enum BackupService {
                 }
                 for m in dto.messages where knownMessageIDs.insert(m.id).inserted {
                     let message = Message(role: m.role, text: m.text)
+                    message.sourcesJSON = m.sourcesJSON ?? ""
                     message.id = m.id; message.createdAt = m.createdAt; message.attachmentIds = m.attachmentIds
                     if let entry = m.imageEntry { message.imageData = stagedImages[entry] }
                     message.conversation = conv; transactionContext.insert(message); summary.messages += 1
