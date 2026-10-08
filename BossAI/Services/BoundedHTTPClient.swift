@@ -15,11 +15,19 @@ enum BoundedHTTPClient {
         guard let http = response as? HTTPURLResponse,
               response.expectedContentLength <= limit else { throw URLError(.dataLengthExceedsMaximum) }
         var result = Data(); result.reserveCapacity(min(limit, 65536))
+        // 批量缓冲：逐字节 append 会在大页面上造成数十万次 Data 扩容拷贝，
+        // 攒满 16KB 再一次性 memcpy 进结果，取消与上限语义保持不变。
+        var pending = [UInt8](); pending.reserveCapacity(16384)
         for try await byte in bytes {
             try Task.checkCancellation()
-            guard result.count < limit else { throw URLError(.dataLengthExceedsMaximum) }
-            result.append(byte)
+            guard result.count + pending.count < limit else { throw URLError(.dataLengthExceedsMaximum) }
+            pending.append(byte)
+            if pending.count >= 16384 {
+                result.append(contentsOf: pending)
+                pending.removeAll(keepingCapacity: true)
+            }
         }
+        result.append(contentsOf: pending)
         return (result, http)
     }
 }
