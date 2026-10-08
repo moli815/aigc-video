@@ -11,7 +11,8 @@ struct SetupView: View {
     @State private var imageKey = ""
     @State private var chatModelOverride = ""
     @State private var imageModelOverride = ""
-    @State private var budgetLimit = ""
+    @State private var chatBudget = ""
+    @State private var imageBudget = ""
     @State private var isDetecting = false
     @State private var detectError: String?
     @State private var saved = false
@@ -28,8 +29,10 @@ struct SetupView: View {
         imageKey = credentials.imageKey ?? ""
         chatModelOverride = ProviderCatalog.chatModelOverride()
         imageModelOverride = ProviderCatalog.imageModelOverride()
-        let l = BudgetTracker.limit()
-        budgetLimit = l > 0 ? String(format: "%.0f", l) : ""
+        let cl = BudgetTracker.chatLimit()
+        chatBudget = cl > 0 ? String(format: "%.0f", cl) : ""
+        let il = BudgetTracker.imageLimit()
+        imageBudget = il > 0 ? String(format: "%.0f", il) : ""
         searchEngineKind = WebSearchService.engine
         tavilyKey = WebSearchService.tavilyKey
         bochaKey = WebSearchService.bochaKey
@@ -91,13 +94,18 @@ struct SetupView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                 }
-                DisclosureGroup("高级设置（预算 / 模型报 404 时才需要填）") {
+                DisclosureGroup("高级设置（额度 / 模型报 404 时才需要填）") {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("每月预算上限（元，0 = 不限）").font(.footnote).foregroundStyle(.secondary)
-                        TextField("0", text: $budgetLimit)
+                        Text("对话额度（元/月，0 = 不限，留空 = 恢复默认 100）").font(.footnote).foregroundStyle(.secondary)
+                        TextField("100", text: $chatBudget)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.decimalPad)
-                        Text("本月已用约 ¥\(String(format: "%.2f", BudgetTracker.spent()))，每月 1 日自动清零")
+                        Text("本月对话已用约 ¥\(String(format: "%.2f", BudgetTracker.chatSpent()))").font(.caption2).foregroundStyle(.secondary)
+                        Text("生图额度（元/月，0 = 不限，留空 = 恢复默认 40）").font(.footnote).foregroundStyle(.secondary)
+                        TextField("40", text: $imageBudget)
+                            .textFieldStyle(.roundedBorder)
+                            .keyboardType(.decimalPad)
+                        Text("本月生图已用约 ¥\(String(format: "%.2f", BudgetTracker.imageSpent()))；额度与已用每月 1 日自动清零")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Text("自定义对话模型 ID").font(.footnote).foregroundStyle(.secondary)
@@ -266,9 +274,11 @@ struct SetupView: View {
         }
         detectError = nil
         isDetecting = true
-        // 保存预算与模型覆盖（留空即恢复默认/不限）
-        let budgetText = budgetLimit.trimmingCharacters(in: .whitespaces)
-        BudgetTracker.setLimit(Double(budgetText) ?? 0)
+        // 保存额度与模型覆盖（留空 = 恢复默认额度；填 0 = 不限）
+        if let v = Double(chatBudget.trimmingCharacters(in: .whitespaces)) { BudgetTracker.setChatLimit(v) }
+        else { BudgetTracker.setChatLimit(BudgetTracker.defaultChatLimit) }
+        if let v = Double(imageBudget.trimmingCharacters(in: .whitespaces)) { BudgetTracker.setImageLimit(v) }
+        else { BudgetTracker.setImageLimit(BudgetTracker.defaultImageLimit) }
         ProviderCatalog.saveChatModelOverride(chatModelOverride.trimmingCharacters(in: .whitespaces))
         ProviderCatalog.saveImageModelOverride(imageModelOverride.trimmingCharacters(in: .whitespaces))
         // 联网搜索设置
