@@ -317,6 +317,12 @@ final class ChatViewModel: ObservableObject {
             try? modelContext.save()
             return
         }
+        if researchMode != .local && ResearchIntent.needsSpecificTarget(userText) {
+            let topic = ResearchIntent.searchSeed(from: userText)
+            assistantMessage.text = "要逐项核实“\(topic)”的最新数据，请先提供具体产品或对象的名称、型号和版本；也可以给我一份要比较的清单。只有类别名称时，搜索结果会混入其他产品，无法可靠核实配置。"
+            try? modelContext.save()
+            return
+        }
         citations = CitationRegistry()
         var apiMessages = buildAPIMessages()
         var researchBudget = ResearchBudget()
@@ -344,7 +350,7 @@ final class ChatViewModel: ObservableObject {
         do {
             if capability.allowSearch, researchMode != .local, !nativeSearch, needsFreshEvidence {
                 statusText = "正在检索问题相关证据…"
-                let query = String(userText.prefix(360))
+                let query = ResearchIntent.searchSeed(from: userText)
                 let recency = SearchRecency.inferred(from: query)
                 let key = ResearchIntent.fingerprint(query, recency: recency.rawValue)
                 if researchBudget.reserve(key) {
@@ -419,7 +425,7 @@ final class ChatViewModel: ObservableObject {
                    (nativeSearchRejected || (!assistantText.contains("https://") && !assistantText.contains("http://"))) {
                     nativeEvidenceFallbackUsed = true
                     statusText = "模型未给出可核对来源，正在使用 App 搜索补查…"
-                    let query = String(userText.prefix(360))
+                    let query = ResearchIntent.searchSeed(from: userText)
                     let recency = SearchRecency.inferred(from: query)
                     let key = ResearchIntent.fingerprint(query, recency: recency.rawValue)
                     if researchBudget.reserve(key) {
