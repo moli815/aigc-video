@@ -7,6 +7,13 @@ final class ResearchCoreTests: XCTestCase {
         XCTAssertEqual(SearchRecency.inferred(from: "本月发布的产品"), .month)
         XCTAssertEqual(SearchRecency.inferred(from: "今天新闻"), .day)
     }
+    func testGenericResearchTemplateNeedsConcreteTargetAndSearchesOnlyItsTopic() {
+        let text = "请核实以下最新信息。\n主题：手机配置\n截至日期：今天\n需要的字段：优先官方资料"
+        XCTAssertEqual(ResearchIntent.searchSeed(from: text), "手机配置")
+        XCTAssertTrue(ResearchIntent.needsSpecificTarget(text))
+        XCTAssertFalse(ResearchIntent.needsSpecificTarget("主题：iPhone 18 Pro 配置\n截至日期：今天"))
+        XCTAssertEqual(ResearchIntent.relevance(query: "手机配置", text: "2026 家庭 SUV 怎么选？汽车车型横评"), 0)
+    }
     func testQueryDeduplicationNormalizesWhitespaceAndCase() {
         let a = ResearchIntent.fingerprint("  IPHONE   Pro ", recency: "any")
         XCTAssertEqual(a, ResearchIntent.fingerprint("iphone pro", recency: "any"))
