@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import Combine
 
 /// 主界面：ChatGPT 风格侧栏（可折叠专家团 + 对话列表 + 资料库）+ 对话区
 struct MainView: View {
@@ -301,9 +302,13 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom) {
-                Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                    .buttonStyle(.borderedProminent).padding(12).background(theme.surface)
-                    .accessibilityIdentifier("new-task")
+                VStack(spacing: 0) {
+                    QuotaSidebarWidget()
+                    Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
+                        .buttonStyle(.borderedProminent).padding([.horizontal, .bottom], 12)
+                        .accessibilityIdentifier("new-task")
+                }
+                .background(theme.surface)
             }
             .safeAreaInset(edge: .top) {
                 HStack {
@@ -353,6 +358,50 @@ struct SidebarView: View {
         tapCount = 0
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         onHiddenSettings()
+    }
+}
+
+/// 侧栏额度组件：对话 / 生图 剩余百分比（额度设为 0 = 不限时自动隐藏）
+struct QuotaSidebarWidget: View {
+    @Environment(\.appTheme) private var theme
+    @State private var tick = 0
+    private let refresh = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        let chat = BudgetTracker.chatRemainingPercent()
+        let image = BudgetTracker.imageRemainingPercent()
+        Group {
+            if chat != nil || image != nil {
+                VStack(alignment: .leading, spacing: 7) {
+                    if let chat { quotaRow("对话额度", percent: chat, color: theme.accent) }
+                    if let image { quotaRow("生图额度", percent: image, color: .orange) }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+            }
+        }
+        .onReceive(refresh) { _ in tick += 1 }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func quotaRow(_ label: String, percent: Double, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Int(percent.rounded()))%")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(percent < 20 ? Color.red : Color.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.18))
+                    Capsule().fill(percent < 20 ? Color.red : color)
+                        .frame(width: max(4, geo.size.width * percent / 100))
+                }
+            }
+            .frame(height: 4)
+        }
     }
 }
 
