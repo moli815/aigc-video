@@ -226,12 +226,14 @@ private struct MessageImageView: View, Equatable {
     let data: Data
     @State private var thumbnail: UIImage?
     @State private var loading = true
+    @State private var fullscreen = false
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
     var body: some View {
         Group {
             if let thumbnail {
                 Image(uiImage: thumbnail).resizable().scaledToFit().frame(maxWidth: 420)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture { fullscreen = true }
                     .contextMenu {
                         Button("保存到相册", systemImage: "square.and.arrow.down") {
                             if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
@@ -240,10 +242,58 @@ private struct MessageImageView: View, Equatable {
             } else if loading { ProgressView("正在读取图片…").frame(height: 120) }
             else { Text("图片无法读取，可尝试重新生成。").font(.footnote).foregroundStyle(.secondary) }
         }
-        .accessibilityLabel("生成的图片")
+        .accessibilityLabel("生成的图片，点按可放大查看")
+        .fullScreenCover(isPresented: $fullscreen) {
+            ImageFullscreenView(data: data)
+        }
         .task(id: data) {
             let image = await ImageThumbnailWorker.shared.thumbnail(data)
             if !Task.isCancelled { thumbnail = image.map { UIImage(cgImage: $0) }; loading = false }
+        }
+    }
+}
+
+/// 图片全屏预览：双指缩放、双击放大、保存与分享
+private struct ImageFullscreenView: View {
+    let data: Data
+    @Environment(\.dismiss) private var dismiss
+    @State private var saved = false
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let image = UIImage(data: data) {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .scaleEffect(scale)
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in scale = min(6, max(1, lastScale * value)) }
+                                .onEnded { _ in lastScale = scale }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                scale = scale > 1 ? 1 : 2; lastScale = scale
+                            }
+                        }
+                }
+            }
+            .navigationTitle("图片预览").navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        if let image = UIImage(data: data) {
+                            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil); saved = true
+                        }
+                    } label: {
+                        Label(saved ? "已保存" : "保存", systemImage: saved ? "checkmark" : "square.and.arrow.down")
+                    }
+                    .disabled(saved)
+                }
+            }
         }
     }
 }
