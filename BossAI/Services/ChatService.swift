@@ -14,6 +14,7 @@ final class ChatService {
         case textDelta(String)
         case reasoningDelta(String) // API continuation only; never merged into the answer
         case status(String)          // 如"正在联网搜索…"
+        case nativeSearchUnavailable // The provider rejected its advertised native-search payload.
         case toolCalls([ToolCall], assistantText: String)
         case usage(promptTokens: Int, completionTokens: Int)   // 服务端返回的真实 token 数
         case finished
@@ -42,8 +43,16 @@ final class ChatService {
 
     var configurationLabel: String { profile.displayName + " / " + profile.model }
 
+    var prefersNativeSearch: Bool {
+        guard AppConfig.preferProviderSearch else { return false }
+        switch profile.searchStyle {
+        case .none: return false
+        case .kimiBuiltin, .zhipuTool, .dashscopeParam, .volcTool: return true
+        }
+    }
+
     /// 单次请求流。工具调用通过 toolCalls 事件交给调用方处理，调用方追加 tool 结果后再次调用本方法继续。
-    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general", allowSearch: Bool = true) -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general", allowSearch: Bool = true, useNativeSearch: Bool? = nil) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 let span = PerformanceTrace.begin("AIRequest")
@@ -66,11 +75,25 @@ final class ChatService {
                     ]
                     ModelRequestAdapter.apply(to: &body, profile: profile, purpose: .chat)
                     if enableTools {
-                        try applyTools(to: &body, expertID: expertID, allowSearch: allowSearch)
+                        try applyTools(to: &body, expertID: expertID, allowSearch: allowSearch, useNativeSearch: useNativeSearch ?? prefersNativeSearch)
                     }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-                    let (bytes, response) = try await session.bytes(for: request)
+                    var (bytes, response) = try await session.bytes(for: request)
+                    if let http = response as? HTTPURLResponse,
+                       [400, 422].contains(http.statusCode),
+                       allowSearch, useNativeSearch ?? prefersNativeSearch {
+                        // A configured provider can reject native search for a specific model.
+                        // Retry this request with the App tool; never silently repeat the same unsupported payload.
+                        var fallbackBody = body
+                        fallbackBody.removeValue(forKey: "tools")
+                        fallbackBody.removeValue(forKey: "enable_search")
+                        try applyTools(to: &fallbackBody, expertID: expertID, allowSearch: allowSearch, useNativeSearch: false)
+                        request.httpBody = try JSONSerialization.data(withJSONObject: fallbackBody)
+                        continuation.yield(.status("模型内置搜索不可用，已切换 App 搜索…"))
+                        continuation.yield(.nativeSearchUnavailable)
+                        (bytes, response) = try await session.bytes(for: request)
+                    }
                     if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                         var errBody = ""
                         for try await line in bytes.lines {
@@ -194,12 +217,12 @@ final class ChatService {
         }
     }
 
-    /// 挂载工具。联网搜索改为 App 自带的本地工具（web_search），
-    /// 不再依赖模型厂商的搜索能力 —— 换任何模型商都不会掉联网功能。
-    private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true) throws {
+    /// Search is routed to one backend per request. Native support is declared by the provider adapter;
+    /// unsupported providers and rejected native requests use the App-owned web_search tool.
+    private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool) throws {
         let capability = try ExpertCapabilityCatalog.profile(expertID)
-        // 少数厂商的服务端搜索质量更高，可在设置里开启作为增强
-        if capability.allowSearch && allowSearch && AppConfig.preferProviderSearch {
+        let nativeSearch = capability.allowSearch && allowSearch && useNativeSearch
+        if nativeSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
                 body["tools"] = [["type": "builtin_function", "function": ["name": "$web_search"]]]
@@ -215,7 +238,7 @@ final class ChatService {
         }
 
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if capability.allowSearch && allowSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if capability.allowSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         if capability.allowImages { tools.append(["type": "function", "function": Self.generateImageFunction]) }
         var document = Self.createDocumentFunction
         var parameters = document["parameters"] as? [String: Any] ?? [:]
