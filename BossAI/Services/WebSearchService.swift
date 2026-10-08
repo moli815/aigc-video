@@ -66,15 +66,20 @@ enum WebSearchService {
         let bounded = min(12, max(0, count))
         guard bounded > 0 else { return [] }
         let raw = await searchUnranked(query: recency.query(query), count: bounded, recency: recency)
-        let ranked = raw.enumerated().sorted { lhs, rhs in
-            func score(_ hit: SearchHit) -> Int {
-                return EvidenceRanking.score(query: query, title: hit.title, url: hit.url, snippet: hit.snippet, publishedAt: hit.publishedAt)
+        return rankRelevant(query: query, hits: raw, count: bounded)
+    }
+
+    /// Search engines may return unrelated pages. Never send zero-match candidates to the model.
+    static func rankRelevant(query: String, hits: [SearchHit], count: Int) -> [SearchHit] {
+        let ranked = hits.enumerated()
+            .filter { ResearchIntent.relevance(query: query, text: $0.element.title + " " + $0.element.snippet) > 0 }
+            .sorted { lhs, rhs in
+                let a = EvidenceRanking.score(query: query, title: lhs.element.title, url: lhs.element.url, snippet: lhs.element.snippet, publishedAt: lhs.element.publishedAt)
+                let b = EvidenceRanking.score(query: query, title: rhs.element.title, url: rhs.element.url, snippet: rhs.element.snippet, publishedAt: rhs.element.publishedAt)
+                return a == b ? lhs.offset < rhs.offset : a > b
             }
-            let a = score(lhs.element), b = score(rhs.element)
-            return a == b ? lhs.offset < rhs.offset : a > b
-        }
         var seen = Set<String>()
-        return Array(ranked.map(\.element).filter { seen.insert(CitationRegistry.canonical($0.url)).inserted }.prefix(bounded))
+        return Array(ranked.map(\.element).filter { seen.insert(CitationRegistry.canonical($0.url)).inserted }.prefix(max(0, count)))
     }
 
     private static func searchUnranked(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
