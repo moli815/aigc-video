@@ -94,7 +94,7 @@ struct SkillValidation: Codable {
 enum ExpertSkillRuntime {
     static func permits(_ name: String, profile: ExpertCapability) -> Bool {
         switch name {
-        case "expert_skill", "search_library": return true
+        case "expert_skill", "search_library", "render_chart": return true
         case "web_search", "$web_search": return profile.allowSearch
         case "generate_image": return profile.allowImages
         case "create_document": return !profile.documentFormats.isEmpty
