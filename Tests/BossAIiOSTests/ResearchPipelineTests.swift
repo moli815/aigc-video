@@ -140,6 +140,25 @@ final class ResearchPipelineTests: XCTestCase {
         XCTAssertEqual(model.sortedMessages.last?.text, "补查后回答（来源 1）")
     }
 
+    @MainActor func testBroadConfigurationTaskAsksForModelsBeforeSearching() async throws {
+        let search = FakeResearchSearch()
+        let model = try vm(chat: chat([]), search: search)
+        model.researchMode = .online
+        model.inputText = "请核实以下最新信息。\n主题：手机配置\n截至日期：今天\n需要的字段：优先官方资料"
+        model.send(); try await finish(model)
+        let count = await search.searchCount
+        XCTAssertEqual(count, 0)
+        XCTAssertTrue(ResearchChatProtocol.requests.isEmpty)
+        XCTAssertTrue(model.sortedMessages.last?.text.contains("具体产品") == true)
+    }
+
+    func testZeroRelevanceResultsNeverReachModelEvidence() {
+        let unrelated = SearchHit(title: "2026 家庭 SUV 怎么选", url: "https://car.example/suv", snippet: "汽车车型横评")
+        let relevant = SearchHit(title: "iPhone 18 Pro 手机配置", url: "https://phone.example/spec", snippet: "手机屏幕与电池")
+        let ranked = WebSearchService.rankRelevant(query: "手机配置", hits: [unrelated, relevant], count: 6)
+        XCTAssertEqual(ranked.map(\.url), ["https://phone.example/spec"])
+    }
+
     func testDOMResultsDoNotStealOtherResultSnippetsAndSupportSingleQuotes() {
         let html = "<nav><a href='https://noise.example'>导航</a></nav><div class='result'><h3><a href='https://example.com/a'>第一项标题</a></h3><p>第一项摘要独有</p></div><div class='result'><h3><a href='https://example.com/b'>第二项标题</a></h3><p>第二项摘要独有</p></div>"
         let links = WebEvidenceExtractor.links(html: html)
