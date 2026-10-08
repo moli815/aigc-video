@@ -124,44 +124,85 @@ enum ProviderCatalog {
     }
 }
 
-// MARK: - 月度预算（厂商只能按账号设预算，这里做 App 本地硬闸）
+// MARK: - 月度额度（ChatGPT 式分池限额：对话 / 生图 各自独立）
 
 enum BudgetTracker {
-    private static let limitKey = "bossai.monthly_limit_cny"
-    private static let monthKeyKey = "bossai.budget_month"
-    private static let spentKey = "bossai.spent_cny"
+    // MARK: 额度设置（元/月）
+    private static let chatLimitKey = "bossai.monthly_limit_chat_cny"
+    private static let imageLimitKey = "bossai.monthly_limit_image_cny"
+    private static let legacyLimitKey = "bossai.monthly_limit_cny"
+    // MARK: 已用金额（跨月自动清零）
+    private static let chatMonthKey = "bossai.budget_month_chat"
+    private static let chatSpentKey = "bossai.spent_chat_cny"
+    private static let imageMonthKey = "bossai.budget_month_image"
+    private static let imageSpentKey = "bossai.spent_image_cny"
 
-    /// 每月预算上限（元），0 = 不限
-    static func limit() -> Double { UserDefaults.standard.double(forKey: limitKey) }
-    static func setLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: limitKey) }
+    /// 默认额度：对话 ¥100/月、生图 ¥40/月（0 = 不限）
+    static let defaultChatLimit: Double = 100
+    static let defaultImageLimit: Double = 40
+
+    /// 对话额度
+    static func chatLimit() -> Double {
+        if let v = UserDefaults.standard.object(forKey: chatLimitKey) as? Double { return max(0, v) }
+        // 兼容旧版单一预算：设置过旧键就沿用为对话额度
+        if let legacy = UserDefaults.standard.object(forKey: legacyLimitKey) as? Double {
+            let value = max(0, legacy)
+            setChatLimit(value)
+            return value
+        }
+        return defaultChatLimit
+    }
+    static func setChatLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: chatLimitKey) }
+
+    /// 生图额度
+    static func imageLimit() -> Double {
+        if let v = UserDefaults.standard.object(forKey: imageLimitKey) as? Double { return max(0, v) }
+        return defaultImageLimit
+    }
+    static func setImageLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: imageLimitKey) }
 
     private static func currentMonthKey() -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM"; return f.string(from: Date())
     }
 
     /// 已用金额（元），跨月自动清零
-    static func spent() -> Double {
-        let stored = UserDefaults.standard.string(forKey: monthKeyKey) ?? ""
+    private static func spent(monthKey: String, spentKey: String) -> Double {
+        let stored = UserDefaults.standard.string(forKey: monthKey) ?? ""
         if stored != currentMonthKey() {
-            UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
+            UserDefaults.standard.set(currentMonthKey(), forKey: monthKey)
             UserDefaults.standard.set(0.0, forKey: spentKey)
             return 0
         }
         return UserDefaults.standard.double(forKey: spentKey)
     }
-
-    static func isExceeded() -> Bool {
-        let l = limit()
-        guard l > 0 else { return false }
-        return spent() >= l
+    private static func addCost(_ cost: Double, monthKey: String, spentKey: String) {
+        UserDefaults.standard.set(spent(monthKey: monthKey, spentKey: spentKey) + max(0, cost), forKey: spentKey)
     }
 
-    /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于预算控制）
+    static func chatSpent() -> Double { spent(monthKey: chatMonthKey, spentKey: chatSpentKey) }
+    static func imageSpent() -> Double { spent(monthKey: imageMonthKey, spentKey: imageSpentKey) }
+
+    static var chatExceeded: Bool {
+        let l = chatLimit()
+        return l > 0 && chatSpent() >= l
+    }
+    static var imageExceeded: Bool {
+        let l = imageLimit()
+        return l > 0 && imageSpent() >= l
+    }
+
+    // 兼容旧调用：全局判断与读写均映射到对话池
+    static func isExceeded() -> Bool { chatExceeded }
+    static func limit() -> Double { chatLimit() }
+    static func setLimit(_ v: Double) { setChatLimit(v) }
+    static func spent() -> Double { chatSpent() }
+
+    /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于额度控制）
     static func estimateTokens(_ text: String) -> Int {
         max(1, Int(ceil(Double(text.count) / 1.5)))
     }
 
-    /// 各家单价（元 / 百万 token，估算值，仅用于预算控制）
+    /// 各家单价（元 / 百万 token，估算值，仅用于额度控制）
     private static func prices(providerId: String) -> (in: Double, out: Double) {
         switch providerId {
         case "volc": return (0.8, 8.0)
@@ -173,29 +214,30 @@ enum BudgetTracker {
         }
     }
 
+    /// 对话类消耗计入对话池
     static func add(promptTokens: Int, completionTokens: Int, providerId: String) {
         let p = prices(providerId: providerId)
         let cost = (Double(promptTokens) / 1_000_000.0) * p.in + (Double(completionTokens) / 1_000_000.0) * p.out
-        UserDefaults.standard.set(spent() + cost, forKey: spentKey)
+        addCost(cost, monthKey: chatMonthKey, spentKey: chatSpentKey)
     }
 
-    /// 生图计费：按张估算（Seedream 等生图模型按张计费，统一用估算单价 0.1 元/张）
+    /// 生图按张估算（Seedream 等按张计费，统一估算单价 0.1 元/张）计入生图池
     static func addImageGeneration(_ count: Int = 1) {
         let perImage = 0.1
-        UserDefaults.standard.set(spent() + Double(max(0, count)) * perImage, forKey: spentKey)
+        addCost(Double(max(0, count)) * perImage, monthKey: imageMonthKey, spentKey: imageSpentKey)
     }
 
-    /// 文档生成计费：按内容 token 估算（统一按 2 元/百万 token）
+    /// 文档生成计费：按内容 token 估算（统一按 2 元/百万 token），走对话模型故计入对话池
     static func addDocument(_ content: String) {
         let tokens = estimateTokens(content)
         let cost = (Double(tokens) / 1_000_000.0) * 2.0
-        UserDefaults.standard.set(spent() + max(0.01, cost), forKey: spentKey)
+        addCost(max(0.01, cost), monthKey: chatMonthKey, spentKey: chatSpentKey)
     }
 
-    /// 备份恢复用：直接写回已用金额（并锁定到当前月份）
+    /// 备份恢复用：直接写回对话池已用金额（并锁定到当前月份）
     static func restoreSpent(_ value: Double) {
-        UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
-        UserDefaults.standard.set(max(0, value), forKey: spentKey)
+        UserDefaults.standard.set(currentMonthKey(), forKey: chatMonthKey)
+        UserDefaults.standard.set(max(0, value), forKey: chatSpentKey)
     }
 }
 
