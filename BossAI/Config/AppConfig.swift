@@ -35,10 +35,10 @@ enum AppConfig {
 
     /// 支持时优先使用模型服务端搜索；无能力或服务端拒绝时由 App 搜索接管。
     static var preferProviderSearch: Bool {
-        (UserDefaults.standard.object(forKey: "bossai.prefer_provider_search") as? Bool) ?? true
+        (UserDefaults.standard.object(forKey: "bossai.native_search_priority.v2") as? Bool) ?? true
     }
     static func setPreferProviderSearch(_ on: Bool) {
-        UserDefaults.standard.set(on, forKey: "bossai.prefer_provider_search")
+        UserDefaults.standard.set(on, forKey: "bossai.native_search_priority.v2")
     }
 
     /// 每次搜索自动抓取正文的网页数（0 = 只返回摘要）。
