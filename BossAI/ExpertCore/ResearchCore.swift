@@ -71,9 +71,59 @@ enum ResearchIntent {
         return keywords(query).filter { lower.contains($0) }.count
     }
 }
+/// LLM 查询规划的单条查询
+struct PlannedQuery: Sendable, Equatable {
+    let query: String
+    let recency: SearchRecency
+}
+
+/// 查询规划结果：意图 + 实体清单 + 可执行查询。
+/// 借鉴 anysearch batch_search 的"先拆解再并行"模式：模型先做意图分析，
+/// app 端把多条查询并行执行；intent=none 表示本轮无需联网（纯指令/追问）。
+struct SearchPlan: Sendable {
+    let intent: String
+    let entities: [String]
+    let queries: [PlannedQuery]
+
+    /// 解析规划器输出：容忍 ```json 围栏与前后缀文本；解析失败返回 nil（调用方回退规则 seed）
+    static func parse(_ text: String) -> SearchPlan? {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("```") {
+            trimmed = trimmed.components(separatedBy: "\n").dropFirst().joined(separator: "\n")
+            if let fence = trimmed.range(of: "```") { trimmed = String(trimmed[..<fence.lowerBound]) }
+        }
+        guard let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start < end,
+              let data = trimmed[start...end].data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let intent = (obj["intent"] as? String)?.lowercased() ?? "single"
+        let entities = ((obj["entities"] as? [Any]) ?? [])
+            .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.count <= 40 }
+        guard intent != "none" else { return SearchPlan(intent: "none", entities: [], queries: []) }
+        var queries: [PlannedQuery] = []
+        if let list = obj["queries"] as? [Any] {
+            for item in list.prefix(4) {
+                guard let entry = item as? [String: Any],
+                      let q = (entry["q"] as? String)?.trimmingCharacters(in: .whitespaces), q.count >= 2 else { continue }
+                let recency = (entry["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? .any
+                queries.append(PlannedQuery(query: String(q.prefix(120)), recency: recency))
+            }
+        }
+        guard !queries.isEmpty else { return nil }
+        return SearchPlan(intent: intent, entities: Array(entities.prefix(8)), queries: queries)
+    }
+}
+
 enum EvidenceRanking {
     // Verified official domains, not a claim that every page or region on them is current.
     static let manufacturerDomains = ["apple.com", "huawei.com", "mi.com", "samsung.com"]
+    /// UGC/视频站点：爆料可作线索，但极少能作为参数核实依据；排序降权而非排除。
+    static let lowValueDomains = ["bilibili.com", "b23.tv", "weibo.com", "douyin.com",
+                                  "youtube.com", "xiaohongshu.com", "tieba.baidu.com", "zhihu.com"]
+    static func isLowValue(_ url: String) -> Bool {
+        guard let host = URL(string: url)?.host?.lowercased() else { return false }
+        return lowValueDomains.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
     static func isAuthority(_ url: String) -> Bool {
         guard let host = URL(string: url)?.host?.lowercased() else { return false }
         return host.hasSuffix(".gov.cn") || host.hasSuffix(".gov") || manufacturerDomains.contains { host == $0 || host.hasSuffix("." + $0) }
@@ -82,7 +132,8 @@ enum EvidenceRanking {
         let relevance = ResearchIntent.relevance(query: query, text: title + " " + snippet)
         let rumor = ["爆料", "传闻", "预计", "rumor"].contains { title.lowercased().contains($0) }
         return relevance * 8 + (relevance > 0 && isAuthority(url) ? 18 : 0) + (snippet.isEmpty ? 0 : 2)
-            + (!publishedAt.isEmpty && !publishedAt.contains("抓取") ? 1 : 0) - (rumor ? 12 : 0)
+            + (!publishedAt.isEmpty && !publishedAt.contains("抓取") && !publishedAt.contains("未核实") ? 1 : 0)
+            - (rumor ? 12 : 0) - (isLowValue(url) ? 10 : 0)
     }
 }
 struct ResearchBudget {
