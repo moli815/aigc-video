@@ -463,7 +463,9 @@ final class ChatViewModel: ObservableObject {
                             let call = ChatService.ToolCall(id: "plan-\(order)", name: "web_search", arguments: String(decoding: args, as: UTF8.self))
                             group.addTask { (key, await Self.runWebSearch(call: call, order: order, fallback: pq.query, provider: researchService)) }
                         }
-                        for await item in group { merged.append((item.0, item.1)) }
+                        for await item in group {
+                            if let item { merged.append((key: item.0, outcome: item.1)) }
+                        }
                     }
                     try Task.checkCancellation()
                     var allHits: [SearchHit] = []
@@ -487,6 +489,7 @@ final class ChatViewModel: ObservableObject {
                     if plan.intent == "multi", !plan.entities.isEmpty {
                         context += "【检索规划判定：多实体核实任务，对象清单：\(plan.entities.joined(separator: "、"))】请对清单中每个对象逐项调用 web_search 核实，缺字段继续补查；清单不全先补全。\n"
                     }
+                    let evidence = researchBudget.evidence(evidenceBody)
                     context += evidence
                     apiMessages.append(["role": "system", "content": context])
                     researchSummary = "本轮检索 \(plan.queries.count) 个主题 · \(citations.sources.count) 条候选来源"
