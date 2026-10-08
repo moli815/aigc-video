@@ -383,6 +383,11 @@ final class ChatService {
                     "type": "string",
                     "description": "文档标题",
                 ],
+                "theme": [
+                    "type": "string",
+                    "enum": ["business", "vivid", "formal", "academic"],
+                    "description": "视觉主题：business=商务深蓝（默认）、vivid=彩色活泼（营销/活动）、formal=公文红头（法务/通知）、academic=学术严谨（报告/白皮书）",
+                ],
                 "content": [
                     "type": "string",
                     "description": "正文，使用 Markdown：# 一级标题、## 二级标题、- 列表项。PPT 用 --- 分页，每页第一行是标题；Excel 用 Markdown 表格。",
