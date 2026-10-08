@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   swift-core:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -28,7 +28,7 @@ jobs:
         if: always()
         with: {name: expert-swift-test-log, path: swift-core-tests.log}
   ios-tests:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
