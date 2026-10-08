@@ -166,9 +166,33 @@ struct ChatView: View {
                                     StreamingMessageRow(message: message, buffer: viewModel.replyBuffer,
                                                         files: viewModel.files(for: message), onPreview: { previewFile = $0 })
                                 } else {
-                                    MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 })
+                                    MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 },
+                                               isLastAssistant: message.role == "assistant" && message.id == viewModel.sortedMessages.last?.id,
+                                               onRegenerate: viewModel.canRegenerateLast ? { viewModel.regenerateLastReply() } : nil)
                                 }
                             }.id(message.id)
+                        }
+                        if !viewModel.isStreaming, viewModel.streamingMessageId == nil,
+                           !viewModel.suggestedFollowUps.isEmpty {
+                            // ChatGPT 式追问建议：回答结束后给 2-3 条可点的后续问题
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(viewModel.suggestedFollowUps, id: \.self) { suggestion in
+                                        Button { viewModel.sendFollowUp(suggestion) } label: {
+                                            Text(suggestion)
+                                                .font(.footnote)
+                                                .padding(.horizontal, 12)
+                                                .frame(minHeight: 36)
+                                                .background(theme.surface, in: Capsule())
+                                                .overlay(Capsule().stroke(theme.border, lineWidth: 0.8))
+                                        }
+                                        .buttonStyle(.plain)
+                                        .accessibilityIdentifier("follow-up")
+                                    }
+                                }
+                                .padding(.horizontal, 20)
+                            }
+                            .accessibilityIdentifier("follow-ups")
                         }
                         Color.clear.frame(height: 1).id("conversation-bottom")
 
