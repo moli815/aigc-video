@@ -106,7 +106,8 @@ enum ProviderCatalog {
         if !override.isEmpty {
             profile = ChatProfile(id: profile.id, displayName: profile.displayName,
                                   baseURL: profile.baseURL, model: profile.id == "deepseek" && ["deepseek-chat", "deepseek-reasoner"].contains(override) ? "deepseek-flash" : override,
-                                  memoryModel: profile.memoryModel, searchStyle: profile.searchStyle)
+                                  memoryModel: profile.memoryModel,
+                                  searchStyle: override == profile.model ? profile.searchStyle : .none)
         }
         return profile
     }
