@@ -191,6 +191,18 @@ enum BudgetTracker {
         return l > 0 && imageSpent() >= l
     }
 
+    /// 剩余额度百分比（0-100）；额度为 0（不限）时返回 nil，UI 据此隐藏
+    static func chatRemainingPercent() -> Double? {
+        let l = chatLimit()
+        guard l > 0 else { return nil }
+        return max(0, min(100, (l - chatSpent()) / l * 100))
+    }
+    static func imageRemainingPercent() -> Double? {
+        let l = imageLimit()
+        guard l > 0 else { return nil }
+        return max(0, min(100, (l - imageSpent()) / l * 100))
+    }
+
     // 兼容旧调用：全局判断与读写均映射到对话池
     static func isExceeded() -> Bool { chatExceeded }
     static func limit() -> Double { chatLimit() }
