@@ -461,7 +461,7 @@ final class ChatViewModel: ObservableObject {
                             presentedQueries.insert(key)
                             let args = (try? JSONSerialization.data(withJSONObject: ["query": pq.query, "recency": pq.recency.rawValue])) ?? Data("{}".utf8)
                             let call = ChatService.ToolCall(id: "plan-\(order)", name: "web_search", arguments: String(decoding: args, as: UTF8.self))
-                            group.addTask { (key, await Self.runWebSearch(call: call, order: order, fallback: pq.query, provider: researchService)) }
+                            group.addTask { (key, await Self.runWebSearch(call: call, order: order, fallback: pq.query, provider: self.researchService)) }
                         }
                         for await item in group {
                             if let item { merged.append((key: item.0, outcome: item.1)) }
