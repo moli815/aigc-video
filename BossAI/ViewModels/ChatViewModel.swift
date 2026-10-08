@@ -697,6 +697,9 @@ final class ChatViewModel: ObservableObject {
                             default: return .word
                             }
                         }()
+                        // 文档主题：模型可指定（business/vivid/formal/academic），缺省按专家身份映射
+                        let themeArg = (args?["theme"] as? String) ?? ""
+                        let docTheme = themeArg.isEmpty ? DocTheme.forExpert(expert.id) : DocTheme.named(themeArg)
                         do {
                             let validation = try ExpertSkillRuntime.validateDocument(content, format: format.rawValue, profile: capability)
                             guard validation.structurePassed else {
@@ -704,7 +707,7 @@ final class ChatViewModel: ObservableObject {
                             }
                             let span = PerformanceTrace.begin("DocumentBuild")
                             let data: Data
-                            do { data = try await DocumentBuilder.buildAsync(format: format, title: title, content: content) }
+                            do { data = try await DocumentBuilder.buildAsync(format: format, title: title, content: content, theme: docTheme) }
                             catch { PerformanceTrace.end("DocumentBuild", span); throw error }
                             PerformanceTrace.end("DocumentBuild", span)
                             let safe = DocumentBuilder.safeFilename(filename, fallback: title)
