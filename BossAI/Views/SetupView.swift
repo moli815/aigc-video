@@ -116,7 +116,7 @@ struct SetupView: View {
 
                         Divider().padding(.vertical, 6)
 
-                        Text("联网搜索（App 自带，与模型厂商无关）")
+                        Text("联网搜索（模型支持时优先内置搜索，否则使用 App 搜索）")
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.secondary)
                         Picker("搜索引擎", selection: $searchEngineKind) {
@@ -141,8 +141,11 @@ struct SetupView: View {
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
 
-                        Toggle("同时启用模型商自带搜索（增强）", isOn: $providerSearchOn)
+                        Toggle("优先使用模型内置搜索（支持时）", isOn: $providerSearchOn)
                             .font(.footnote)
+                        Text("自定义模型未验证内置搜索能力时，使用 App 搜索；内置搜索未给出链接时会补查。")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                         Stepper("每次自动阅读 \(pageFetch) 篇网页正文", value: $pageFetch, in: 0...4)
                             .font(.footnote)
                     }
