@@ -669,7 +669,6 @@ enum DocumentBuilder {
         let path = CGPath(rect: CGRect(x: margin, y: margin, width: pageSize.width - margin * 2,
                                       height: pageSize.height - margin * 2), transform: nil)
         var layoutError: Error?
-        var renderedPageCount = 0
         let result = renderer.pdfData { rendererContext in
             // Advance by the actual visible UTF-16 range. No character-count estimation
             // or recursive substring measurement, and no page can silently lose text.
@@ -683,7 +682,6 @@ enum DocumentBuilder {
                         let visible = CTFrameGetVisibleStringRange(frame)
                         guard visible.length > 0, visible.location == position else { return 0 }
                         rendererContext.beginPage()
-                        renderedPageCount += 1
                         let graphics = rendererContext.cgContext
                         graphics.saveGState()
                         graphics.textMatrix = .identity
@@ -691,15 +689,6 @@ enum DocumentBuilder {
                         graphics.scaleBy(x: 1, y: -1)
                         CTFrameDraw(frame, graphics)
                         graphics.restoreGState()
-                        // 页眉（第 2 页起：文档标题小字）与页脚页码
-                        if renderedPageCount > 1 {
-                            (title as NSString).draw(at: CGPoint(x: margin, y: 18), withAttributes: [
-                                .font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.gray
-                            ])
-                        }
-                        ("第 \(renderedPageCount) 页" as NSString).draw(
-                            at: CGPoint(x: pageSize.width - 70, y: pageSize.height - 26),
-                            withAttributes: [.font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.gray])
                         return visible.length
                     }
                     guard advanced > 0 else { layoutError = BuildError.pdfLayoutFailed; return }
