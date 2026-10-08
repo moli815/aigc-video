@@ -268,6 +268,7 @@ final class ChatService {
         var tools = (body["tools"] as? [[String: Any]]) ?? []
         if capability.allowSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         if capability.allowImages { tools.append(["type": "function", "function": Self.generateImageFunction]) }
+        tools.append(["type": "function", "function": Self.renderChartFunction])
         var document = Self.createDocumentFunction
         var parameters = document["parameters"] as? [String: Any] ?? [:]
         var properties = parameters["properties"] as? [String: Any] ?? [:]
@@ -322,6 +323,24 @@ final class ChatService {
         ],
     ]
 
+    /// 本地统计图表工具：模型输出结构化数据，App 用 Swift Charts 渲染（数字准确，可放大保存）
+    static let renderChartFunction: [String: Any] = [
+        "name": "render_chart",
+        "description": "把已核实的数值数据渲染成统计图（柱状图/折线图/环形图）。仅在数据全部来自本轮已核实来源或用户提供时调用；数字必须精确，禁止估计值。示意性/装饰性图像请改用 generate_image。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "type": ["type": "string", "enum": ["bar", "line", "pie"], "description": "图表类型：对比用 bar、趋势用 line、占比用 pie"],
+                "title": ["type": "string", "description": "图表标题：对象 + 口径（如「各机型官方起售价（元）」）"],
+                "labels": ["type": "array", "items": ["type": "string"], "description": "每个数据点的名称（最多 8 个）"],
+                "values": ["type": "array", "items": ["type": "number"], "description": "与 labels 一一对应的数值（最多 8 个）"],
+                "unit": ["type": "string", "description": "数值单位（元 / mAh / % 等），无单位可省略"],
+                "source_note": ["type": "string", "description": "数据来源说明（如「来源 1、3」或「用户提供」）"],
+            ],
+            "required": ["type", "title", "labels", "values"],
+        ],
+    ]
+
     /// 自定义生图工具定义
     static let generateImageFunction: [String: Any] = {
         let generateImageParameters: [String: Any] = [
@@ -340,7 +359,7 @@ final class ChatService {
         ]
         let functionDefinition: [String: Any] = [
             "name": "generate_image",
-            "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。返回后图片会自动展示给用户，你只需补充简短说明。",
+            "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。注意：数据统计图/图表禁止使用本工具，请改用 Markdown 数据表呈现。返回后图片会自动展示给用户，你只需补充简短说明。",
             "parameters": generateImageParameters,
         ]
         return functionDefinition
