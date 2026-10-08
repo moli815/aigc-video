@@ -202,6 +202,41 @@ enum MarkdownParser {
 
 // MARK: - 生成入口
 
+
+/// 文档主题（移植自 docgen skill 的四套场景主题）：按专家/场景切换配色与字体。
+struct DocTheme: Sendable {
+    let primary: String      // 主色（标题 / 色条 / 表头底纹）
+    let secondary: String    // 次色（装饰）
+    let light: String        // 浅色（副标题 / 浅底）
+    let text: String         // 正文色
+    let muted: String        // 弱化色（日期 / 页码）
+    let headerFont: String
+    let bodyFont: String
+
+    static let business = DocTheme(primary: "1F4E79", secondary: "2E75B6", light: "DEEBF7", text: "222222", muted: "6E6E6E", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+    static let vivid    = DocTheme(primary: "E85D2A", secondary: "FFC24B", light: "FFE3CC", text: "3A2E26", muted: "8A7A6E", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+    static let formal   = DocTheme(primary: "C00000", secondary: "404040", light: "F2E7E7", text: "1A1A1A", muted: "595959", headerFont: "黑体", bodyFont: "仿宋")
+    static let academic = DocTheme(primary: "14304D", secondary: "2F5D7A", light: "E6EEF2", text: "1B1B1B", muted: "5A6472", headerFont: "宋体", bodyFont: "宋体")
+
+    static func forExpert(_ id: String) -> DocTheme {
+        switch id {
+        case "legal": return .formal
+        case "marketing", "traffic": return .vivid
+        case "speech": return .academic
+        default: return .business
+        }
+    }
+
+    static func named(_ name: String) -> DocTheme {
+        switch name.lowercased() {
+        case "vivid": return .vivid
+        case "formal": return .formal
+        case "academic": return .academic
+        default: return .business
+        }
+    }
+}
+
 enum DocumentBuilder {
     enum BuildError: Error, LocalizedError {
         case emptyContent
@@ -216,38 +251,38 @@ enum DocumentBuilder {
 
     /// Heavy CPU work runs on a serialized actor, never the MainActor caller.
     private actor BuildWorker {
-        func build(format: DocumentFormat, title: String, content: String) throws -> Data {
+        func build(format: DocumentFormat, title: String, content: String, theme: DocTheme) throws -> Data {
             try Task.checkCancellation()
             let span = PerformanceTrace.begin("DocumentBuildBackground")
             defer { PerformanceTrace.end("DocumentBuildBackground", span) }
-            let result = try autoreleasepool { try DocumentBuilder.build(format: format, title: title, content: content) }
+            let result = try autoreleasepool { try DocumentBuilder.build(format: format, title: title, content: content, theme: theme) }
             try Task.checkCancellation()
             return result
         }
     }
     private static let worker = BuildWorker()
-    static func buildAsync(format: DocumentFormat, title: String, content: String) async throws -> Data {
-        try await worker.build(format: format, title: title, content: content)
+    static func buildAsync(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business) async throws -> Data {
+        try await worker.build(format: format, title: title, content: content, theme: theme)
     }
 
-    static func build(format: DocumentFormat, title: String, content: String) throws -> Data {
+    static func build(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business) throws -> Data {
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw BuildError.emptyContent }
         switch format {
-        case .word: return docx(title: title, markdown: body)
-        case .ppt: return pptx(title: title, markdown: body)
-        case .excel: return xlsx(title: title, markdown: body)
-        case .pdf: return try pdf(title: title, markdown: body)
+        case .word: return docx(title: title, markdown: body, theme: theme)
+        case .ppt: return pptx(title: title, markdown: body, theme: theme)
+        case .excel: return xlsx(title: title, markdown: body, theme: theme)
+        case .pdf: return try pdf(title: title, markdown: body, theme: theme)
         }
     }
 
     // MARK: - Word (.docx)
 
-    static func docx(title: String, markdown: String) -> Data {
+    static func docx(title: String, markdown: String, theme: DocTheme) -> Data {
         var body = ""
 
         func runProps(size: Int, bold: Bool) -> String {
-            "<w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/>"
+            "<w:rPr><w:rFonts w:ascii=\"\(theme.bodyFont)\" w:hAnsi=\"\(theme.bodyFont)\" w:eastAsia=\"\(theme.bodyFont)\"/>"
                 + (bold ? "<w:b/>" : "")
                 + "<w:sz w:val=\"\(size)\"/><w:szCs w:val=\"\(size)\"/></w:rPr>"
         }
@@ -267,9 +302,9 @@ enum DocumentBuilder {
 
         // 标题 + 主题色分隔线 + 日期
         body += paragraph(title, size: 44, bold: true, spacingAfter: 120)
-        body += "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"18\" w:space=\"1\" w:color=\"185FA5\"/></w:pBdr><w:spacing w:after=\"240\"/></w:pPr></w:p>"
+        body += "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"18\" w:space=\"1\" w:color=\"\(theme.primary)\"/></w:pBdr><w:spacing w:after=\"240\"/></w:pPr></w:p>"
         body += paragraph(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none),
-                          size: 18, bold: false, spacingAfter: 360, color: "888888")
+                          size: 18, bold: false, spacingAfter: 360, color: "\(theme.muted)")
 
         // F03 修复：旧版把 Markdown 表格行当普通段落，`|` 符号残留、表格结构丢失。
         // 现在按「文本段 / 表格段」切分，表格段单独渲染成 <w:tbl>。
@@ -281,7 +316,7 @@ enum DocumentBuilder {
             for block in MarkdownParser.blocks(from: section.markdown) {
                 switch block.kind {
                 case .title, .heading1:
-                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "185FA5")
+                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "\(theme.primary)")
                 case .heading2:
                     body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120)
                 case .heading3:
@@ -338,9 +373,9 @@ enum DocumentBuilder {
             for cell in row {
                 if rowIndex == 0 {
                     // 表头：主题蓝底 + 白字加粗
-                    xml += "<w:tc><w:tcPr><w:shd w:val=\"clear\" w:fill=\"185FA5\"/></w:tcPr><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/><w:b/><w:color w:val=\"FFFFFF\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+                    xml += "<w:tc><w:tcPr><w:shd w:val=\"clear\" w:fill=\"\(theme.primary)\"/></w:tcPr><w:p><w:r><w:rPr><w:rFonts w:ascii=\"\(theme.bodyFont)\" w:hAnsi=\"\(theme.bodyFont)\" w:eastAsia=\"\(theme.bodyFont)\"/><w:b/><w:color w:val=\"FFFFFF\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
                 } else {
-                    xml += "<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+                    xml += "<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii=\"\(theme.bodyFont)\" w:hAnsi=\"\(theme.bodyFont)\" w:eastAsia=\"\(theme.bodyFont)\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
                 }
             }
             xml += "</w:tr>"
@@ -353,7 +388,7 @@ enum DocumentBuilder {
 
     // MARK: - PowerPoint (.pptx)
 
-    static func pptx(title: String, markdown: String) -> Data {
+    static func pptx(title: String, markdown: String, theme: DocTheme) -> Data {
         var deck = MarkdownParser.slides(from: markdown)
         if deck.first?.title.isEmpty ?? true {
             deck.insert((title, []), at: 0)
@@ -417,9 +452,9 @@ enum DocumentBuilder {
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>
         """
-        zip.add("ppt/slides/cover.xml", coverSlideXML(title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
+        zip.add("ppt/slides/cover.xml", coverSlideXML(theme: theme, title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
         zip.add("ppt/slides/_rels/cover.xml.rels", slideLayoutRels)
-        zip.add("ppt/slides/closing.xml", closingSlideXML())
+        zip.add("ppt/slides/closing.xml", closingSlideXML(theme: theme))
         zip.add("ppt/slides/_rels/closing.xml.rels", slideLayoutRels)
         contentTypes += "<Override PartName=\"/ppt/slides/cover.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
         contentTypes += "<Override PartName=\"/ppt/slides/closing.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
@@ -456,7 +491,7 @@ enum DocumentBuilder {
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>
         """)
-        zip.add("ppt/theme/theme1.xml", themeXML)
+        zip.add("ppt/theme/theme1.xml", themeXML(theme))
         return zip.finalize()
     }
 
@@ -469,44 +504,45 @@ enum DocumentBuilder {
             let size = isSub ? 1600 : 1800
             let indent = isSub ? 342900 : 0
             let spaceBefore = index == 0 ? 0 : 600
-            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buClr><a:srgbClr val=\"185FA5\"/></a:buClr><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t>\(xmlEscape(text))</a:t></a:r></a:p>"
+            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buClr><a:srgbClr val=\"\(theme.primary)\"/></a:buClr><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t>\(xmlEscape(text))</a:t></a:r></a:p>"
         }
         if contentRuns.isEmpty {
-            contentRuns = "<a:p><a:r><a:rPr lang=\"zh-CN\" sz=\"1800\" dirty=\"0\"><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t></a:t></a:r></a:p>"
+            contentRuns = "<a:p><a:r><a:rPr lang=\"zh-CN\" sz=\"1800\" dirty=\"0\"><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t></a:t></a:r></a:p>"
         }
         // 页脚页码（右下角）
-        let pageFooter = "<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"页码\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"10972800\" y=\"6400800\"/><a:ext cx=\"1000000\" cy=\"320000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"r\"/><a:r><a:rPr lang=\"zh-CN\" sz=\"1100\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"8A8A8A\"/></a:solidFill><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t>\(pageIndex) / \(totalPages)</a:t></a:r></a:p></p:txBody></p:sp>"
+        let pageFooter = "<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"页码\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"10972800\" y=\"6400800\"/><a:ext cx=\"1000000\" cy=\"320000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"r\"/><a:r><a:rPr lang=\"zh-CN\" sz=\"1100\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"\(theme.muted)\"/></a:solidFill><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t>\(pageIndex) / \(totalPages)</a:t></a:r></a:p></p:txBody></p:sp>"
 
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="185FA5"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="3200" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="3200" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
     /// 封面页：深蓝底 + 居中大标题 + 日期
-    private static func coverSlideXML(title: String, dateLine: String) -> String {
+    private static func coverSlideXML(theme: DocTheme, title: String, dateLine: String) -> String {
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="0C447C"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="封面标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2857500"/><a:ext cx="10515600" cy="1257300"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4400" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="装饰线"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5096000" y="2651760"/><a:ext cx="2000000" cy="50800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="85B7EB"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4343400"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="B5D4F4"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>Boss AI · \(xmlEscape(dateLine))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="封面标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2857500"/><a:ext cx="10515600" cy="1257300"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4400" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="装饰线"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5096000" y="2651760"/><a:ext cx="2000000" cy="50800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.secondary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4343400"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="\(theme.light)"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>Boss AI · \(xmlEscape(dateLine))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
     /// 结尾页：深蓝底 + 谢幕
-    private static func closingSlideXML() -> String {
+    private static func closingSlideXML(theme: DocTheme) -> String {
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="0C447C"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="谢幕"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2926080"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4000" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>谢谢观看</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4229100"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1500" dirty="0"><a:solidFill><a:srgbClr val="B5D4F4"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>Boss AI · 企业经营者的 AI 顾问矩阵</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="谢幕"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2926080"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4000" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>谢谢观看</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4229100"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1500" dirty="0"><a:solidFill><a:srgbClr val="\(theme.light)"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>Boss AI · 企业经营者的 AI 顾问矩阵</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
-    private static let themeXML = """
+    private static func themeXML(_ theme: DocTheme) -> String { return """
     <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-    <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="2B5CE6"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>
+    <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="\(theme.secondary)"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="2B5CE6"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface="微软雅黑"/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>
     """
+    }
 
     // MARK: - Excel (.xlsx)
 
-    static func xlsx(title: String, markdown: String) -> Data {
+    static func xlsx(title: String, markdown: String, theme: DocTheme) -> Data {
         var rows = MarkdownParser.table(from: markdown)
         if rows.isEmpty {
             rows = MarkdownParser.blocks(from: markdown).map { [$0.text] }
@@ -573,7 +609,7 @@ enum DocumentBuilder {
         """)
         zip.add("xl/styles.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="微软雅黑"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF185FA5"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="微软雅黑"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF\(theme.primary)"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>
         """)
         zip.add("xl/worksheets/sheet1.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -595,7 +631,7 @@ enum DocumentBuilder {
 
     // MARK: - PDF
 
-    static func pdf(title: String, markdown: String) throws -> Data {
+    static func pdf(title: String, markdown: String, theme: DocTheme) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
         var sections: [NSAttributedString] = []
@@ -611,7 +647,7 @@ enum DocumentBuilder {
                 .font: font, .foregroundColor: color, .paragraphStyle: style
             ]))
         }
-        let accent = UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1) // 185FA5
+        let accent = UIColor(DocumentBuilder.color(hex: theme.primary))
         append(title, size: 28, weight: .bold, color: accent)
         append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
         for block in MarkdownParser.blocks(from: markdown) {
@@ -677,6 +713,15 @@ enum DocumentBuilder {
     }
 
     // MARK: - 工具
+
+    /// "1F4E79" → UIColor
+    static func color(hex: String) -> UIColor {
+        var value: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&value)
+        return UIColor(red: CGFloat((value >> 16) & 0xFF) / 255.0,
+                       green: CGFloat((value >> 8) & 0xFF) / 255.0,
+                       blue: CGFloat(value & 0xFF) / 255.0, alpha: 1)
+    }
 
     static func xmlEscape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
