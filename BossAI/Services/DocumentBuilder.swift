@@ -310,7 +310,7 @@ enum DocumentBuilder {
         // 现在按「文本段 / 表格段」切分，表格段单独渲染成 <w:tbl>。
         for section in MarkdownParser.splitTables(from: markdown) {
             if section.isTable {
-                body += wordTable(MarkdownParser.table(from: section.markdown))
+                body += wordTable(MarkdownParser.table(from: section.markdown), theme: theme)
                 continue
             }
             for block in MarkdownParser.blocks(from: section.markdown) {
@@ -362,7 +362,7 @@ enum DocumentBuilder {
     }
 
     /// Word 表格渲染：二维数组 → <w:tbl>，首行加粗当表头
-    private static func wordTable(_ rows: [[String]]) -> String {
+    private static func wordTable(_ rows: [[String]], theme: DocTheme) -> String {
         var xml = "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders>"
         for edge in ["top", "left", "bottom", "right", "insideH", "insideV"] {
             xml += "<w:\(edge) w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"BBBBBB\"/>"
@@ -439,7 +439,7 @@ enum DocumentBuilder {
             slideRelsExtra += "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>"
 
         contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + 2))
+            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + 2, theme: theme))
             zip.add("ppt/slides/_rels/slide\(n).xml.rels", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(slideRelsExtra)</Relationships>
@@ -495,7 +495,7 @@ enum DocumentBuilder {
         return zip.finalize()
     }
 
-    private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int) -> String {
+    private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
         var contentRuns = ""
         let shown = Array(bullets.prefix(8))
         for (index, bullet) in shown.enumerated() {
