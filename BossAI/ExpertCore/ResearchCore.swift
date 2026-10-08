@@ -26,6 +26,30 @@ enum ResearchIntent {
     static func needsLiveEvidence(_ text: String) -> Bool {
         ["最新", "今天", "今日", "目前", "现在", "近期", "价格", "售价", "行情", "新闻", "现行", "联网", "发布", "竞品"].contains { text.contains($0) }
     }
+    /// A task template should search its subject, not its instructions or desired output fields.
+    static func searchSeed(from text: String) -> String {
+        let normalized = text.replacingOccurrences(of: "\r", with: "")
+        if let marker = normalized.range(of: "主题：") ?? normalized.range(of: "主题:") {
+            let tail = String(normalized[marker.upperBound...])
+            let line = tail.components(separatedBy: .newlines).first ?? tail
+            let beforeDate = line.components(separatedBy: "截至日期").first ?? line
+            let topic = (beforeDate.components(separatedBy: "需要的字段").first ?? beforeDate)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !topic.isEmpty { return String(topic.prefix(120)) }
+        }
+        return String(normalized.trimmingCharacters(in: .whitespacesAndNewlines).prefix(180))
+    }
+
+    /// Field-level verification needs an identifiable product/version before retrieving evidence.
+    static func needsSpecificTarget(_ text: String) -> Bool {
+        let seed = searchSeed(from: text)
+        guard seed.count <= 16,
+              ["配置", "参数", "售价"].contains(where: seed.contains) else { return false }
+        return !seed.unicodeScalars.contains {
+            CharacterSet.decimalDigits.contains($0) || ("A"..."Z").contains(String($0).uppercased())
+        }
+    }
+
     static func fingerprint(_ query: String, recency: String) -> String {
         query.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ") + "|" + recency
     }
@@ -39,7 +63,7 @@ enum ResearchIntent {
                 for i in 0..<(chars.count - 1) { result.append(String(chars[i...i+1])) }
             } else { result.append(part) }
         }
-        let ignored: Set<String> = ["最新", "目前", "信息", "总结", "整理", "价格", "参数", "发布", "配置", "手机", "官方"]
+        let ignored: Set<String> = ["最新", "目前", "信息", "总结", "整理", "价格", "参数", "发布", "配置", "官方"]
         return Array(Set(result).subtracting(ignored)).sorted()
     }
     static func relevance(query: String, text: String) -> Int {
