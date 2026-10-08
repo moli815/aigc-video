@@ -49,7 +49,7 @@ struct StatChartView: View {
             Chart {
                 chartContent
             }
-            .chartLegend(spec.type == .pie ? .bottom : .hidden)
+            .chartLegend(spec.type == .pie ? .visible : .hidden)
             .frame(height: 300)
             if !spec.sourceNote.isEmpty {
                 Text("数据来源：\(spec.sourceNote)")
