@@ -33,9 +33,9 @@ enum AppConfig {
     static let maxToolIterations = 16
     static let memoryInjectLimit = 50
 
-    /// 是否额外启用模型厂商自带的服务端搜索（默认关闭：统一用 App 自带的免费搜索，行为一致）
+    /// 支持时优先使用模型服务端搜索；无能力或服务端拒绝时由 App 搜索接管。
     static var preferProviderSearch: Bool {
-        UserDefaults.standard.bool(forKey: "bossai.prefer_provider_search")
+        (UserDefaults.standard.object(forKey: "bossai.prefer_provider_search") as? Bool) ?? true
     }
     static func setPreferProviderSearch(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: "bossai.prefer_provider_search")
