@@ -14,7 +14,7 @@ struct MarkdownView: View, Equatable {
         lhs.text == rhs.text && lhs.collapseDisabled == rhs.collapseDisabled
     }
     enum Block: Equatable, Sendable {
-        case heading(Int, String), bullet(String), quote(String), code(String), paragraph(String)
+        case heading(Int, String), bullet(String), ordered(Int, String), quote(String), code(String), paragraph(String)
         case table([[String]]), divider
     }
     private final class ParsedBox: NSObject {
@@ -79,6 +79,12 @@ struct MarkdownView: View, Equatable {
         case .bullet(let value):
             HStack(alignment: .top, spacing: 8) {
                 Text("•").foregroundStyle(Color.accentColor)
+                InlineMarkdown.text(value).fixedSize(horizontal: false, vertical: true)
+            }
+        case .ordered(let number, let value):
+            // 有序列表保留编号：检索答案里（来源 N）与第 N 条来源的对应关系靠它
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(number).").monospacedDigit().foregroundStyle(Color.accentColor)
                 InlineMarkdown.text(value).fixedSize(horizontal: false, vertical: true)
             }
         case .quote(let value):
@@ -150,13 +156,19 @@ struct MarkdownView: View, Equatable {
                 continue
             }
             if ["---", "***", "___"].contains(line) { flushParagraph(); blocks.append(.divider) }
+            else if line.hasPrefix("#### ") { flushParagraph(); blocks.append(.heading(4, String(line.dropFirst(5)))) }
             else if line.hasPrefix("### ") { flushParagraph(); blocks.append(.heading(3, String(line.dropFirst(4)))) }
             else if line.hasPrefix("## ") { flushParagraph(); blocks.append(.heading(2, String(line.dropFirst(3)))) }
             else if line.hasPrefix("# ") { flushParagraph(); blocks.append(.heading(1, String(line.dropFirst(2)))) }
             else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
                 flushParagraph(); blocks.append(.bullet(String(line.dropFirst(2))))
-            } else if let r = line.range(of: #"^\d+[.、]\s*"#, options: .regularExpression) {
-                flushParagraph(); blocks.append(.bullet(String(line[r.upperBound...])))
+            } else if let r = line.range(of: #"^\d{1,3}[.、]\s*"#, options: .regularExpression) {
+                // 有序列表：保留编号渲染，编号被剥掉会让「来源 N」失去指向
+                flushParagraph()
+                let digits = line.prefix { $0.isASCII && $0.isNumber }
+                let rest = line[line.index(line.startIndex, offsetBy: digits.count)...]
+                    .drop { $0 == "." || $0 == "、" || $0 == " " }
+                blocks.append(.ordered(Int(String(digits)) ?? 0, String(rest)))
             } else if line.hasPrefix("> ") {
                 flushParagraph(); blocks.append(.quote(String(line.dropFirst(2))))
             } else {
