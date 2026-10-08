@@ -647,7 +647,7 @@ enum DocumentBuilder {
                 .font: font, .foregroundColor: color, .paragraphStyle: style
             ]))
         }
-        let accent = UIColor(DocumentBuilder.color(hex: theme.primary))
+        let accent = DocumentBuilder.color(hex: theme.primary)
         append(title, size: 28, weight: .bold, color: accent)
         append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
         for block in MarkdownParser.blocks(from: markdown) {
