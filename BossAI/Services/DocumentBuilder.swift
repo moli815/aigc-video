@@ -265,8 +265,9 @@ enum DocumentBuilder {
             return "<w:p>\(pPr)<w:r>\(rPr)<w:t xml:space=\"preserve\">\(xmlEscape(text))</w:t></w:r></w:p>"
         }
 
-        // 标题
-        body += paragraph(title, size: 44, bold: true, spacingAfter: 240)
+        // 标题 + 主题色分隔线 + 日期
+        body += paragraph(title, size: 44, bold: true, spacingAfter: 120)
+        body += "<w:p><w:pPr><w:pBdr><w:bottom w:val=\"single\" w:sz=\"18\" w:space=\"1\" w:color=\"185FA5\"/></w:pBdr><w:spacing w:after=\"240\"/></w:pPr></w:p>"
         body += paragraph(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none),
                           size: 18, bold: false, spacingAfter: 360, color: "888888")
 
@@ -280,7 +281,7 @@ enum DocumentBuilder {
             for block in MarkdownParser.blocks(from: section.markdown) {
                 switch block.kind {
                 case .title, .heading1:
-                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160)
+                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "185FA5")
                 case .heading2:
                     body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120)
                 case .heading3:
@@ -301,17 +302,25 @@ enum DocumentBuilder {
 
         let document = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>\(body)<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1418" w:bottom="1440" w:left="1418" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr></w:body></w:document>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>\(body)<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1418" w:bottom="1440" w:left="1418" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr></w:body></w:document>
         """
 
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>
         """)
         zip.add("_rels/.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>
+        """)
+        zip.add("word/_rels/document.xml.rels", """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>
+        """)
+        zip.add("word/footer1.xml", """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>
         """)
         zip.add("word/document.xml", document)
         return zip.finalize()
@@ -327,8 +336,12 @@ enum DocumentBuilder {
         for (rowIndex, row) in rows.enumerated() {
             xml += "<w:tr>"
             for cell in row {
-                let bold = rowIndex == 0 ? "<w:b/>" : ""
-                xml += "<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/>\(bold)<w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+                if rowIndex == 0 {
+                    // 表头：主题蓝底 + 白字加粗
+                    xml += "<w:tc><w:tcPr><w:shd w:val=\"clear\" w:fill=\"185FA5\"/></w:tcPr><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/><w:b/><w:color w:val=\"FFFFFF\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+                } else {
+                    xml += "<w:tc><w:p><w:r><w:rPr><w:rFonts w:ascii=\"Calibri\" w:hAnsi=\"Calibri\" w:eastAsia=\"微软雅黑\"/><w:sz w:val=\"20\"/><w:szCs w:val=\"20\"/></w:rPr><w:t xml:space=\"preserve\">\(xmlEscape(cell))</w:t></w:r></w:p></w:tc>"
+                }
             }
             xml += "</w:tr>"
         }
@@ -390,8 +403,8 @@ enum DocumentBuilder {
             presentationRels += "<Relationship Id=\"\(relId)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide\(n).xml\"/>"
             slideRelsExtra += "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>"
 
-            contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets))
+        contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + 2))
             zip.add("ppt/slides/_rels/slide\(n).xml.rels", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(slideRelsExtra)</Relationships>
@@ -399,8 +412,23 @@ enum DocumentBuilder {
             slideRelsExtra = ""
         }
 
+        // 封面页与结尾页（slide 文件名任意，显示顺序由 sldIdLst 决定）
+        let slideLayoutRels = """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>
+        """
+        zip.add("ppt/slides/cover.xml", coverSlideXML(title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
+        zip.add("ppt/slides/_rels/cover.xml.rels", slideLayoutRels)
+        zip.add("ppt/slides/closing.xml", closingSlideXML())
+        zip.add("ppt/slides/_rels/closing.xml.rels", slideLayoutRels)
+        contentTypes += "<Override PartName=\"/ppt/slides/cover.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        contentTypes += "<Override PartName=\"/ppt/slides/closing.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+
         contentTypes += "</Types>"
         presentationRels += "<Relationship Id=\"rIdTheme\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/></Relationships>"
+        presentationRels = presentationRels.replacingOccurrences(
+            of: "</Relationships>",
+            with: "<Relationship Id=\"rIdCover\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/cover.xml\"/><Relationship Id=\"rIdClosing\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/closing.xml\"/></Relationships>")
 
         zip.add("[Content_Types].xml", contentTypes)
         zip.add("_rels/.rels", """
@@ -409,7 +437,7 @@ enum DocumentBuilder {
         """)
         zip.add("ppt/presentation.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>\(slideIdList)</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>
+        <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="2147483000" r:id="rIdCover"/>\(slideIdList)<p:sldId id="2147483001" r:id="rIdClosing"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>
         """)
         zip.add("ppt/_rels/presentation.xml.rels", presentationRels)
         zip.add("ppt/slideMasters/slideMaster1.xml", """
@@ -432,7 +460,7 @@ enum DocumentBuilder {
         return zip.finalize()
     }
 
-    private static func slideXML(_ title: String, _ bullets: [String]) -> String {
+    private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int) -> String {
         var contentRuns = ""
         let shown = Array(bullets.prefix(8))
         for (index, bullet) in shown.enumerated() {
@@ -440,17 +468,34 @@ enum DocumentBuilder {
             let text = isSub ? String(bullet.dropFirst(2)) : bullet
             let size = isSub ? 1600 : 1800
             let indent = isSub ? 342900 : 0
-            let bulletChar = isSub ? "•" : "•"
             let spaceBefore = index == 0 ? 0 : 600
-            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buFont typeface=\"Arial\"/><a:buChar char=\"\(bulletChar)\"/></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t>\(xmlEscape(text))</a:t></a:r></a:p>"
+            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buClr><a:srgbClr val=\"185FA5\"/></a:buClr><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t>\(xmlEscape(text))</a:t></a:r></a:p>"
         }
         if contentRuns.isEmpty {
             contentRuns = "<a:p><a:r><a:rPr lang=\"zh-CN\" sz=\"1800\" dirty=\"0\"><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t></a:t></a:r></a:p>"
         }
+        // 页脚页码（右下角）
+        let pageFooter = "<p:sp><p:nvSpPr><p:cNvPr id=\"5\" name=\"页码\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"10972800\" y=\"6400800\"/><a:ext cx=\"1000000\" cy=\"320000\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn=\"r\"/><a:r><a:rPr lang=\"zh-CN\" sz=\"1100\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"8A8A8A\"/></a:solidFill><a:latin typeface=\"微软雅黑\"/><a:ea typeface=\"微软雅黑\"/></a:rPr><a:t>\(pageIndex) / \(totalPages)</a:t></a:r></a:p></p:txBody></p:sp>"
 
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="3200" b="1" dirty="0"><a:solidFill><a:schemeClr val="accent1"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="185FA5"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="3200" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        """
+    }
+
+    /// 封面页：深蓝底 + 居中大标题 + 日期
+    private static func coverSlideXML(title: String, dateLine: String) -> String {
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="0C447C"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="封面标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2857500"/><a:ext cx="10515600" cy="1257300"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4400" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="装饰线"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5096000" y="2651760"/><a:ext cx="2000000" cy="50800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="85B7EB"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4343400"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="B5D4F4"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>Boss AI · \(xmlEscape(dateLine))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        """
+    }
+
+    /// 结尾页：深蓝底 + 谢幕
+    private static func closingSlideXML() -> String {
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="0C447C"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="谢幕"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2926080"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4000" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>谢谢观看</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4229100"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1500" dirty="0"><a:solidFill><a:srgbClr val="B5D4F4"/></a:solidFill><a:latin typeface="微软雅黑"/><a:ea typeface="微软雅黑"/></a:rPr><a:t>Boss AI · 企业经营者的 AI 顾问矩阵</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
@@ -484,18 +529,35 @@ enum DocumentBuilder {
                 // Keep leading-zero identifiers and currency labels as text; ordinary numbers become numeric cells.
                 if let number = Double(value), number.isFinite,
                    !(value.count > 1 && value.hasPrefix("0") && !value.hasPrefix("0.")) {
-                    cells += "<c r=\"\(ref)\"><v>\(number)</v></c>"
+                    let style = rowIndex == 0 ? " s=\"1\"" : ""
+                    cells += "<c r=\"\(ref)\"\(style)><v>\(number)</v></c>"
                 } else {
-                    cells += "<c r=\"\(ref)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+                    let style = rowIndex == 0 ? " s=\"1\"" : ""
+                    cells += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
                 }
             }
             sheetData += "<row r=\"\(rowIndex + 1)\">\(cells)</row>"
         }
 
+        // 列宽自适应：按每列最大字符宽估算（CJK 记 2），min 10 / max 55
+        var cols = ""
+        if maxCols > 0 {
+            var colDefs = ""
+            for col in 0..<maxCols {
+                let units = rows.map { row -> Int in
+                    guard row.indices.contains(col) else { return 0 }
+                    return row[col].unicodeScalars.reduce(0) { $0 + ($1.value > 0x2FFF ? 2 : 1) }
+                }.max() ?? 8
+                let width = min(55.0, max(10.0, Double(units) * 1.9 + 3))
+                colDefs += "<col min=\"\(col + 1)\" max=\"\(col + 1)\" width=\"\(String(format: "%.1f", width))\" customWidth=\"1\"/>"
+            }
+            cols = "<cols>\(colDefs)</cols>"
+        }
+
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>
         """)
         zip.add("_rels/.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -507,11 +569,15 @@ enum DocumentBuilder {
         """)
         zip.add("xl/_rels/workbook.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>
+        """)
+        zip.add("xl/styles.xml", """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="微软雅黑"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF185FA5"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>
         """)
         zip.add("xl/worksheets/sheet1.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>\(sheetData)</sheetData></worksheet>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>\(cols)<sheetData>\(sheetData)</sheetData></worksheet>
         """)
         return zip.finalize()
     }
@@ -545,11 +611,12 @@ enum DocumentBuilder {
                 .font: font, .foregroundColor: color, .paragraphStyle: style
             ]))
         }
-        append(title, size: 26, weight: .bold)
+        let accent = UIColor(red: 0.094, green: 0.373, blue: 0.647, alpha: 1) // 185FA5
+        append(title, size: 28, weight: .bold, color: accent)
         append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
         for block in MarkdownParser.blocks(from: markdown) {
             switch block.kind {
-            case .title, .heading1: append(block.text, size: 19, weight: .bold)
+            case .title, .heading1: append(block.text, size: 19, weight: .bold, color: accent)
             case .heading2: append(block.text, size: 16, weight: .semibold)
             case .heading3: append(block.text, size: 13.5, weight: .semibold)
             case .bullet: append("•  " + block.text, size: 12, indent: 16)
@@ -586,6 +653,15 @@ enum DocumentBuilder {
                         graphics.scaleBy(x: 1, y: -1)
                         CTFrameDraw(frame, graphics)
                         graphics.restoreGState()
+                        // 页眉（第 2 页起：文档标题小字）与页脚页码
+                        if rendererContext.pageNumber > 1 {
+                            (title as NSString).draw(at: CGPoint(x: margin, y: 18), withAttributes: [
+                                .font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.gray
+                            ])
+                        }
+                        ("第 \(rendererContext.pageNumber) 页" as NSString).draw(
+                            at: CGPoint(x: pageSize.width - 70, y: pageSize.height - 26),
+                            withAttributes: [.font: UIFont.systemFont(ofSize: 9), .foregroundColor: UIColor.gray])
                         return visible.length
                     }
                     guard advanced > 0 else { layoutError = BuildError.pdfLayoutFailed; return }
