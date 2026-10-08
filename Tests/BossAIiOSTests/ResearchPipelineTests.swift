@@ -15,10 +15,10 @@ final class ResearchPipelineTests: XCTestCase {
         }
         return try stream(["content": "这是检索过程，不是最终回答", "reasoning_content": "private synthetic reasoning", "tool_calls": calls], finish: "tool_calls")
     }
-    private func chat(_ responses: [Data], provider: String = "fixture") -> ChatService {
-        ResearchChatProtocol.configure(responses)
+    private func chat(_ responses: [Data], provider: String = "fixture", searchStyle: SearchStyle = .none, statuses: [Int] = []) -> ChatService {
+        ResearchChatProtocol.configure(responses, statuses: statuses)
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ResearchChatProtocol.self]
-        let profile = ChatProfile(id: provider, displayName: "Synthetic provider", baseURL: "https://research-fixture.invalid/v1", model: "replaceable-model", memoryModel: "replaceable-model", searchStyle: .none)
+        let profile = ChatProfile(id: provider, displayName: "Synthetic provider", baseURL: "https://research-fixture.invalid/v1", model: "replaceable-model", memoryModel: "replaceable-model", searchStyle: searchStyle)
         return ChatService(profile: profile, apiKeyProvider: { "offline-research-fixture" }, session: URLSession(configuration: config))
     }
     @MainActor private func vm(chat: ChatService, search: FakeResearchSearch) throws -> ChatViewModel {
@@ -80,6 +80,66 @@ final class ResearchPipelineTests: XCTestCase {
             else { XCTAssertNil(thinking) }
         }
     }
+    @MainActor func testNativeSearchTakesPriorityWithoutDuplicateAppPreflight() async throws {
+        let old = AppConfig.preferProviderSearch
+        AppConfig.setPreferProviderSearch(true)
+        defer { AppConfig.setPreferProviderSearch(old) }
+        let search = FakeResearchSearch()
+        let service = chat([try stream(["content": "已核对：https://evidence.invalid/spec"], finish: "stop")], provider: "qwen", searchStyle: .dashscopeParam)
+        let model = try vm(chat: service, search: search)
+        model.researchMode = .online; model.inputText = "今天价格"; model.send(); try await finish(model)
+        let count = await search.searchCount
+        XCTAssertEqual(count, 0)
+        let request = try XCTUnwrap(ResearchChatProtocol.requests.first)
+        XCTAssertEqual(request["enable_search"] as? Bool, true)
+        let tools = request["tools"] as? [[String: Any]] ?? []
+        XCTAssertFalse(tools.contains { ($0["function"] as? [String: Any])?["name"] as? String == "web_search" })
+    }
+
+    @MainActor func testNativeAnswerWithoutLinksFallsBackToAppEvidence() async throws {
+        let old = AppConfig.preferProviderSearch
+        AppConfig.setPreferProviderSearch(true)
+        defer { AppConfig.setPreferProviderSearch(old) }
+        let search = FakeResearchSearch()
+        let service = chat([
+            try stream(["content": "已经联网查到，但没给来源"], finish: "stop"),
+            try stream(["content": "按补查证据回答（来源 1）"], finish: "stop"),
+        ], provider: "qwen", searchStyle: .dashscopeParam)
+        let model = try vm(chat: service, search: search)
+        model.researchMode = .online; model.inputText = "今天价格"; model.send(); try await finish(model)
+        let count = await search.searchCount
+        XCTAssertEqual(count, 1)
+        let requests = ResearchChatProtocol.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.first?["enable_search"] as? Bool, true)
+        XCTAssertNil(requests.last?["enable_search"])
+        let messages = requests.last?["messages"] as? [[String: Any]] ?? []
+        XCTAssertTrue(messages.contains { ($0["content"] as? String ?? "").contains("App 提供的外部证据") })
+        XCTAssertEqual(model.sortedMessages.last?.text, "按补查证据回答（来源 1）")
+    }
+
+    @MainActor func testRejectedNativeSearchRetriesWithAppToolAndEvidence() async throws {
+        let old = AppConfig.preferProviderSearch
+        AppConfig.setPreferProviderSearch(true)
+        defer { AppConfig.setPreferProviderSearch(old) }
+        let search = FakeResearchSearch()
+        let service = chat([
+            Data("unsupported native tool".utf8),
+            try stream(["content": "暂时没有检索结果"], finish: "stop"),
+            try stream(["content": "补查后回答（来源 1）"], finish: "stop"),
+        ], provider: "qwen", searchStyle: .dashscopeParam, statuses: [400, 200, 200])
+        let model = try vm(chat: service, search: search)
+        model.researchMode = .online; model.inputText = "今天价格"; model.send(); try await finish(model)
+        let count = await search.searchCount
+        XCTAssertEqual(count, 1)
+        let requests = ResearchChatProtocol.requests
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests.first?["enable_search"] as? Bool, true)
+        XCTAssertNil(requests[1]["enable_search"])
+        XCTAssertNil(requests[2]["enable_search"])
+        XCTAssertEqual(model.sortedMessages.last?.text, "补查后回答（来源 1）")
+    }
+
     func testDOMResultsDoNotStealOtherResultSnippetsAndSupportSingleQuotes() {
         let html = "<nav><a href='https://noise.example'>导航</a></nav><div class='result'><h3><a href='https://example.com/a'>第一项标题</a></h3><p>第一项摘要独有</p></div><div class='result'><h3><a href='https://example.com/b'>第二项标题</a></h3><p>第二项摘要独有</p></div>"
         let links = WebEvidenceExtractor.links(html: html)
@@ -180,9 +240,10 @@ private actor FakeResearchSearch: ResearchSearching {
 private final class ResearchChatProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var responses: [Data] = []
+    private static var statuses: [Int] = []
     private static var bodies: [[String: Any]] = []
     static var requests: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return bodies }
-    static func configure(_ data: [Data]) { lock.lock(); defer { lock.unlock() }; responses = data; bodies = [] }
+    static func configure(_ data: [Data], statuses: [Int] = []) { lock.lock(); defer { lock.unlock() }; responses = data; self.statuses = statuses; bodies = [] }
     override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "research-fixture.invalid" }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -194,8 +255,9 @@ private final class ResearchChatProtocol: URLProtocol {
         Self.lock.lock()
         Self.bodies.append((try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] ?? [:])
         let data = Self.responses.isEmpty ? Data("data: [DONE]\n\n".utf8) : Self.responses.removeFirst()
+        let status = Self.statuses.isEmpty ? 200 : Self.statuses.removeFirst()
         Self.lock.unlock()
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": status == 200 ? "text/event-stream" : "text/plain"])!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data); client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
