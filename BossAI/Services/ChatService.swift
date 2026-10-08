@@ -217,6 +217,34 @@ final class ChatService {
         }
     }
 
+    /// 一次性小请求（非流式、无工具）：查询规划等轻任务专用。
+    /// thinkingDisabled：方舟等厂商的推理模型会把思考也计入 max_tokens，轻任务务必关闭。
+    /// 失败/超时返回 nil —— 调用方必须有规则兜底，规划绝不能阻塞回答。
+    static func completeOnce(profile: ChatProfile, apiKey: String, system: String, user: String, maxTokens: Int = 512, thinkingDisabled: Bool = false) async -> String? {
+        guard let url = URL(string: "\(profile.baseURL)/chat/completions") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+        var body: [String: Any] = [
+            "model": profile.model,
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
+            "stream": false,
+            "temperature": 0.2,
+            "max_tokens": maxTokens,
+        ]
+        if thinkingDisabled { body["thinking"] = ["type": "disabled"] }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, response) = try? await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.searchSession, limit: 262_144),
+              let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String, !content.isEmpty else { return nil }
+        return content
+    }
+
     /// Search is routed to one backend per request. Native support is declared by the provider adapter;
     /// unsupported providers and rejected native requests use the App-owned web_search tool.
     private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool) throws {
