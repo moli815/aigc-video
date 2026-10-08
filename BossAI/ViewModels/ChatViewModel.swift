@@ -752,6 +752,26 @@ final class ChatViewModel: ObservableObject {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": content])
                         researchSummary = "本轮检索 \(researchBudget.searches) 个主题 · \(citations.sources.count) 条候选来源"
 
+                    case "render_chart":
+                        statusText = "正在绘制统计图…"
+                        if let spec = ChartSpec.parse(call.arguments), let image = ChartRenderer.render(spec) {
+                            let chartMessage = Message(role: "assistant", text: "", imageData: image.jpegData(compressionQuality: 0.92))
+                            chartMessage.conversation = conv
+                            modelContext.insert(chartMessage)
+                            try? modelContext.save()
+                            apiMessages.append([
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "统计图已生成并展示给用户（柱状/折线/环形由 App 本地精确渲染）。请用一句话说明图表结论，不要再重复全部数字。",
+                            ])
+                        } else {
+                            apiMessages.append([
+                                "role": "tool",
+                                "tool_call_id": call.id,
+                                "content": "图表参数无效（labels 与 values 必须一一对应且不超过 8 项）。请检查后重试，或改用 Markdown 表格呈现数据。",
+                            ])
+                        }
+
                     case "$web_search":
                         // 厂商服务端搜索（开启增强时出现）：回显参数即可继续
                         apiMessages.append([
