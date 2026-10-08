@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 import ImageIO
 
-/// 消息行：用户右对齐气泡，AI 全宽正文 + 图片 + 文件卡片
+/// 消息行：用户右对齐气泡，AI 全宽平铺 + 头像 + 图片 + 文件卡片（ChatGPT 式）
 struct MessageRow: View {
     @Environment(\.appTheme) private var theme
     let message: Message
@@ -10,6 +10,9 @@ struct MessageRow: View {
     var streamingText: String? = nil
     var files: [StoredFile] = []
     var onPreview: (StoredFile) -> Void = { _ in }
+    /// 是否为最后一条 AI 回复（决定是否显示「重新生成」）
+    var isLastAssistant: Bool = false
+    var onRegenerate: (() -> Void)? = nil
 
     var body: some View {
         Group {
@@ -32,39 +35,23 @@ struct MessageRow: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
             } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    if let data = message.imageData {
-                        MessageImageView(data: data).equatable()
-                    }
-
-                    ForEach(files, id: \.id) { file in
-                        FileCardView(file: file) { onPreview(file) }
-                    }
-
-                    let content = streamingText ?? message.text
-                    if !content.isEmpty {
-                        // AI 输出区：带清晰边框的卡片
-                        AssistantAnswerView(text: content, sourcesJSON: message.sourcesJSON, streaming: streamingText != nil).equatable()
-                            .padding(theme.cardPadding)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                theme.surface,
-                                in: RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous)
-                                    .stroke(theme.border, lineWidth: 0.8)
-                            )
-                    } else if message.imageData == nil && files.isEmpty && streamingText == nil {
-                        Text("▍").foregroundStyle(.secondary)
-                    }
-
-                    if streamingText != nil {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("正在输出…")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 10) {
+                    AssistantAvatar()
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let data = message.imageData {
+                            MessageImageView(data: data).equatable()
+                        }
+                        ForEach(files, id: \.id) { file in
+                            FileCardView(file: file) { onPreview(file) }
+                        }
+                        let content = streamingText ?? message.text
+                        if !content.isEmpty {
+                            AssistantAnswerView(text: content, sourcesJSON: message.sourcesJSON,
+                                                streaming: streamingText != nil,
+                                                isLastAssistant: isLastAssistant,
+                                                onRegenerate: onRegenerate).equatable()
+                        } else if message.imageData == nil && files.isEmpty {
+                            BlinkingCursor()
                         }
                     }
                 }
@@ -74,6 +61,33 @@ struct MessageRow: View {
                 .padding(.vertical, 10)
             }
         }
+    }
+}
+
+/// ChatGPT 式 AI 头像（圆形徽标）
+private struct AssistantAvatar: View {
+    var body: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 26, height: 26)
+            .background(Color.accentColor, in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+/// 流式输出尾部闪烁光标（替代 spinner）
+private struct BlinkingCursor: View {
+    @State private var visible = true
+    var body: some View {
+        Text("▍")
+            .font(.body)
+            .foregroundStyle(Color.accentColor)
+            .opacity(visible ? 1 : 0.15)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { visible = false }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -118,24 +132,41 @@ private struct AssistantAnswerView: View, Equatable {
     let text: String
     let sourcesJSON: String
     let streaming: Bool
-    @Environment(\.appTheme) private var theme
+    var isLastAssistant: Bool = false
+    var onRegenerate: (() -> Void)? = nil
     @State private var copied = false
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.text == rhs.text && lhs.sourcesJSON == rhs.sourcesJSON && lhs.streaming == rhs.streaming }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.text == rhs.text && lhs.sourcesJSON == rhs.sourcesJSON && lhs.streaming == rhs.streaming && lhs.isLastAssistant == rhs.isLastAssistant
+    }
     var body: some View {
         let projection = CitationPresentation.projection(text: text, json: sourcesJSON)
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("回答", systemImage: "text.bubble").font(.caption.weight(.semibold)).fontDesign(theme.headingDesign).foregroundStyle(.secondary)
-                Spacer()
-                if !streaming {
-                    Button(copied ? "已复制" : "复制回答", systemImage: copied ? "checkmark" : "doc.on.doc") {
-                        UIPasteboard.general.string = text; copied = true
-                    }.font(.caption).accessibilityIdentifier("copy-answer")
-                }
-            }
+        VStack(alignment: .leading, spacing: 10) {
             MarkdownView(projection.body, collapseDisabled: streaming).equatable()
-            if !streaming && !projection.sources.isEmpty {
-                CitationSourcesView(sources: projection.sources, answer: projection.body)
+            if streaming {
+                BlinkingCursor()
+            } else {
+                // ChatGPT 式：操作按钮在消息底部一排小图标
+                HStack(spacing: 18) {
+                    Button {
+                        UIPasteboard.general.string = text; copied = true
+                    } label: {
+                        Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("copy-answer")
+                    if isLastAssistant, let onRegenerate {
+                        Button(action: onRegenerate) {
+                            Label("重新生成", systemImage: "arrow.clockwise")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("regenerate-answer")
+                    }
+                }
+                if !projection.sources.isEmpty {
+                    CitationSourcesView(sources: projection.sources, answer: projection.body)
+                }
             }
         }
     }
