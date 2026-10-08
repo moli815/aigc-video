@@ -434,8 +434,10 @@ enum WebSearchService {
             // 也避免部分 /ck/a 落地页要求 JS 才能继续跳转。
             if engine == .bing { resolved = bingDirectURL(resolved) ?? resolved }
             guard let target = URL(string: resolved), ["https", "http"].contains(target.scheme?.lowercased() ?? ""), target.host != nil else { continue }
+            // HTML 摘要里的日期只是"页面上出现过的日期"（可能是评论区时间、其他新闻的日期），
+            // 不是发布时间；显式标注未核实，且 EvidenceRanking 不给它加分。
             hits.append(SearchHit(title: title, url: resolved, snippet: record.snippet,
-                                  publishedAt: findDate(in: record.snippet) ?? ""))
+                                  publishedAt: findDate(in: record.snippet).map { "页面日期 \($0)（未核实）" } ?? ""))
         }
 
         return hits
