@@ -39,6 +39,8 @@ final class ChatViewModel: ObservableObject {
     }
     /// 正在流式输出的消息 id
     @Published var streamingMessageId: UUID?
+    /// 本轮回答结束后的追问建议（ChatGPT 式 chips，本地启发式生成，零成本零延迟）
+    @Published private(set) var suggestedFollowUps: [String] = []
 
     /// 会话（nil = 草稿态：用户还没发第一条消息，此时不写入数据库）
     private(set) var conversation: Conversation?
@@ -207,6 +209,7 @@ final class ChatViewModel: ObservableObject {
         errorMessage = nil
         failedUserMessageID = nil
         failedAssistantMessageID = nil
+        suggestedFollowUps = []
 
         // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
         let conv: Conversation
@@ -282,6 +285,71 @@ final class ChatViewModel: ObservableObject {
         guard isStreaming else { return }
         streamTask?.cancel()
         streamTask = nil
+    }
+
+    /// 点击追问建议直接发送
+    func sendFollowUp(_ text: String) {
+        guard !isStreaming, !isImporting else { return }
+        inputText = text
+        send()
+    }
+
+    /// 是否可以重新生成最后一条回复（ChatGPT 式：成功后也允许重生成）
+    var canRegenerateLast: Bool {
+        !isStreaming && !isImporting
+            && sortedMessages.last?.role == "assistant"
+            && sortedMessages.last(where: { $0.role == "user" }) != nil
+    }
+
+    /// 重新生成最后一条回复：删除最后一条 assistant 消息，重跑最后一条用户消息
+    func regenerateLastReply() {
+        guard canRegenerateLast, let conv = conversation,
+              let lastAssistant = sortedMessages.last, lastAssistant.role == "assistant",
+              let lastUser = sortedMessages.last(where: { $0.role == "user" }) else { return }
+        guard !BudgetTracker.isExceeded() else { errorMessage = "已达到本月预算上限，无法重新生成。"; return }
+        modelContext.delete(lastAssistant)
+        let assistant = Message(role: "assistant", text: "")
+        assistant.conversation = conv
+        modelContext.insert(assistant)
+        do { try modelContext.save() } catch {
+            modelContext.rollback()
+            errorMessage = "重新生成准备失败：" + error.localizedDescription
+            return
+        }
+        orderedMessageCount = -1
+        let attachments = lastUser.attachmentIds.split(separator: ",").compactMap { storedFile(id: String($0)) }
+        errorMessage = nil
+        failedUserMessageID = nil
+        failedAssistantMessageID = nil
+        suggestedFollowUps = []
+        streamingMessageId = assistant.id
+        streamingText = ""
+        isStreaming = true
+        streamTask = Task { [self] in
+            await runLoop(userText: lastUser.text, attachments: attachments, conv: conv, assistantMessage: assistant)
+        }
+    }
+
+    /// 从回答内容启发式生成 2-3 条追问建议：不额外调用模型，无等待
+    private func makeFollowUps(from text: String) -> [String] {
+        guard text.count > 40 else { return [] }
+        var out: [String] = []
+        let headings = text.components(separatedBy: .newlines)
+            .compactMap { line -> String? in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                guard t.hasPrefix("###") else { return nil }
+                let title = t.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)
+                return (2...18).contains(title.count) ? title : nil
+            }
+        if let first = headings.first { out.append("展开讲讲" + first) }
+        if text.contains("未核实") { out.append("把未核实的字段再查一轮") }
+        if text.contains("|") || text.contains("│") { out.append("把这份对比导出成 Excel 文件") }
+        if headings.count > 1, let second = headings.dropFirst().first,
+           !out.contains(where: { $0.contains(second) }) {
+            out.append("基于" + second + "给出行动清单")
+        }
+        if out.isEmpty { out.append("总结一下要点"); out.append("接下来该做什么？") }
+        return Array(out.prefix(3))
     }
 
     deinit {
@@ -673,6 +741,11 @@ final class ChatViewModel: ObservableObject {
         }
         citations = CitationRegistry()
         try? modelContext.save()
+
+        // 追问建议：只在正常完成的回答后生成（停止/失败不给）
+        if !Task.isCancelled, errorMessage == nil, !assistantMessage.text.isEmpty {
+            suggestedFollowUps = makeFollowUps(from: assistantMessage.text)
+        }
 
         // R01 修复：抽取计数持久化到 UserDefaults，VM 重建后不归零
         // （旧版 roundsSinceExtraction 是实例属性，切会话重建 VM 就归零，每 3 轮抽取名存实亡）
