@@ -278,7 +278,7 @@ enum DocumentBuilder {
 
     // MARK: - Word (.docx)
 
-    static func docx(title: String, markdown: String, theme: DocTheme) -> Data {
+    static func docx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
         var body = ""
 
         func runProps(size: Int, bold: Bool) -> String {
@@ -388,7 +388,7 @@ enum DocumentBuilder {
 
     // MARK: - PowerPoint (.pptx)
 
-    static func pptx(title: String, markdown: String, theme: DocTheme) -> Data {
+    static func pptx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
         var deck = MarkdownParser.slides(from: markdown)
         if deck.first?.title.isEmpty ?? true {
             deck.insert((title, []), at: 0)
@@ -542,7 +542,7 @@ enum DocumentBuilder {
 
     // MARK: - Excel (.xlsx)
 
-    static func xlsx(title: String, markdown: String, theme: DocTheme) -> Data {
+    static func xlsx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
         var rows = MarkdownParser.table(from: markdown)
         if rows.isEmpty {
             rows = MarkdownParser.blocks(from: markdown).map { [$0.text] }
@@ -631,7 +631,7 @@ enum DocumentBuilder {
 
     // MARK: - PDF
 
-    static func pdf(title: String, markdown: String, theme: DocTheme) throws -> Data {
+    static func pdf(title: String, markdown: String, theme: DocTheme = .business) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
         var sections: [NSAttributedString] = []
