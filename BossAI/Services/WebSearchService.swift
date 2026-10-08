@@ -257,8 +257,7 @@ enum WebSearchService {
         var out: [String] = []
         var used = 0
 
-        guard let tableRegex = try? NSRegularExpression(pattern: "<table[^>]*>([\\s\\S]*?)</table>",
-                                                        options: .caseInsensitive) else { return [] }
+        guard let tableRegex = cachedRegex("<table[^>]*>([\\s\\S]*?)</table>", .caseInsensitive) else { return [] }
         let tableRange = NSRange(html.startIndex..<html.endIndex, in: html)
 
         for tableMatch in tableRegex.matches(in: html, options: [], range: tableRange) {
@@ -294,16 +293,14 @@ enum WebSearchService {
 
     /// 从 <table> 内部取每一行：<tr> → 单元格用 " | " 连接
     private static func extractRows(fromTableInner inner: String) -> [String]? {
-        guard let rowRegex = try? NSRegularExpression(pattern: "<tr[^>]*>([\\s\\S]*?)</tr>",
-                                                      options: .caseInsensitive) else { return nil }
+        guard let rowRegex = cachedRegex("<tr[^>]*>([\\s\\S]*?)</tr>", .caseInsensitive) else { return nil }
         let rowRange = NSRange(inner.startIndex..<inner.endIndex, in: inner)
         var rows: [String] = []
 
         for rowMatch in rowRegex.matches(in: inner, options: [], range: rowRange) {
             guard let r = Range(rowMatch.range(at: 1), in: inner) else { continue }
             let rowHTML = String(inner[r])
-            guard let cellRegex = try? NSRegularExpression(pattern: "<t[dh][^>]*>([\\s\\S]*?)</t[dh]>",
-                                                           options: .caseInsensitive) else { continue }
+            guard let cellRegex = cachedRegex("<t[dh][^>]*>([\\s\\S]*?)</t[dh]>", .caseInsensitive) else { continue }
             let cellRange = NSRange(rowHTML.startIndex..<rowHTML.endIndex, in: rowHTML)
             var cells: [String] = []
             for cellMatch in cellRegex.matches(in: rowHTML, options: [], range: cellRange) {
@@ -432,7 +429,10 @@ enum WebSearchService {
             let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard title.count >= 4, !isNoiseTitle(title), isResultLink(href, engine: engine),
                   seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
-            let resolved = secureSearchLink(absolutize(href, engine: engine))
+            var resolved = secureSearchLink(absolutize(href, engine: engine))
+            // Bing HTML 结果是 /ck/a 跟踪跳转；能直接解出真实地址就省掉一跳 302，
+            // 也避免部分 /ck/a 落地页要求 JS 才能继续跳转。
+            if engine == .bing { resolved = bingDirectURL(resolved) ?? resolved }
             guard let target = URL(string: resolved), ["https", "http"].contains(target.scheme?.lowercased() ?? ""), target.host != nil else { continue }
             hits.append(SearchHit(title: title, url: resolved, snippet: record.snippet,
                                   publishedAt: findDate(in: record.snippet) ?? ""))
@@ -452,6 +452,26 @@ enum WebSearchService {
         parts.scheme = "https"
         if parts.port == 80 { parts.port = nil }
         return parts.url?.absoluteString ?? raw
+    }
+
+    /// 解析 Bing 跟踪跳转链接里的真实地址：/ck/a?...&u=a1<base64url>。
+    /// `u` 参数去掉 "a1" 前缀后是 URL-safe Base64；解不出（无该参数/非法编码）返回 nil，调用方保留原链接。
+    static func bingDirectURL(_ href: String) -> String? {
+        guard let parts = URLComponents(string: href),
+              let host = parts.host?.lowercased(), host.hasSuffix("bing.com"),
+              parts.path.lowercased().hasPrefix("/ck/"),
+              let u = parts.queryItems?.first(where: { $0.name == "u" })?.value,
+              u.hasPrefix("a1"), u.count > 2 else { return nil }
+        var b64 = String(u.dropFirst(2))
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        if b64.count % 4 != 0 { b64 += String(repeating: "=", count: 4 - b64.count % 4) }
+        guard let data = Data(base64Encoded: b64),
+              let target = String(data: data, encoding: .utf8),
+              let url = URL(string: target),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil else { return nil }
+        return target
     }
 
     /// 页脚 / 备案 / 版权之类的噪音标题，不是真实搜索结果
@@ -609,11 +629,17 @@ enum WebSearchService {
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   response.expectedContentLength <= 2_097_152 else { return nil }
             var data = Data(); data.reserveCapacity(32768)
+            var pending = [UInt8](); pending.reserveCapacity(16384)
             for try await byte in bytes {
                 try Task.checkCancellation()
-                guard data.count < 2_097_152 else { return nil }
-                data.append(byte)
+                guard data.count + pending.count < 2_097_152 else { return nil }
+                pending.append(byte)
+                if pending.count >= 16384 {
+                    data.append(contentsOf: pending)
+                    pending.removeAll(keepingCapacity: true)
+                }
             }
+            data.append(contentsOf: pending)
             return data
         } catch { return nil }
     }
@@ -657,10 +683,22 @@ enum WebSearchService {
         return out.isEmpty ? nil : out
     }
 
+    /// NSRegularExpression 编译开销可观，而 findDate / lineScore / isNoiseTitle 等热路径
+    /// 每页正文要执行成百上千次匹配；这里按 pattern+options 缓存编译结果。
+    /// NSRegularExpression 本身线程安全，可被并发匹配共享。
+    private static let regexLock = NSLock()
+    private static var regexCache: [String: NSRegularExpression] = [:]
+    private static func cachedRegex(_ pattern: String, _ options: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]) -> NSRegularExpression? {
+        let key = pattern + "\u{1}" + String(options.rawValue)
+        regexLock.lock(); defer { regexLock.unlock() }
+        if let cached = regexCache[key] { return cached }
+        let compiled = try? NSRegularExpression(pattern: pattern, options: options)
+        if let compiled { regexCache[key] = compiled }
+        return compiled
+    }
+
     private static func firstMatch(_ text: String, pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.caseInsensitive, .dotMatchesLineSeparators])
-        else { return nil }
+        guard let regex = cachedRegex(pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, options: [], range: range),
               match.numberOfRanges > 1,
@@ -674,9 +712,7 @@ enum WebSearchService {
     /// 导致「日期提取」「纯域名判断」这类没有括号捕获组的正则被它调用了就**永远返回 nil**，
     /// 日期识别和纯域名过滤其实一直没生效过。判断"是否存在"的场景一律用本函数。
     private static func firstWholeMatch(_ text: String, pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.caseInsensitive, .dotMatchesLineSeparators])
-        else { return nil }
+        guard let regex = cachedRegex(pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, options: [], range: range),
               let whole = Range(match.range, in: text) else { return nil }
@@ -779,6 +815,7 @@ enum WebSearchService {
         在该句后标注来源编号，如「售价 4999 元（来源 3）」，让读者能追溯到对应条目 —— 不要只在文末笼统堆一堆链接。
 
         """
+        out += "【输出结构】回答用 Markdown 组织：小节标题用 ###；多对象对比用表格，末列写来源编号；每句具体结论句尾标（来源 N）；不要复述本证据块原文，也不要罗列检索过程。未能核实的字段集中在结尾「未核实项」小节，逐项写明原因（官方未公布/检索源无覆盖/日期存疑）。\n"
         out += "【搜索结果】（共 \(hits.count) 条；摘要及发布日期需核实）\n"
         for (index, hit) in hits.enumerated() {
             let id = sourceIDs.indices.contains(index) ? sourceIDs[index] : index + 1
