@@ -5,7 +5,7 @@ enum AppConfig {
     // MARK: 内置 Key（仅本人使用，写死在包内；如泄露可在各自平台重置）
     // 以 Base64 存放，避免明文入库被扫描；运行时解码。
     private static let bakedChatKeyB64 = "c2stMzQwZWE1ZDQ3OGVhNGE5ZjllMWNhZTg0YjQwMDllMmE="
-    private static let bakedImageKeyB64 = "YXJrLTIwYjZjYTBlLTY3NDQtNGZiNi04ZmVhLTRlYWMxM2U3ZjQ4NS0yMWU4OA=="
+    private static let bakedImageKeyB64 = "YXJrLTNlNTQ4MDAyLTNhZmQtNDc3My1iMzIzLTRhZjViYmUxOWQ1Ni05M2MxNw=="
 
     /// 内置对话 Key（DeepSeek）
     static var bakedChatKey: String {
