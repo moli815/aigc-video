@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Full answers by default. Only an explicit user action can collapse an answer.
 struct MarkdownView: View, Equatable {
@@ -14,7 +15,9 @@ struct MarkdownView: View, Equatable {
         lhs.text == rhs.text && lhs.collapseDisabled == rhs.collapseDisabled
     }
     enum Block: Equatable, Sendable {
-        case heading(Int, String), bullet(String), ordered(Int, String), quote(String), code(String), paragraph(String)
+        case heading(Int, String), bullet(String), ordered(Int, String), quote(String)
+        case code(language: String, String)
+        case paragraph(String)
         case table([[String]]), divider
     }
     private final class ParsedBox: NSObject {
@@ -91,10 +94,26 @@ struct MarkdownView: View, Equatable {
             InlineMarkdown.text(value).italic().foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true).padding(.leading, 12)
                 .overlay(alignment: .leading) { Rectangle().fill(Color(.separator)).frame(width: 3) }
-        case .code(let value):
-            ScrollView(.horizontal) {
-                Text(value).font(.system(.subheadline, design: .monospaced))
-                    .fixedSize(horizontal: true, vertical: true).padding(10)
+        case .code(let language, let value):
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text(language.isEmpty ? "代码" : language)
+                        .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = value
+                    } label: {
+                        Image(systemName: "doc.on.doc").font(.caption2)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("复制代码")
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                Divider()
+                ScrollView(.horizontal) {
+                    Text(value).font(.system(.subheadline, design: .monospaced))
+                        .fixedSize(horizontal: true, vertical: true).padding(10)
+                }
             }
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
         case .table(let rows): MarkdownTableView(rows: rows, identifier: "table-\(index)")
@@ -106,6 +125,7 @@ struct MarkdownView: View, Equatable {
     static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var codeBuf: [String] = []
+        var codeLanguage = ""
         var inCode = false
         var paragraph: [String] = []
 
@@ -124,12 +144,13 @@ struct MarkdownView: View, Equatable {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("```") {
                 if inCode {
-                    blocks.append(.code(codeBuf.joined(separator: "\n")))
+                    blocks.append(.code(language: codeLanguage, codeBuf.joined(separator: "\n")))
                     codeBuf = []
                     inCode = false
                 } else {
                     flushParagraph()
                     inCode = true
+                    codeLanguage = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 }
                 continue
             }
@@ -177,7 +198,7 @@ struct MarkdownView: View, Equatable {
         }
         flushParagraph()
         if inCode && !codeBuf.isEmpty {
-            blocks.append(.code(codeBuf.joined(separator: "\n")))
+            blocks.append(.code(language: codeLanguage, codeBuf.joined(separator: "\n")))
         }
         return blocks
     }
