@@ -218,9 +218,20 @@ struct ChatView: View {
                     if abs(value.translation.height) > abs(value.translation.width), value.translation.height > 5 { followOutput = false }
                 })
                 .onChange(of: viewModel.sortedMessages.count) { _, _ in
-                    if followOutput, let last = viewModel.sortedMessages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                    guard followOutput, let last = viewModel.sortedMessages.last else { return }
+                    DispatchQueue.main.async { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+                .onChange(of: viewModel.isStreaming) { _, streaming in
+                    // 发送（开始流式）与回答结束两个节点都强制回到底部，输入时不乱跳
+                    if streaming { followOutput = true }
+                    DispatchQueue.main.async {
+                        if followOutput { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
                     }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.keyboardWillShowNotification)) { _ in
+                    // 键盘弹出时贴底，避免输入框把内容顶出视野
+                    guard followOutput else { return }
+                    DispatchQueue.main.async { proxy.scrollTo("conversation-bottom", anchor: .bottom) }
                 }
                 .onReceive(viewModel.replyBuffer.$text) { _ in
                     let now = ProcessInfo.processInfo.systemUptime
