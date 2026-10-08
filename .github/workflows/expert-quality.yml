@@ -9,6 +9,10 @@ concurrency:
   group: expert-quality-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   swift-core:
     runs-on: macos-15-intel
@@ -56,6 +60,28 @@ jobs:
             xcrun xcresulttool get test-results summary --path BossAITestResults.xcresult > ios-test-summary.json || true
             xcrun xcresulttool export attachments --path BossAITestResults.xcresult --output-path ios-test-attachments || true
           fi
+      - name: Publish failing test lines as commit statuses
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          path = 'ios-tests.log'
+          raw = open(path, encoding='utf-8', errors='replace').read().splitlines() if os.path.exists(path) else []
+          selected = [line.strip() for line in raw if re.search(r"Test Case .* failed|error:|Testing failed|\*\* TEST FAILED \*\*", line)]
+          selected = list(dict.fromkeys(selected[-8:])) or ['iOS test job failed; inspect ios-performance-xcresult artifact']
+          endpoint = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/statuses/' + os.environ['GITHUB_SHA']
+          for index, line in enumerate(selected, 1):
+              description = line[-135:]
+              payload = json.dumps({'state': 'failure', 'context': 'iOS failure ' + str(index), 'description': description}, ensure_ascii=False).encode()
+              request = urllib.request.Request(endpoint, data=payload, method='POST', headers={
+                  'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                  'Accept': 'application/vnd.github+json',
+                  'Content-Type': 'application/json'})
+              try: urllib.request.urlopen(request, timeout=10).read()
+              except Exception as error: print('diagnostic status unavailable:', type(error).__name__)
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
