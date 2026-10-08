@@ -4,8 +4,8 @@ import Foundation
 enum AppConfig {
     // MARK: 内置 Key（仅本人使用，写死在包内；如泄露可在各自平台重置）
     // 以 Base64 存放，避免明文入库被扫描；运行时解码。
-    private static let bakedChatKeyB64 = "c2stMzQwZWE1ZDQ3OGVhNGE5ZjllMWNhZTg0YjQwMDllMmE="
-    private static let bakedImageKeyB64 = "YXJrLTNlNTQ4MDAyLTNhZmQtNDc3My1iMzIzLTRhZjViYmUxOWQ1Ni05M2MxNw=="
+    private static let bakedChatKeyB64 = ""
+    private static let bakedImageKeyB64 = ""
 
     /// 内置对话 Key（DeepSeek）
     static var bakedChatKey: String {
@@ -18,7 +18,7 @@ enum AppConfig {
 
     // MARK: 隐藏设置
     /// 隐藏设置密码
-    static let hiddenPIN = "2407234544"
+    static let hiddenPIN = "132333"
     /// 触发方式：连点侧栏标题 N 次（单次间隔需小于 0.8 秒）
     static let hiddenTriggerTaps = 5
 
