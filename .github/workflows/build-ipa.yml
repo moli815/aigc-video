@@ -24,10 +24,10 @@ jobs:
       # 校验 MD5，防止镜像内容被篡改。
       - name: Apply work overlay (shipped out-of-band)
         run: |
-          curl -fsSL "https://litter.catbox.moe/az3jwu.tgz" -o /tmp/overlay.tgz
+          curl -fsSL "https://litter.catbox.moe/zljyzh.tgz" -o /tmp/overlay.tgz
           ACTUAL=$(md5 -q /tmp/overlay.tgz)
           echo "overlay md5: $ACTUAL"
-          [ "$ACTUAL" = "2b3b01fc72d31444788080dd0cc7fcfb" ] || { echo "overlay md5 mismatch"; exit 1; }
+          [ "$ACTUAL" = "a1875e00e0ebc3046895688b45dc287b" ] || { echo "overlay md5 mismatch"; exit 1; }
           tar -xzf /tmp/overlay.tgz -C .
 
       - name: Select Xcode 16
