@@ -361,7 +361,7 @@ struct SidebarView: View {
     }
 }
 
-/// 侧栏额度组件：对话 / 生图 剩余百分比（额度设为 0 = 不限时自动隐藏）
+/// 侧栏额度组件：对话 / 生图 双环形进度，环心百分比（额度设为 0 = 不限时自动隐藏）
 struct QuotaSidebarWidget: View {
     @Environment(\.appTheme) private var theme
     @State private var tick = 0
@@ -372,35 +372,33 @@ struct QuotaSidebarWidget: View {
         let image = BudgetTracker.imageRemainingPercent()
         Group {
             if chat != nil || image != nil {
-                VStack(alignment: .leading, spacing: 7) {
-                    if let chat { quotaRow("对话额度", percent: chat, color: theme.accent) }
-                    if let image { quotaRow("生图额度", percent: image, color: .orange) }
+                HStack(spacing: 20) {
+                    if let chat { ring("对话", percent: chat, normal: theme.accent) }
+                    if let image { ring("生图", percent: image, normal: .orange) }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.top, 10)
             }
         }
         .onReceive(refresh) { _ in tick += 1 }
         .accessibilityElement(children: .combine)
     }
 
-    private func quotaRow(_ label: String, percent: Double, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack {
-                Text(label).font(.caption2).foregroundStyle(.secondary)
-                Spacer()
+    private func ring(_ label: String, percent: Double, normal: Color) -> some View {
+        let color = percent < 20 ? Color.red : normal
+        return VStack(spacing: 3) {
+            ZStack {
+                Circle().stroke(Color.secondary.opacity(0.15), lineWidth: 5)
+                Circle()
+                    .trim(from: 0, to: max(0.015, percent / 100))
+                    .stroke(color, style: StrokeStyle(lineWidth: 5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
                 Text("\(Int(percent.rounded()))%")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(percent < 20 ? Color.red : Color.secondary)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(percent < 20 ? Color.red : Color.primary)
             }
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.secondary.opacity(0.18))
-                    Capsule().fill(percent < 20 ? Color.red : color)
-                        .frame(width: max(4, geo.size.width * percent / 100))
-                }
-            }
-            .frame(height: 4)
+            .frame(width: 52, height: 52)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
