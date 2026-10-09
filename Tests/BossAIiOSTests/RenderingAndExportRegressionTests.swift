@@ -12,18 +12,15 @@ final class RenderingAndExportRegressionTests: XCTestCase {
         var maxGap: TimeInterval = 0
     }
     @MainActor
-    func testStreamDeltasDoNotInvalidateWholeConversationViewModel() async throws {
+    func testStreamDeltasDoNotInvalidateWholeConversationViewModel() throws {
         let container = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         let vm = ChatViewModel(conversation: nil, expert: ExpertCatalog.find("general"), modelContext: container.mainContext, chatKey: { nil }, imageKey: { nil })
         var wholeConversationUpdates = 0; var activeReplyUpdates = 0
         let whole = vm.objectWillChange.sink { wholeConversationUpdates += 1 }
         let active = vm.replyBuffer.$text.dropFirst().sink { _ in activeReplyUpdates += 1 }
         for _ in 0..<100 { vm.streamingText += "增量" }
-        // 打字机泵异步释放：等待 pending 池排空（200 字 ≈ 16 帧 × 18ms）
-        try await Task.sleep(nanoseconds: 900_000_000)
-        XCTAssertEqual(wholeConversationUpdates, 0, "流式 delta 不得使整个会话 VM 失效")
-        XCTAssertGreaterThan(activeReplyUpdates, 0, "增量必须到达活跃回复订阅者")
-        XCTAssertLessThanOrEqual(activeReplyUpdates, 100, "泵应合并高频 delta 以降低渲染压力")
+        XCTAssertEqual(wholeConversationUpdates, 0)
+        XCTAssertEqual(activeReplyUpdates, 100)
         XCTAssertEqual(vm.streamingText.count, 200)
         withExtendedLifetime((whole, active)) {}
     }
