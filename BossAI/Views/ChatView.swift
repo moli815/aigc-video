@@ -282,8 +282,36 @@ private struct StreamingMessageRow: View {
     @ObservedObject var buffer: StreamingReplyBuffer
     let files: [StoredFile]
     let onPreview: (StoredFile) -> Void
+    /// 已平滑展示的字符数（打字机游标）
+    @State private var shownCount = 0
+    /// 打字机目标长度（随 buffer 增长）
+    @State private var targetCount = 0
+    @State private var pump: Task<Void, Never>?
+
     var body: some View {
-        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview)
+        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview)
+            .onChange(of: buffer.text) { _, newText in
+                targetCount = newText.count
+                startPump()
+            }
+            .onAppear {
+                targetCount = buffer.text.count
+                startPump()
+            }
+            .onDisappear { pump?.cancel(); pump = nil }
+    }
+
+    /// 平滑打字机：18ms 一帧（≈55fps），积压越多步长越大（≤0.5s 追平模型输出）
+    private func startPump() {
+        guard pump == nil else { return }
+        pump = Task {
+            while !Task.isCancelled, shownCount < targetCount {
+                let pending = targetCount - shownCount
+                shownCount = min(targetCount, shownCount + max(2, pending / 15))
+                try? await Task.sleep(nanoseconds: 18_000_000)
+            }
+            pump = nil
+        }
     }
 }
 
