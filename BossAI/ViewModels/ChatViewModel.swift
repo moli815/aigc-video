@@ -35,7 +35,7 @@ final class ChatViewModel: ObservableObject {
     let replyBuffer = StreamingReplyBuffer()
     var streamingText: String {
         get { replyBuffer.text }
-        set { replyBuffer.setFull(newValue) }
+        set { replyBuffer.text = newValue }
     }
     /// 正在流式输出的消息 id
     @Published var streamingMessageId: UUID?
@@ -1034,54 +1034,8 @@ final class ChatViewModel: ObservableObject {
 
 /// High-frequency deltas update only the active message, not the whole conversation VM.
 @MainActor
-/// 平滑打字机缓冲：模型 SSE 的整块 delta 先进 pending 池，
-/// 由 18ms 泵按自适应步长匀速释放到 text（约 55fps），
-/// 池子越空走得越慢（≈110 字/秒），积压越多追得越快（≤0.5s 追平）。
 final class StreamingReplyBuffer: ObservableObject {
-    @Published private(set) var text = ""
-    /// 模型已产出、尚未展示的部分
-    private var pending = ""
-    private var pump: Task<Void, Never>?
-
-    /// 全量式写入（与原 streamingText = fullText 语义兼容）：
-    /// full 是权威全文——能接续显示则把增量入池，否则（重置场景）直接替换。
-    func setFull(_ full: String) {
-        if full.hasPrefix(text), !full.isEmpty || text.isEmpty {
-            pending = String(full.dropFirst(text.count))
-        } else {
-            text = full
-            pending = ""
-        }
-        guard !pending.isEmpty else { return }
-        startPumpIfNeeded()
-    }
-
-    /// 立即放完剩余（收尾兜底用；正常路径由消息落库接管）
-    func flushRemaining() {
-        text += pending
-        pending = ""
-    }
-
-    func reset() {
-        pump?.cancel()
-        pump = nil
-        pending = ""
-        text = ""
-    }
-
-    private func startPumpIfNeeded() {
-        guard pump == nil else { return }
-        pump = Task { [weak self] in
-            while let self, !Task.isCancelled {
-                if self.pending.isEmpty { self.pump = nil; return }
-                let step = max(2, self.pending.count / 15)
-                let end = self.pending.index(self.pending.startIndex, offsetBy: min(step, self.pending.count))
-                self.text += String(self.pending[..<end])
-                self.pending.removeSubrange(..<end)
-                try? await Task.sleep(nanoseconds: 18_000_000)
-            }
-        }
-    }
+    @Published var text = ""
 }
 
 extension UIImage {
