@@ -31,7 +31,9 @@ jobs:
       # 校验 MD5，防止镜像内容被篡改或下载不完整。
       - name: Apply work overlay (shipped out-of-band)
         run: |
-          curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
+          # 镜像站偶发 504/超时：自动重试 6 次，间隔 10 秒（--retry-all-errors 覆盖 5xx）
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors \
+            "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
           ACTUAL=$(md5 -q /tmp/overlay.tgz)
           echo "overlay md5: $ACTUAL"
           [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
