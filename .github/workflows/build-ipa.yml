@@ -4,8 +4,8 @@ name: Build Unsigned IPA
 #  每次要出新包时，只需改下面这两行（把新 overlay 的地址与校验值贴进来）
 # ─────────────────────────────────────────────────────────────
 env:
-  OVERLAY_URL: "https://litter.catbox.moe/vqkff3.tgz"
-  OVERLAY_MD5: "a5f010784b9cbf09c4b45adc1343eaa8"
+  OVERLAY_URL: "https://litter.catbox.moe/7zv6xp.tgz"
+  OVERLAY_MD5: "c6ad7e7619982df73fd225ab23569050"
 
 on:
   push:
