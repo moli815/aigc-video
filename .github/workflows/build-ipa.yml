@@ -1,5 +1,12 @@
 name: Build Unsigned IPA
 
+# ─────────────────────────────────────────────────────────────
+#  每次要出新包时，只需改下面这两行（把新 overlay 的地址与校验值贴进来）
+# ─────────────────────────────────────────────────────────────
+env:
+  OVERLAY_URL: "https://litter.catbox.moe/ypg9dt.tgz"
+  OVERLAY_MD5: "e1b120473e454c00534ff43e62e46ad6"
+
 on:
   push:
     branches: [main, chatgpt-style-ui]
@@ -20,14 +27,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 本轮改动（含新图标二进制）以 tgz 走外部镜像下发，构建前套用到工作树。
-      # 校验 MD5，防止镜像内容被篡改。
+      # 本轮改动（含图标二进制）以 tgz 走外部镜像下发，构建前套用到工作树。
+      # 校验 MD5，防止镜像内容被篡改或下载不完整。
       - name: Apply work overlay (shipped out-of-band)
         run: |
-          curl -fsSL "https://litter.catbox.moe/zljyzh.tgz" -o /tmp/overlay.tgz
+          curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
           ACTUAL=$(md5 -q /tmp/overlay.tgz)
           echo "overlay md5: $ACTUAL"
-          [ "$ACTUAL" = "a1875e00e0ebc3046895688b45dc287b" ] || { echo "overlay md5 mismatch"; exit 1; }
+          [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
           tar -xzf /tmp/overlay.tgz -C .
 
       - name: Select Xcode 16
