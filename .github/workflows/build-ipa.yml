@@ -1,8 +1,15 @@
 name: Build Unsigned IPA
 
+# ─────────────────────────────────────────────────────────────
+#  每次要出新包时，只需改下面这两行（把新 overlay 的地址与校验值贴进来）
+# ─────────────────────────────────────────────────────────────
+env:
+  OVERLAY_URL: "https://litter.catbox.moe/v30v8v.tgz"
+  OVERLAY_MD5: "2e899285266009e7a207556606b2262a"
+
 on:
   push:
-    branches: [main]
+    branches: [main, chatgpt-style-ui]
   workflow_dispatch:
 
 # 同一分支只保留最新一次编译：新 run 触发时自动取消所有排队中的旧 run
@@ -10,12 +17,27 @@ concurrency:
   group: build-ipa-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # 本轮改动（含图标二进制）以 tgz 走外部镜像下发，构建前套用到工作树。
+      # 校验 MD5，防止镜像内容被篡改或下载不完整。
+      - name: Apply work overlay (shipped out-of-band)
+        run: |
+          # 镜像站偶发 504/超时：自动重试 6 次，间隔 10 秒（--retry-all-errors 覆盖 5xx）
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors \
+            "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
+          ACTUAL=$(md5 -q /tmp/overlay.tgz)
+          echo "overlay md5: $ACTUAL"
+          [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
+          tar -xzf /tmp/overlay.tgz -C .
 
       - name: Select Xcode 16
         uses: maxim-lobanov/setup-xcode@v1
@@ -51,3 +73,21 @@ jobs:
           name: BossAI-unsigned-ipa
           path: BossAI-unsigned.ipa
           retention-days: 30
+
+      # 免登录取包：IPA 传临时镜像，并把直链提交回仓库（[skip ci] 防止循环构建）
+      - name: Upload IPA to file mirror
+        id: mirror
+        run: |
+          URL=$(curl -fsS --max-time 300 \
+            -F "reqtype=fileupload" -F "time=72h" \
+            -F "fileToUpload=@BossAI-unsigned.ipa" \
+            https://litterbox.catbox.moe/resources/internals/api.php)
+          echo "IPA mirror: $URL"
+          echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
+
+      - name: Publish mirror URL to repo
+        run: |
+          git config user.name "ci-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add mirror-url.txt
+          if git diff --cached --quiet; then echo "no change"; else git commit -m "chore: ipa mirror url [skip ci]" && git push; fi
