@@ -1,0 +1,55 @@
+name: UI Keypath Tests
+
+# P0：关键路径 UI 自动化（键盘/滚动/来源折叠）。离线 fixture 驱动，不消耗 API。
+env:
+  OVERLAY_URL: "https://litter.catbox.moe/mz8qdr.tgz"
+  OVERLAY_MD5: "5716ca355d2d51659ca688f44e2fb900"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ui-tests:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply work overlay (shipped out-of-band)
+        run: |
+          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors \
+            "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
+          ACTUAL=$(md5 -q /tmp/overlay.tgz)
+          echo "overlay md5: $ACTUAL"
+          [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
+          tar -xzf /tmp/overlay.tgz -C .
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Run UI key-path tests
+        run: |
+          xcodebuild test \
+            -project BossAI.xcodeproj \
+            -scheme BossAI \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:BossAIUITests \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-results
+          path: build/Logs/Test
+          retention-days: 7
