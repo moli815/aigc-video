@@ -2,8 +2,8 @@ name: UI Keypath Tests
 
 # P0：关键路径 UI 自动化（键盘/滚动/来源折叠）。离线 fixture 驱动，不消耗 API。
 env:
-  OVERLAY_URL: "https://litter.catbox.moe/i48e48.tgz"
-  OVERLAY_MD5: "e3aafc1fbad04567aeaf2f54a2ccffee"
+  OVERLAY_URL: "https://litter.catbox.moe/bc9d3m.tgz"
+  OVERLAY_MD5: "29a4085a0f2c20aa2ca75a7a6d657b32"
 
 on:
   workflow_dispatch:
