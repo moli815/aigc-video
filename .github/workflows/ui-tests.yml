@@ -37,15 +37,8 @@ jobs:
 
       - name: Run UI key-path tests
         run: |
-          # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad，避免机型名硬编码失效
-          UDID=$(xcrun simctl list devices available -j | python3 -c "
-import json,sys
-data=json.load(sys.stdin)['devices']
-for runtime, devs in sorted(data.items(), reverse=True):
-    for d in devs:
-        if d.get('isAvailable') and ('iPad' in d.get('name','')):
-            print(d['udid']); sys.exit(0)
-")
+          # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad（单行管道，避免破坏 YAML 块）
+          UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];print(next(x["udid"] for k in sorted(d,reverse=True) for x in d[k] if x.get("isAvailable") and "iPad" in x.get("name","")))')
           echo "使用 iPad 模拟器: $UDID"
           xcodebuild test \
             -project BossAI.xcodeproj \
