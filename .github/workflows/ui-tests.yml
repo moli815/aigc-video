@@ -2,8 +2,8 @@ name: UI Keypath Tests
 
 # P0：关键路径 UI 自动化（键盘/滚动/来源折叠）。离线 fixture 驱动，不消耗 API。
 env:
-  OVERLAY_URL: "https://litter.catbox.moe/mz8qdr.tgz"
-  OVERLAY_MD5: "5716ca355d2d51659ca688f44e2fb900"
+  OVERLAY_URL: "https://litter.catbox.moe/i48e48.tgz"
+  OVERLAY_MD5: "e3aafc1fbad04567aeaf2f54a2ccffee"
 
 on:
   workflow_dispatch:
@@ -37,10 +37,20 @@ jobs:
 
       - name: Run UI key-path tests
         run: |
+          # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad，避免机型名硬编码失效
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+import json,sys
+data=json.load(sys.stdin)['devices']
+for runtime, devs in sorted(data.items(), reverse=True):
+    for d in devs:
+        if d.get('isAvailable') and ('iPad' in d.get('name','')):
+            print(d['udid']); sys.exit(0)
+")
+          echo "使用 iPad 模拟器: $UDID"
           xcodebuild test \
             -project BossAI.xcodeproj \
             -scheme BossAI \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "id=$UDID" \
             -only-testing:BossAIUITests \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
