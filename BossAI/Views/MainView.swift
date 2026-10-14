@@ -1,6 +1,27 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import Combine
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 文件职责：App 主界面骨架——ChatGPT 式左右分栏（可折叠侧栏 + 详情区），
+// 以及侧栏内的专家列表、对话列表、额度组件、欢迎工作台、新建对话与隐藏设置门禁。
+//
+// 在整个 App 中的角色：
+//   App 根视图直接挂载 MainView；detailContent 按 containerKey 路由到
+//   资料库 / 草稿对话 / 已有会话 / 欢迎页四种状态。
+//
+// 关键设计决策：
+//   1. containerKey 与 selectedConversationId 分离：草稿建出会话时只更新侧栏
+//      高亮、不换容器 key，保证正在流式输出的 ChatViewModel 不被销毁重建；
+//   2. 草稿唯一 key（P0-19 防呆）：每次"选择专家新建"都拼入随机 UUID，
+//      VM 不被复用，杜绝上一次草稿/模板残留进输入框；
+//   3. ForEach enumerated 防呆：专家列表用 Array(enumerated()) + id: \.element.id，
+//      索引只用于画分隔线，视图身份始终绑定专家 id，不随顺序漂移；
+//   4. monogram 徽章 + 稳定配色（P0-23）：专家头像用首字徽章，
+//      颜色按 id 散列到固定色板，列表/横幅/任何入口永远同色；
+//   5. 数据隔离（P0-16）：侧栏对话列表只显示当前登录账号名下的会话。
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// 主界面：ChatGPT 风格侧栏（可折叠专家团 + 对话列表 + 资料库）+ 对话区
 struct MainView: View {
@@ -100,7 +121,7 @@ struct MainView: View {
             } else {
                 let raw = String(key.dropFirst("conv-".count))
                 if let uuid = UUID(uuidString: raw),
-                   let conv = conversations.first(where: { $0.id == uuid }) {
+                   let conv = conversations.first(where: { $0.id == uuid && $0.ownerKey == HostedAccount.scopeKey }) {
                     ChatContainerView(conversation: conv, expert: conv.expert)
                         .id(key)
                 } else {
@@ -129,12 +150,13 @@ struct MainView: View {
     private func openExpert(_ expert: Expert) {
         draftPrompt = ""
         showLibrary = false
-        if let existing = conversations.first(where: { $0.expertId == expert.id }) {
+        if let existing = conversations.first(where: { $0.expertId == expert.id && $0.ownerKey == HostedAccount.scopeKey }) {
             selectedConversationId = existing.id
             containerKey = "conv-\(existing.id.uuidString)"
         } else {
-            selectedConversationId = nil
-            containerKey = "draft-\(expert.id)"
+            // P0-19 防呆：每次"选择专家新建"都生成全新草稿（唯一 key + 清空预填）。
+            // 此前用固定 key "draft-\(expert.id)"，VM 被复用会把上一次任务模板/草稿残留进输入框。
+            startNewDraft(expert)
         }
         columnVisibility = .detailOnly
     }
@@ -172,6 +194,8 @@ struct MainView: View {
 
 // MARK: - 侧栏
 
+/// 左侧分栏：资料库入口、可折叠专家团（独立滚动框）、对话搜索列表、
+/// 底部额度组件与新建按钮、顶部品牌区（含连点隐藏入口）。
 struct SidebarView: View {
     @Environment(\.appTheme) private var theme
     @Binding var selectedConversationId: UUID?
@@ -192,10 +216,13 @@ struct SidebarView: View {
     @State private var tapCount = 0
     @State private var lastTapAt = Date.distantPast
 
+    /// 过滤后的对话列表：先按账号隔离，再按关键词匹配标题/专家名/消息正文
     private var filtered: [Conversation] {
+        // P0-16 数据隔离：只显示当前登录账号名下的对话（同设备换账号互不可见）
+        let scoped = conversations.filter { $0.ownerKey == HostedAccount.scopeKey }
         let keyword = searchText.trimmingCharacters(in: .whitespaces)
-        guard !keyword.isEmpty else { return conversations }
-        return conversations.filter { conv in
+        guard !keyword.isEmpty else { return scoped }
+        return scoped.filter { conv in
             if conv.title.localizedCaseInsensitiveContains(keyword) { return true }
             if conv.expert.name.localizedCaseInsensitiveContains(keyword) { return true }
             return conv.messages.contains { $0.text.localizedCaseInsensitiveContains(keyword) }
@@ -223,7 +250,7 @@ struct SidebarView: View {
                         HStack {
                             Label("专家顾问", systemImage: "person.2.badge.gearshape.fill")
                             Spacer()
-                            Text("\(ExpertCatalog.experts.count)")
+                            Text("\(ExpertCatalog.all.count)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Image(systemName: expertExpanded ? "chevron.down" : "chevron.right")
@@ -234,14 +261,34 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
 
                     if expertExpanded {
-                        ForEach(ExpertCatalog.experts) { expert in
-                            Button {
-                                onOpenExpert(expert)
-                            } label: {
-                                ExpertRow(expert: expert)
+                        // P0-11 专家顾问区：独立滚动框 + 行分隔线 + 统一内边距（此前布局散乱）
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(ExpertCatalog.all.enumerated()), id: \.element.id) { index, expert in
+                                    Button {
+                                        onOpenExpert(expert)
+                                    } label: {
+                                        ExpertRow(expert: expert)
+                                            .padding(.vertical, 7)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    if index < ExpertCatalog.all.count - 1 {
+                                        Rectangle()
+                                            .fill(theme.border.opacity(0.45))
+                                            .frame(height: 0.5)
+                                            .padding(.leading, 52)
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 8)
                         }
+                        .scrollIndicators(.hidden)
+                        .frame(maxHeight: 380)
+                        .background(theme.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.border.opacity(0.6), lineWidth: 0.5))
+                        .padding(.horizontal, 4)
                     }
                 }
 
@@ -301,21 +348,48 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom) {
-                Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                    .buttonStyle(.borderedProminent).padding(12).background(theme.surface)
-                    .accessibilityIdentifier("new-task")
+                VStack(spacing: 0) {
+                    QuotaSidebarWidget()
+                    Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(theme.accentDeep)
+                        .padding([.horizontal, .bottom], 12)
+                        .accessibilityIdentifier("new-task")
+                }
+                // 底部区做成玻璃面板：额度环与新建按钮浮在毛玻璃上
+                .background(.ultraThinMaterial)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(theme.border).frame(height: 0.5)
+                }
             }
             .safeAreaInset(edge: .top) {
-                HStack {
-                    Text("Boss AI")
-                        .font(.title2.bold())
+                // P0-11 品牌区：图形 + 名称分层，不透明毛玻璃衬底 + 底部细分隔线。
+                // 此前该区域无背景 → 列表滚动时内容透出与标题重叠；现在内容被衬底遮住且被分隔线划清边界。
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(LinearGradient(colors: [theme.accent, theme.accent.opacity(0.65)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .frame(width: 30, height: 30)
+                        Image(systemName: "shield.lefthalf.filled")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(HostedAccount.cachedAppName).font(.headline.bold())
+                        Text("老板的 AI 顾问").font(.caption2).foregroundStyle(.secondary)
+                    }
                     Spacer()
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(theme.border).frame(height: 0.5)
+                }
                 .contentShape(Rectangle())
                 .onTapGesture { registerTap() }
-                .accessibilityLabel("Boss AI")
+                .accessibilityLabel("中防AI")
             }
 
 
@@ -356,16 +430,211 @@ struct SidebarView: View {
     }
 }
 
+/// 侧栏额度组件：
+/// - 云端账号模式：**统一额度池**单环（对话 + 作图 合并计费，由服务端统计并下发），
+///   对齐 ChatGPT 式的单一用量概念；低于 20% 环自动转红警示
+/// - 手动 Key 模式：本地双环（对话 / 生图），额度设为 0（不限）时自动隐藏对应环
+struct QuotaSidebarWidget: View {
+    @Environment(\.appTheme) private var theme
+    @State private var tick = 0
+    @State private var showIdentity = false
+    @State private var showMembership = false
+    private let refresh = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Group {
+            if HostedAccount.isHostedActive && HostedAccount.hasToken {
+                hostedTierCard   // P0-19 方案 A（用户选定）：三环并排
+            } else {
+                let chat = BudgetTracker.chatRemainingPercent()
+                let image = BudgetTracker.imageRemainingPercent()
+                if chat != nil || image != nil {
+                    HStack(spacing: 22) {
+                        if let chat {
+                            LiquidGlassRing(label: "对话", percent: chat,
+                                            tint: theme.accentSecondary, glow: theme.glow)
+                        }
+                        if let image {
+                            // 生图池固定用琥珀色，保证与主题色可区分
+                            LiquidGlassRing(label: "生图", percent: image,
+                                            tint: Color(red: 0.984, green: 0.749, blue: 0.141),
+                                            glow: Color.orange.opacity(0.42))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                }
+            }
+        }
+        .onReceive(refresh) { _ in tick += 1 }
+        .sheet(isPresented: $showIdentity) { IdentitySheet() }
+        .sheet(isPresented: $showMembership) { MembershipView() }
+        .accessibilityElement(children: .contain)
+    }
+
+    /// P0-19 方案 A：档位徽章 + 剩余天数 + 三环并排 + 身份设置/升级入口
+    @ViewBuilder
+    private var hostedTierCard: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text("👑 " + HostedAccount.cachedTierName)
+                    .font(.caption.weight(.bold))
+                    .padding(.horizontal, 9).padding(.vertical, 3)
+                    .background(theme.accent.opacity(0.18), in: Capsule())
+                    .foregroundStyle(theme.accent)
+                Spacer()
+                if let days = HostedAccount.cachedDaysLeft {
+                    Text(days >= 0 ? "剩 \(days) 天" : "已到期")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 6) {
+                QuotaSidebarRing(pct: HostedAccount.cachedDayRemainingPct,
+                                 tint: theme.accent, label: "今日",
+                                 resetAt: HostedAccount.cachedDayResetAt)
+                QuotaSidebarRing(pct: HostedAccount.cachedWeekRemainingPct,
+                                 tint: theme.accentSecondary, label: "本周",
+                                 resetAt: HostedAccount.cachedWeekResetAt)
+                QuotaSidebarRing(pct: HostedAccount.cachedMonthRemainingPct,
+                                 tint: .cyan, label: "本月",
+                                 resetAt: HostedAccount.cachedMonthResetAt)
+            }
+            HStack(spacing: 8) {
+                Button { showIdentity = true } label: {
+                    Label("身份设置", systemImage: "gearshape")
+                        .font(.caption2.weight(.semibold))
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar-identity")
+                Button { showMembership = true } label: {
+                    Text("升级 / 续费")
+                        .font(.caption2.weight(.bold))
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .background(theme.accentDeepGradient, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(.white)
+                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("sidebar-upgrade")
+            }
+        }
+        .padding(12)
+        .background(
+            LinearGradient(colors: [theme.accent.opacity(0.10), theme.accentSecondary.opacity(0.06)],
+                           startPoint: .top, endPoint: .bottom),
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+    }
+}
+
+/// P0-19 单个额度环：环心百分比 + 标签 + 距重置倒计时（不出现金额）
+struct QuotaSidebarRing: View {
+    let pct: Double
+    let tint: Color
+    let label: String
+    let resetAt: Date?
+
+    private var clamped: Double { min(100, max(0, pct)) }
+    private var low: Bool { clamped <= 20 }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.08), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: CGFloat(max(0.02, clamped / 100)))
+                    .stroke(low ? Color.orange : tint, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                VStack(spacing: 0) {
+                    Text("\(Int(clamped.rounded()))%")
+                        .font(.system(size: 13, weight: .heavy, design: .rounded).monospacedDigit())
+                    Text("剩余").font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 64, height: 64)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            if let resetAt {
+                Text(MembershipQuotaRow.countdown(to: resetAt))
+                    .font(.system(size: 8.5)).foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// 液态玻璃环形进度：毛玻璃圆盘 + 斜向反光 + 高光描边 + 渐变进度环 + 环心百分比。
+/// 低于 20% 自动转为红色警示。
+struct LiquidGlassRing: View {
+    let label: String
+    let percent: Double
+    var tint: Color = .blue
+    var glow: Color = .blue
+
+    private var low: Bool { percent < 20 }
+    private var lineWidth: CGFloat { 5 }
+    private var inset: CGFloat { lineWidth / 2 + 2 }
+    /// 进度环配色：正常态用 tint 渐变，低于 20% 用红色
+    private var ringGradient: AngularGradient {
+        let base = low ? Color.red : tint
+        return AngularGradient(colors: [base.opacity(0.55), base], center: .center)
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            ZStack {
+                // ① 玻璃圆盘：毛玻璃 + 一层斜向反光，形成「液态」立体感
+                Circle().fill(.ultraThinMaterial)
+                Circle().fill(GlassDesign.surfaceSheen)
+                // ② 轨道
+                Circle().inset(by: inset)
+                    .stroke(Color.white.opacity(0.12), lineWidth: lineWidth)
+                // ③ 进度环：渐变 + 圆头 + 辉光
+                Circle().inset(by: inset)
+                    .trim(from: 0, to: max(0.015, percent / 100))
+                    .stroke(ringGradient, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: low ? Color.red.opacity(0.55) : glow, radius: 6)
+                // ④ 高光描边：顶部亮、底部暗，模拟玻璃边缘折射
+                Circle().strokeBorder(GlassDesign.strokeHighlight, lineWidth: 1)
+                // ⑤ 环心百分比
+                Text("\(Int(percent.rounded()))%")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(low ? Color.red : Color.primary)
+            }
+            .frame(width: GlassDesign.ringSize, height: GlassDesign.ringSize)
+            .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 4)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .accessibilityLabel("\(label)额度剩余 \(Int(percent.rounded()))%")
+    }
+}
+
+/// 侧栏专家行：monogram 徽章 + 名称 + 一句话介绍
 struct ExpertRow: View {
     @Environment(\.appTheme) private var theme
     let expert: Expert
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: expert.symbol)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 22)
+            // P0-23 图标彻底重设计（用户实测 resizable+scaledToFit 两次修复仍不对齐）：
+            // 根因是 SF Symbol 之间的视觉宽度/重心差异是字体固有的，缩放无法根治。
+            // 改用「首字徽章 monogram」：Text 固定 frame + 居中，字形是文字天然居中，
+            // 任何专家、任何字体下都绝对对齐；配色按 id 稳定散列，同一位专家永远同色。
+            Text(String(expert.name.prefix(1)))
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(Self.tint(for: expert.id),
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)
@@ -376,8 +645,17 @@ struct ExpertRow: View {
             }
         }
     }
+
+    /// 稳定配色：按专家 id 做字符和散列映射到固定色板（8 色循环），
+    /// 不依赖随机数——同一专家在列表、横幅、任何入口颜色都一致。
+    static func tint(for id: String) -> Color {
+        let palette: [Color] = [.blue, .teal, .indigo, .purple, .pink, .orange, .red, .green]
+        let hash = id.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return palette[abs(hash) % palette.count]
+    }
 }
 
+/// 侧栏单条对话行：图标 + 标题 + 最后一条消息预览 + 专家名胶囊
 struct ConversationRow: View {
     @Environment(\.appTheme) private var theme
     let conversation: Conversation
@@ -407,6 +685,7 @@ struct ConversationRow: View {
         }
     }
 
+    /// 预览文案：取最新一条消息的文字；图片/文件分别用占位符；无消息给兜底文案
     private var preview: String {
         guard let last = conversation.messages.max(by: { $0.createdAt < $1.createdAt }) else {
             return "暂无消息"
@@ -464,6 +743,8 @@ struct LiquidGlassButton: View {
 
 // MARK: - 欢迎页
 
+/// 欢迎工作台：无选中会话时的详情页——任务卡片（查最新信息/做决策/分析资料）
+/// 与专家协作卡片网格，点击后带预填提示词进入草稿对话。
 struct WelcomeView: View {
     @Environment(\.appTheme) private var theme
     var onNewChat: () -> Void
@@ -472,7 +753,7 @@ struct WelcomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 HStack {
-                    Label("BossAI 工作台", systemImage: "square.grid.2x2.fill").font(.headline).foregroundStyle(theme.accent)
+                    Label("中防AI 工作台", systemImage: "square.grid.2x2.fill").font(.headline).foregroundStyle(theme.accent)
                     Spacer()
                     Button("新任务", systemImage: "plus", action: onNewChat).buttonStyle(.bordered)
                 }
@@ -482,34 +763,40 @@ struct WelcomeView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 14)], spacing: 14) {
                     taskCard("查最新信息", symbol: "globe", detail: "产品、竞品、行业动态与价格", expert: ExpertCatalog.general,
-                             prompt: "请核实以下最新信息。主题：\n截至日期：今天\n需要的字段：\n优先官方资料，区分已发布事实、未核实信息与传闻，逐项注明依据。", id: "task-research")
+                             prompt: "", id: "task-research")   // P0-19：通用对话不预填模板（用户要求）
                     taskCard("做一项决策", symbol: "chart.bar.xaxis", detail: "方案比较、投入产出与行动步骤", expert: ExpertCatalog.experts.first ?? ExpertCatalog.general,
                              prompt: "请帮我比较方案并做决策。背景：\n备选方案：\n目标：\n预算与时间：\n已知数据：\n请区分事实与假设，列清计算依据、风险和下一步。", id: "task-decision")
                     taskCard("分析现有资料", symbol: "doc.text.magnifyingglass", detail: "上传资料、提炼重点与待确认项", expert: ExpertCatalog.general,
-                             prompt: "请分析我上传的资料。关注问题：\n期望成果：\n请按资料中的证据给结论，指出矛盾和缺失；需要外部核实时先明确说明。", id: "task-documents")
+                             prompt: "", id: "task-documents")   // P0-19：通用对话不预填模板
                 }
                 VStack(alignment: .leading, spacing: 14) {
                     Text("专家协作").font(.title2.bold())
                     Text("选择任务方向；计算、检索与交付工具按实际技能配置执行。").font(.subheadline).foregroundStyle(.secondary)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 12)], spacing: 12) {
-                        ForEach(ExpertCatalog.experts) { expert in
+                        ForEach(ExpertCatalog.all) { expert in
                             Button { onTask(expert, "") } label: {
                                 HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: expert.symbol).foregroundStyle(theme.accent).frame(width: 24)
+                                    Image(systemName: expert.symbol)
+                                        .resizable().scaledToFit()
+                                        .frame(width: 15, height: 15)
+                                        .foregroundStyle(theme.accent)
+                                        .frame(width: 26, height: 26)
+                                        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text(expert.name).font(.headline).foregroundStyle(.primary)
                                         Text(expert.subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                                     }
                                     Spacer(minLength: 0)
                                 }.padding(theme.cardPadding).frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
-                                    .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cardRadius))
+                                    .liquidGlass(RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous), elevated: false)
                             }.buttonStyle(.plain).accessibilityIdentifier("workbench-expert-" + expert.id)
                         }
                     }
                 }
             }.padding(28).frame(maxWidth: 1100, alignment: .leading).frame(maxWidth: .infinity)
-        }.background(theme.canvas).accessibilityIdentifier("workbench")
+        }.background(Color.clear).accessibilityIdentifier("workbench")
     }
+    /// 生成一张任务卡片按钮（点击把预填 prompt 带进草稿）
     private func taskCard(_ title: String, symbol: String, detail: String, expert: Expert, prompt: String, id: String) -> some View {
         Button { onTask(expert, prompt) } label: {
             VStack(alignment: .leading, spacing: 12) {
@@ -517,14 +804,15 @@ struct WelcomeView: View {
                 Text(title).font(.title3.bold()).foregroundStyle(.primary)
                 Text(detail).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.padding(20).frame(maxWidth: .infinity, minHeight: 156, alignment: .leading)
-                .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cardRadius))
-                .overlay(RoundedRectangle(cornerRadius: theme.cardRadius).stroke(theme.border, lineWidth: 0.7))
+                .liquidGlass(RoundedRectangle(cornerRadius: theme.cardRadius, style: .continuous), elevated: false)
         }.buttonStyle(.plain).accessibilityIdentifier(id)
     }
 }
 
 // MARK: - 新建对话（选专家）
 
+/// 新建对话选择页：上半部分是专家卡片网格（含技能/工具标签），
+/// 下半部分是最近 6 条会话快捷入口。
 struct NewChatSheet: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
@@ -595,7 +883,7 @@ struct NewChatSheet: View {
                         }
                     }
 
-                    if !conversations.isEmpty {
+                    if !conversations.filter({ $0.ownerKey == HostedAccount.scopeKey }).isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("继续最近的对话")
                                 .font(.footnote.weight(.medium))
@@ -652,6 +940,7 @@ struct NewChatSheet: View {
 
 // MARK: - 隐藏设置门禁：密码验证
 
+/// 隐藏设置入口的密码门：输对 AppConfig.hiddenPIN 后回调 onSuccess 打开设置页
 struct HiddenPinGate: View {
     @Environment(\.appTheme) private var theme
     @Environment(\.dismiss) private var dismiss
@@ -675,7 +964,7 @@ struct HiddenPinGate: View {
                 } header: {
                     Text("验证身份")
                 } footer: {
-                    Text("入口：在侧栏顶部 \"Boss AI\" 标题上快速连点 \(AppConfig.hiddenTriggerTaps) 次（间隔小于 0.8 秒）")
+                    Text("入口：在侧栏顶部 \"中防AI\" 标题上快速连点 \(AppConfig.hiddenTriggerTaps) 次（间隔小于 0.8 秒）")
                 }
             }
             .navigationTitle("设置")
@@ -692,6 +981,7 @@ struct HiddenPinGate: View {
         }
     }
 
+    /// 校验密码：正确触发 onSuccess；错误显示提示并清空输入
     private func check() {
         if pin == AppConfig.hiddenPIN {
             onSuccess()

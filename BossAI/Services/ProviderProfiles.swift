@@ -1,7 +1,18 @@
 import Foundation
 
+// ============================================================================
+// 文件职责：服务商档案目录、月度额度（BudgetTracker）与 Key 自动识别（ProviderDetector）。
+// 在 App 中的角色：所有模型调用方的"配置真源"——对话/作图走哪家、模型 ID、
+//   搜索接入方式、手动 Key 模式的月度额度记账、粘贴 Key 后的自动探测都在这里。
+// 关键设计决策与防呆：
+//   1. 云端 hosted 模式优先级最高（Key 由服务端持有，客户端只带会员 token）；
+//   2. 额度记账全部是"估算值"，仅用于本地软限制；云端模式下完全不记账（服务端为准）；
+//   3. 探测只读 HTTP 状态码，不解析业务响应，任何异常一律视为"不属于这家"。
+// ============================================================================
+
 // MARK: - 服务商档案：粘贴 Key 后自动识别，无需手动选择
 
+/// 联网搜索的接入方式（各家 API 形态不同，请求构造层按此分支）
 enum SearchStyle {
     case kimiBuiltin     // Kimi 内置 $web_search（服务端执行，客户端回显）
     case zhipuTool       // 智谱 web_search 工具（服务端执行）
@@ -10,6 +21,8 @@ enum SearchStyle {
     case none            // 无内置搜索（如 DeepSeek）
 }
 
+/// 对话服务商档案：请求构造所需的最小不可变快照
+/// （id 用于分支逻辑；memoryModel 是记忆抽取专用的轻量模型）
 struct ChatProfile {
     let id: String
     let displayName: String
@@ -19,6 +32,7 @@ struct ChatProfile {
     let searchStyle: SearchStyle
 }
 
+/// 作图服务商档案：style 决定请求体形态（火山支持参考图 / 智谱仅文生图）
 struct ImageProfile {
     enum Style { case volc, zhipu }
     let id: String
@@ -28,6 +42,7 @@ struct ImageProfile {
     let style: Style
 }
 
+/// 服务商目录与选择器：候选列表、云端档案、已识别服务商的持久化与读取
 enum ProviderCatalog {
     /// 识别探测顺序即优先级（Key 格式相同的前几家靠 /models 探测结果区分）。
     /// DeepSeek 放首位：它也是「未识别到厂商」时的兜底，避免把 Key 打到别家导致 401
@@ -62,6 +77,29 @@ enum ProviderCatalog {
                      baseURL: "https://open.bigmodel.cn/api/paas/v4",
                      model: "cogview-4-250304", style: .zhipu),
     ]
+
+    // MARK: 云端托管档案（会员制）
+    /// 走自建中转服务，**模型 API Key 全部由服务端持有**，客户端只带会员 token。
+    /// 沿用 OpenAI 兼容路径（/chat/completions、/images/generations），因此请求层无需改动。
+    static let hostedChat = ChatProfile(
+        id: "hosted",
+        displayName: "中防AI 云端",
+        baseURL: AppConfig.hostedAPIBase,
+        model: "cloud",
+        memoryModel: "cloud",
+        searchStyle: .none)
+
+    static let hostedImage = ImageProfile(
+        id: "hosted",
+        displayName: "中防AI 云端",
+        baseURL: AppConfig.hostedAPIBase,
+        model: "cloud",
+        style: .volc)
+
+    /// 是否正在使用云端账号（已登录且未切回手动 Key 模式）
+    static var isHosted: Bool {
+        HostedAccount.isHostedActive && HostedAccount.hasToken
+    }
 
     private static let chatProviderKey = "bossai.chat_provider"
     private static let imageProviderKey = "bossai.image_provider"
@@ -98,8 +136,12 @@ enum ProviderCatalog {
         UserDefaults.standard.string(forKey: imageProviderKey)
     }
 
-    /// 读取已识别的档案；未识别过（旧版本数据）回落到 Kimi / 火山默认
+    /// 当前对话档案：云端优先；否则读已识别 id，命中失败回落第一家（DeepSeek）；
+    /// 有自定义模型覆盖时重建 profile——注意：覆盖值若与原模型不同则搜索能力置空
+    /// （无法确认新模型是否支持该家的搜索协议），属于保守防呆。
     static func currentChat() -> ChatProfile {
+        // 云端账号模式优先：Key 由服务端持有，客户端只带 token
+        if isHosted { return hostedChat }
         let id = UserDefaults.standard.string(forKey: chatProviderKey)
         var profile = chatCandidates.first { $0.id == id } ?? chatCandidates[0]
         let override = chatModelOverride()
@@ -112,7 +154,9 @@ enum ProviderCatalog {
         return profile
     }
 
+    /// 当前作图档案（云端优先；覆盖逻辑同 currentChat，但保留原 style）
     static func currentImage() -> ImageProfile {
+        if isHosted { return hostedImage }
         let id = UserDefaults.standard.string(forKey: imageProviderKey)
         var profile = imageCandidates.first { $0.id == id } ?? imageCandidates[0]
         let override = imageModelOverride()
@@ -124,44 +168,105 @@ enum ProviderCatalog {
     }
 }
 
-// MARK: - 月度预算（厂商只能按账号设预算，这里做 App 本地硬闸）
+// MARK: - 月度额度（ChatGPT 式分池限额：对话 / 生图 各自独立）
 
+/// 本地额度记账（手动 Key 模式）：ChatGPT 式分池限额——对话 / 生图各自独立，
+/// 按"元/月"限额，跨月自动清零。全部数据存 UserDefaults（估算值，非账单）。
 enum BudgetTracker {
-    private static let limitKey = "bossai.monthly_limit_cny"
-    private static let monthKeyKey = "bossai.budget_month"
-    private static let spentKey = "bossai.spent_cny"
+    // MARK: 额度设置（元/月）
+    private static let chatLimitKey = "bossai.monthly_limit_chat_cny"
+    private static let imageLimitKey = "bossai.monthly_limit_image_cny"
+    private static let legacyLimitKey = "bossai.monthly_limit_cny"
+    // MARK: 已用金额（跨月自动清零）
+    private static let chatMonthKey = "bossai.budget_month_chat"
+    private static let chatSpentKey = "bossai.spent_chat_cny"
+    private static let imageMonthKey = "bossai.budget_month_image"
+    private static let imageSpentKey = "bossai.spent_image_cny"
 
-    /// 每月预算上限（元），0 = 不限
-    static func limit() -> Double { UserDefaults.standard.double(forKey: limitKey) }
-    static func setLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: limitKey) }
+    /// 默认额度：对话 ¥100/月、生图 ¥40/月（0 = 不限）
+    static let defaultChatLimit: Double = 100
+    static let defaultImageLimit: Double = 40
+
+    /// 对话额度
+    static func chatLimit() -> Double {
+        if let v = UserDefaults.standard.object(forKey: chatLimitKey) as? Double { return max(0, v) }
+        // 兼容旧版单一预算：设置过旧键就沿用为对话额度
+        if let legacy = UserDefaults.standard.object(forKey: legacyLimitKey) as? Double {
+            let value = max(0, legacy)
+            setChatLimit(value)
+            return value
+        }
+        return defaultChatLimit
+    }
+    static func setChatLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: chatLimitKey) }
+
+    /// 生图额度
+    static func imageLimit() -> Double {
+        if let v = UserDefaults.standard.object(forKey: imageLimitKey) as? Double { return max(0, v) }
+        return defaultImageLimit
+    }
+    static func setImageLimit(_ v: Double) { UserDefaults.standard.set(max(0, v), forKey: imageLimitKey) }
 
     private static func currentMonthKey() -> String {
+        // 只到月粒度（yyyy-MM）：跨月首次读取时发现月份不符即清零（见 spent(monthKey:)）
         let f = DateFormatter(); f.dateFormat = "yyyy-MM"; return f.string(from: Date())
     }
 
     /// 已用金额（元），跨月自动清零
-    static func spent() -> Double {
-        let stored = UserDefaults.standard.string(forKey: monthKeyKey) ?? ""
+    private static func spent(monthKey: String, spentKey: String) -> Double {
+        let stored = UserDefaults.standard.string(forKey: monthKey) ?? ""
         if stored != currentMonthKey() {
-            UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
+            UserDefaults.standard.set(currentMonthKey(), forKey: monthKey)
             UserDefaults.standard.set(0.0, forKey: spentKey)
             return 0
         }
         return UserDefaults.standard.double(forKey: spentKey)
     }
-
-    static func isExceeded() -> Bool {
-        let l = limit()
-        guard l > 0 else { return false }
-        return spent() >= l
+    private static func addCost(_ cost: Double, monthKey: String, spentKey: String) {
+        UserDefaults.standard.set(spent(monthKey: monthKey, spentKey: spentKey) + max(0, cost), forKey: spentKey)
     }
 
-    /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于预算控制）
+    static func chatSpent() -> Double { spent(monthKey: chatMonthKey, spentKey: chatSpentKey) }
+    static func imageSpent() -> Double { spent(monthKey: imageMonthKey, spentKey: imageSpentKey) }
+
+    static var chatExceeded: Bool {
+        if ProviderCatalog.isHosted { return false }   // 云端由服务端按软阈值判定
+        let l = chatLimit()
+        return l > 0 && chatSpent() >= l
+    }
+    static var imageExceeded: Bool {
+        if ProviderCatalog.isHosted { return false }
+        let l = imageLimit()
+        return l > 0 && imageSpent() >= l
+    }
+
+    /// 剩余额度百分比（0-100）；额度为 0（不限）时返回 nil，UI 据此隐藏。
+    /// 云端模式下同样返回 nil —— 金额与额度属于服务端的商业信息，不下发到客户端。
+    static func chatRemainingPercent() -> Double? {
+        if ProviderCatalog.isHosted { return nil }
+        let l = chatLimit()
+        guard l > 0 else { return nil }
+        return max(0, min(100, (l - chatSpent()) / l * 100))
+    }
+    static func imageRemainingPercent() -> Double? {
+        if ProviderCatalog.isHosted { return nil }
+        let l = imageLimit()
+        guard l > 0 else { return nil }
+        return max(0, min(100, (l - imageSpent()) / l * 100))
+    }
+
+    // 兼容旧调用：全局判断与读写均映射到对话池
+    static func isExceeded() -> Bool { chatExceeded }
+    static func limit() -> Double { chatLimit() }
+    static func setLimit(_ v: Double) { setChatLimit(v) }
+    static func spent() -> Double { chatSpent() }
+
+    /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于额度控制）
     static func estimateTokens(_ text: String) -> Int {
         max(1, Int(ceil(Double(text.count) / 1.5)))
     }
 
-    /// 各家单价（元 / 百万 token，估算值，仅用于预算控制）
+    /// 各家单价（元 / 百万 token，估算值，仅用于额度控制）
     private static func prices(providerId: String) -> (in: Double, out: Double) {
         switch providerId {
         case "volc": return (0.8, 8.0)
@@ -173,34 +278,39 @@ enum BudgetTracker {
         }
     }
 
+    /// 对话类消耗计入对话池
     static func add(promptTokens: Int, completionTokens: Int, providerId: String) {
+        if ProviderCatalog.isHosted { return }   // 云端已在服务端记账，避免双重计数
         let p = prices(providerId: providerId)
         let cost = (Double(promptTokens) / 1_000_000.0) * p.in + (Double(completionTokens) / 1_000_000.0) * p.out
-        UserDefaults.standard.set(spent() + cost, forKey: spentKey)
+        addCost(cost, monthKey: chatMonthKey, spentKey: chatSpentKey)
     }
 
-    /// 生图计费：按张估算（Seedream 等生图模型按张计费，统一用估算单价 0.1 元/张）
+    /// 生图按张估算（Seedream 等按张计费，统一估算单价 0.1 元/张）计入生图池
     static func addImageGeneration(_ count: Int = 1) {
+        if ProviderCatalog.isHosted { return }
         let perImage = 0.1
-        UserDefaults.standard.set(spent() + Double(max(0, count)) * perImage, forKey: spentKey)
+        addCost(Double(max(0, count)) * perImage, monthKey: imageMonthKey, spentKey: imageSpentKey)
     }
 
-    /// 文档生成计费：按内容 token 估算（统一按 2 元/百万 token）
+    /// 文档生成计费：按内容 token 估算（统一按 2 元/百万 token），走对话模型故计入对话池
     static func addDocument(_ content: String) {
+        if ProviderCatalog.isHosted { return }
         let tokens = estimateTokens(content)
         let cost = (Double(tokens) / 1_000_000.0) * 2.0
-        UserDefaults.standard.set(spent() + max(0.01, cost), forKey: spentKey)
+        addCost(max(0.01, cost), monthKey: chatMonthKey, spentKey: chatSpentKey)
     }
 
-    /// 备份恢复用：直接写回已用金额（并锁定到当前月份）
+    /// 备份恢复用：直接写回对话池已用金额（并锁定到当前月份）
     static func restoreSpent(_ value: Double) {
-        UserDefaults.standard.set(currentMonthKey(), forKey: monthKeyKey)
-        UserDefaults.standard.set(max(0, value), forKey: spentKey)
+        UserDefaults.standard.set(currentMonthKey(), forKey: chatMonthKey)
+        UserDefaults.standard.set(max(0, value), forKey: chatSpentKey)
     }
 }
 
 // MARK: - 自动识别
 
+/// 对话服务商自动识别器：按 Key 格式预判 + 逐家探测，命中即返回对应档案
 enum ProviderDetector {
     /// 对话 Key：依次探测各厂商 /models，401=不属于这家，200=命中。
     /// 智谱 Key 形如 "id.secret"（含点号），火山方舟 Key 为 UUID 形态，先做格式预判提速。

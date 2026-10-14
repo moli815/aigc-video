@@ -1,6 +1,18 @@
 import Foundation
 import SwiftData
 
+// ============================================================================
+// 文件职责：长期记忆的抽取与注入。
+// 在 App 中的角色：对话结束/进行中调用 extract()，用轻量模型（profile.memoryModel）
+//   从近期对话里抽取"值得长期记住的事实"，与已有记忆去重合并后写入 SwiftData；
+//   注入阶段由 injectionFragment() 生成 system prompt 片段，对齐 ChatGPT 记忆体验。
+// 关键设计决策与防呆：
+//   1. 温度压到 0.1、限最多 5 条、单条 1000 字——控制成本与噪声；
+//   2. 先查预算（BudgetTracker）再调用，超预算/任务取消直接放弃（静默，不影响主对话）；
+//   3. 模型输出用"首个 [ 到末个 ]"截取再解析，容忍模型在 JSON 外带说明文字；
+//   4. update 的 index 越界时退化为 add，防止模型幻觉索引丢内容。
+// ============================================================================
+
 /// 长期记忆服务：后台用轻量模型从对话中抽取事实，去重后写入本地 SwiftData。
 /// 注入时拼进 system prompt，效果对齐 ChatGPT 记忆。
 @MainActor
@@ -14,6 +26,7 @@ final class MemoryService {
 
     /// 注入用：返回「【关于用户的已知信息】」片段
     func injectionFragment(context: ModelContext) -> String {
+        // 只取最近 100 条做对照 + 注入上限裁剪：控制 token 成本与提示词长度
         var descriptor = FetchDescriptor<MemoryItem>(
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
@@ -30,6 +43,7 @@ final class MemoryService {
     func extract(from recentDialogue: String, source: String = "", context: ModelContext) async {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { return }
 
+        // 请求任何模型前先查预算并确认任务未被取消：记忆是增强功能，超支即放弃
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
         var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         descriptor.fetchLimit = 100
@@ -72,7 +86,7 @@ final class MemoryService {
               let message = choices.first?["message"] as? [String: Any],
               let content = message["content"] as? String else { return }
 
-        // 容错提取 JSON 数组
+        // 容错提取 JSON 数组：模型可能在 JSON 前后附说明文字，取首 "[" 到末 "]" 之间的内容再解析
         guard let start = content.firstIndex(of: "["),
               let end = content.lastIndex(of: "]"),
               let ops = try? JSONSerialization.jsonObject(with: Data(content[start...end].utf8)) as? [[String: Any]]
@@ -84,6 +98,7 @@ final class MemoryService {
         }
         var known = Set(existing.map(\.content))
         for op in ops.prefix(5) {
+            // 每条裁剪到 1000 字并即时去重（known 集合边写边更新，防止本轮内重复添加）
             guard let action = op["action"] as? String,
                   let raw = op["content"] as? String else { continue }
             let text = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
@@ -97,6 +112,7 @@ final class MemoryService {
                     existing[index].content = text
                     if !source.isEmpty { existing[index].source = source }
                 } else {
+                    // 模型给出的 index 越界（幻觉）：退化为新增，不丢内容
                     context.insert(MemoryItem(content: text, source: source))
                 }
             default:

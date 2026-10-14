@@ -1,11 +1,27 @@
 import Foundation
 
+// AppConfig.swift —— 全局配置常量中心。
+// 职责：集中存放版本号、服务端点、内置 Key、Keychain 标识、工具调用与搜索限额等全局参数。
+// 在整个 App 中的角色：无状态静态命名空间（enum 防实例化），各层按需读取。
+// 关键设计决策：
+// 1) 内置 Key 用 Base64 编码存放而非明文，降低包扫描/字符串转储直接暴露的风险；
+//    真正的防线是 Keychain + 服务端持有（云端模式下 Key 不下发到客户端）。
+// 2) 隐藏设置 PIN 属于轻度防误触手段，不承担安全边界职责。
+// 3) 偏好类开关（preferProviderSearch、searchPageFetchCount）落 UserDefaults，
+//    与 Keychain 中敏感凭证严格分离。
 /// 全局常量。服务商端点与模型见 Services/ProviderProfiles.swift（按 Key 自动识别）。
 enum AppConfig {
+    // MARK: 构建版本标识（每次交付 overlay 时递增，显示在对话标题右下角）
+    static let appVersion = "v1.2.0"
+
+    // MARK: 云端账号服务（会员制）
+    /// 账号与 AI 中转服务的地址。App 只与它通信，模型 Key 全部由服务端持有。
+    static let hostedAPIBase = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api"
+
     // MARK: 内置 Key（仅本人使用，写死在包内；如泄露可在各自平台重置）
     // 以 Base64 存放，避免明文入库被扫描；运行时解码。
-    private static let bakedChatKeyB64 = "c2stMzQwZWE1ZDQ3OGVhNGE5ZjllMWNhZTg0YjQwMDllMmE="
-    private static let bakedImageKeyB64 = "YXJrLTIwYjZjYTBlLTY3NDQtNGZiNi04ZmVhLTRlYWMxM2U3ZjQ4NS0yMWU4OA=="
+    private static let bakedChatKeyB64 = ""
+    private static let bakedImageKeyB64 = ""
 
     /// 内置对话 Key（DeepSeek）
     static var bakedChatKey: String {
@@ -18,7 +34,7 @@ enum AppConfig {
 
     // MARK: 隐藏设置
     /// 隐藏设置密码
-    static let hiddenPIN = "2407234544"
+    static let hiddenPIN = "132333"
     /// 触发方式：连点侧栏标题 N 次（单次间隔需小于 0.8 秒）
     static let hiddenTriggerTaps = 5
 
@@ -31,6 +47,7 @@ enum AppConfig {
     /// 单次回答允许的工具调用轮次。
     /// 16 = 收集类任务（如「6 款旗舰机参数」）可以做到每个实体单独搜一次再汇总。
     static let maxToolIterations = 16
+    /// 注入记忆条数上限：超出后按时间与命中数截断，防止 system prompt 无限膨胀。
     static let memoryInjectLimit = 50
 
     /// 支持时优先使用模型服务端搜索；无能力或服务端拒绝时由 App 搜索接管。

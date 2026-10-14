@@ -1,6 +1,32 @@
 import Foundation
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 文件职责：多引擎联网检索服务层（中防AI 的"证据获取"入口）。
+//
+// 在整个 App 中的角色：
+//   ChatViewModel 发起 web_search 工具调用 → 本文件负责真正去搜狗/360/百度/Bing
+//   及 Tavily/博查付费 API 抓取结果 → 经相关性过滤、评分排序、去重合并后，
+//   以「给模型阅读的结构化证据块」格式回注上下文。
+//
+// 关键设计决策（P0-20 检索质量主线）：
+//   1. 融合模式（fusedSearch）：四家免费引擎并行抓取 + 轮转合并，任一源挂掉不影响整体；
+//   2. 来源过滤（rankRelevant / isNoiseTitle / isResultLink）：推荐流、备案页、站内搜索
+//      链接、纯域名标题一律剔除——它们不是用户查询的结果，混进证据会直接污染回答；
+//   3. 新鲜度降权（EvidenceRanking.score 配合 parseDateTokenPublic）：时效查询里
+//      无日期/过期日期的结果排到最后，防止模型引用旧型号参数冒充"最新"；
+//   4. 近重复合并：同域名限 2 条 + 标题字符重合率 ≥60% 视为同一篇稿子，只保留一条；
+//   5. 表格结构化提取 + 正文定位（mainBody）：参数类页面信息在 <table> 里，
+//      纯文本化会串列错位，必须按行列结构提取后才交给模型。
+//
+// 防呆/安全冗余理由：
+//   - 注入给模型前有硬性引用规则（format 函数中的【引用规则】块）：只许引用检索结果
+//     中实际出现的数值，禁止用记忆补数——这是"参数谎报"的最后一道闸；
+//   - 抓取字节数、正则缓存、解码兜底均做了上限与降级处理，防止内存与性能失控。
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// 多引擎联网检索。HTML结果受反爬、改版与地域网络影响，不能保证实时或完整。
+/// 检索引擎枚举：auto 为多源融合（推荐，免配 Key）；
+/// sogou/so360/baidu/bing 为 HTML 抓取源；tavily/bocha 为付费 API 源（需用户配置 Key）。
 enum WebSearchEngine: String, CaseIterable, Identifiable {
     case auto
     case sogou
@@ -11,6 +37,7 @@ enum WebSearchEngine: String, CaseIterable, Identifiable {
     case bocha
     var id: String { rawValue }
 
+    /// 设置页展示用中文名
     var displayName: String {
         switch self {
         case .auto: return "自动（多源融合，推荐）"
@@ -26,6 +53,7 @@ enum WebSearchEngine: String, CaseIterable, Identifiable {
     var needsKey: Bool { self == .tavily || self == .bocha }
 }
 
+/// 单条搜索结果（标题 + 链接 + 摘要 + 可选发布日期），跨并发域传递需 Sendable。
 struct SearchHit: Sendable {
     let title: String
     let url: String
@@ -34,6 +62,8 @@ struct SearchHit: Sendable {
     var publishedAt: String = ""
 }
 
+/// 联网检索服务：设置存取、搜索入口、排序去重、网页抓取、正文提取、证据格式化。
+/// 全部以 static 实现（无实例状态），引擎选择与 API Key 持久化在 UserDefaults。
 enum WebSearchService {
     private static let engineKey = "bossai.search_engine"
     private static let tavilyKeyKey = "bossai.tavily_key"
@@ -62,26 +92,61 @@ enum WebSearchService {
 
     // MARK: - 搜索入口
 
+    /// 统一搜索入口：先按时效窗口改写查询词，抓取原始结果，再经相关性过滤与评分排序。
+    /// - Parameters:
+    ///   - query: 用户/规划器给出的检索词
+    ///   - count: 期望结果数（上限 12，超出会被钳制）
+    ///   - recency: 时效窗口；非 any 时会触发新鲜度降权
+    /// - Returns: 排序去重后的结果列表（可能少于 count，全部失败时为空数组）
     static func search(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
         let bounded = min(12, max(0, count))
         guard bounded > 0 else { return [] }
         let raw = await searchUnranked(query: recency.query(query), count: bounded, recency: recency)
-        return rankRelevant(query: query, hits: raw, count: bounded)
+        return rankRelevant(query: query, hits: raw, count: bounded, recency: recency)
     }
 
     /// Search engines may return unrelated pages. Never send zero-match candidates to the model.
-    static func rankRelevant(query: String, hits: [SearchHit], count: Int) -> [SearchHit] {
+    /// - recency：时效查询会做新鲜度降权——无日期或日期超出窗口的结果排到最后。
+    /// - 近重复合并：同域名 + 标题高度相似的"同一篇稿子"只保留一条。
+    static func rankRelevant(query: String, hits: [SearchHit], count: Int, recency: SearchRecency = .any) -> [SearchHit] {
         let ranked = hits.enumerated()
             .filter { ResearchIntent.relevance(query: query, text: $0.element.title + " " + $0.element.snippet) > 0 }
             .sorted { lhs, rhs in
-                let a = EvidenceRanking.score(query: query, title: lhs.element.title, url: lhs.element.url, snippet: lhs.element.snippet, publishedAt: lhs.element.publishedAt)
-                let b = EvidenceRanking.score(query: query, title: rhs.element.title, url: rhs.element.url, snippet: rhs.element.snippet, publishedAt: rhs.element.publishedAt)
+                let a = EvidenceRanking.score(query: query, title: lhs.element.title, url: lhs.element.url, snippet: lhs.element.snippet, publishedAt: lhs.element.publishedAt, recency: recency)
+                let b = EvidenceRanking.score(query: query, title: rhs.element.title, url: rhs.element.url, snippet: rhs.element.snippet, publishedAt: rhs.element.publishedAt, recency: recency)
                 return a == b ? lhs.offset < rhs.offset : a > b
             }
         var seen = Set<String>()
-        return Array(ranked.map(\.element).filter { seen.insert(CitationRegistry.canonical($0.url)).inserted }.prefix(max(0, count)))
+        var keptTitles: [String] = []
+        var keptDomains: [String: Int] = [:]
+        var result: [SearchHit] = []
+        for hit in ranked.map(\.element) {
+            let key = CitationRegistry.canonical(hit.url)
+            guard seen.insert(key).inserted else { continue }
+            // 近重复合并：标题（去空白）与已保留条目的字符重合率 ≥ 60% 视为同一篇稿子
+            let normalized = hit.title.replacingOccurrences(of: " ", with: "")
+            guard !keptTitles.contains(where: { Self.titleOverlap($0, normalized) >= 0.6 }) else { continue }
+            // 跨域名仍限制同域名最多 2 条，防止单一站点刷屏
+            let domain = URL(string: hit.url)?.host?.lowercased() ?? ""
+            guard (keptDomains[domain] ?? 0) < 2 else { continue }
+            keptDomains[domain, default: 0] += 1
+            keptTitles.append(normalized)
+            result.append(hit)
+        }
+        return Array(result.prefix(max(0, count)))
     }
 
+    /// 标题重合率：短串的字符命中长串的比例（中英文都按字符算，忽略空白与标点）
+    static func titleOverlap(_ a: String, _ b: String) -> Double {
+        let strip: (String) -> String = { $0.filter { !$0.isWhitespace && !"，。、！？：；·「」（）()【】\u{3001}\u{3002}".contains($0) } }
+        let sa = Set(strip(a)); let sb = Set(strip(b))
+        let shorter = min(sa.count, sb.count)
+        guard shorter > 0 else { return 0 }
+        return Double(sa.intersection(sb).count) / Double(shorter)
+    }
+
+    /// 原始抓取（不排序不过滤）：按当前引擎分发——auto 优先付费 API（结果够数直接用，
+    /// 不足则补融合检索），单源模式失败时回落融合模式。
     private static func searchUnranked(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, count > 0, !Task.isCancelled else { return [] }
@@ -257,8 +322,7 @@ enum WebSearchService {
         var out: [String] = []
         var used = 0
 
-        guard let tableRegex = try? NSRegularExpression(pattern: "<table[^>]*>([\\s\\S]*?)</table>",
-                                                        options: .caseInsensitive) else { return [] }
+        guard let tableRegex = cachedRegex("<table[^>]*>([\\s\\S]*?)</table>", .caseInsensitive) else { return [] }
         let tableRange = NSRange(html.startIndex..<html.endIndex, in: html)
 
         for tableMatch in tableRegex.matches(in: html, options: [], range: tableRange) {
@@ -294,16 +358,14 @@ enum WebSearchService {
 
     /// 从 <table> 内部取每一行：<tr> → 单元格用 " | " 连接
     private static func extractRows(fromTableInner inner: String) -> [String]? {
-        guard let rowRegex = try? NSRegularExpression(pattern: "<tr[^>]*>([\\s\\S]*?)</tr>",
-                                                      options: .caseInsensitive) else { return nil }
+        guard let rowRegex = cachedRegex("<tr[^>]*>([\\s\\S]*?)</tr>", .caseInsensitive) else { return nil }
         let rowRange = NSRange(inner.startIndex..<inner.endIndex, in: inner)
         var rows: [String] = []
 
         for rowMatch in rowRegex.matches(in: inner, options: [], range: rowRange) {
             guard let r = Range(rowMatch.range(at: 1), in: inner) else { continue }
             let rowHTML = String(inner[r])
-            guard let cellRegex = try? NSRegularExpression(pattern: "<t[dh][^>]*>([\\s\\S]*?)</t[dh]>",
-                                                           options: .caseInsensitive) else { continue }
+            guard let cellRegex = cachedRegex("<t[dh][^>]*>([\\s\\S]*?)</t[dh]>", .caseInsensitive) else { continue }
             let cellRange = NSRange(rowHTML.startIndex..<rowHTML.endIndex, in: rowHTML)
             var cells: [String] = []
             for cellMatch in cellRegex.matches(in: rowHTML, options: [], range: cellRange) {
@@ -432,10 +494,15 @@ enum WebSearchService {
             let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard title.count >= 4, !isNoiseTitle(title), isResultLink(href, engine: engine),
                   seenTitles.insert(title.replacingOccurrences(of: " ", with: "")).inserted else { continue }
-            let resolved = secureSearchLink(absolutize(href, engine: engine))
+            var resolved = secureSearchLink(absolutize(href, engine: engine))
+            // Bing HTML 结果是 /ck/a 跟踪跳转；能直接解出真实地址就省掉一跳 302，
+            // 也避免部分 /ck/a 落地页要求 JS 才能继续跳转。
+            if engine == .bing { resolved = bingDirectURL(resolved) ?? resolved }
             guard let target = URL(string: resolved), ["https", "http"].contains(target.scheme?.lowercased() ?? ""), target.host != nil else { continue }
+            // HTML 摘要里的日期只是"页面上出现过的日期"（可能是评论区时间、其他新闻的日期），
+            // 不是发布时间；显式标注未核实，且 EvidenceRanking 不给它加分。
             hits.append(SearchHit(title: title, url: resolved, snippet: record.snippet,
-                                  publishedAt: findDate(in: record.snippet) ?? ""))
+                                  publishedAt: findDate(in: record.snippet).map { "页面日期 \($0)（未核实）" } ?? ""))
         }
 
         return hits
@@ -454,8 +521,34 @@ enum WebSearchService {
         return parts.url?.absoluteString ?? raw
     }
 
+    /// 解析 Bing 跟踪跳转链接里的真实地址：/ck/a?...&u=a1<base64url>。
+    /// `u` 参数去掉 "a1" 前缀后是 URL-safe Base64；解不出（无该参数/非法编码）返回 nil，调用方保留原链接。
+    static func bingDirectURL(_ href: String) -> String? {
+        guard let parts = URLComponents(string: href),
+              let host = parts.host?.lowercased(), host.hasSuffix("bing.com"),
+              parts.path.lowercased().hasPrefix("/ck/"),
+              let u = parts.queryItems?.first(where: { $0.name == "u" })?.value,
+              u.hasPrefix("a1"), u.count > 2 else { return nil }
+        var b64 = String(u.dropFirst(2))
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        if b64.count % 4 != 0 { b64 += String(repeating: "=", count: 4 - b64.count % 4) }
+        guard let data = Data(base64Encoded: b64),
+              let target = String(data: data, encoding: .utf8),
+              let url = URL(string: target),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil else { return nil }
+        return target
+    }
+
     /// 页脚 / 备案 / 版权之类的噪音标题，不是真实搜索结果
     private static func isNoiseTitle(_ title: String) -> Bool {
+        // 推荐流 / 引擎板块标题：它们不是用户查询的结果，混进证据会显著拉低准确率
+        // （实测对话里出现过「相关推荐」整段板块被当成事实来源）
+        let feedNoise = ["相关推荐", "猜你喜欢", "大家还在搜", "百度快照", "百度为您找到",
+                         "相关搜索", "热门搜索", "展开全文", "查看更多", "点击进入",
+                         "下载客户端", "打开App", "极速版"]
+        for n in feedNoise where title.localizedCaseInsensitiveContains(n) { return true }
         let noise = ["ICP", "备案", "Copyright", "©", "All rights reserved",
                      "营业执照", "增值电信", "网络文化经营许可证", "违法和不良信息举报"]
         for n in noise where title.localizedCaseInsensitiveContains(n) { return true }
@@ -535,6 +628,34 @@ enum WebSearchService {
         return nil
     }
 
+    /// 把 findDate 解析出的日期串转成可比较的 Date（失败返回 nil → 视为无日期，排到最后）
+    private static func parseDateToken(_ raw: String) -> Date? {
+        guard !raw.isEmpty else { return nil }
+        let cal = Calendar(identifier: .gregorian)
+        let now = Date()
+        if raw.contains("今天") { return now }
+        if raw.contains("昨天") { return cal.date(byAdding: .day, value: -1, to: now) }
+        if let m = firstWholeMatch(raw, pattern: #"(\d+)小时前"#),
+           let h = Int(m.replacingOccurrences(of: "小时前", with: "")) {
+            return cal.date(byAdding: .hour, value: -h, to: now)
+        }
+        if let m = firstWholeMatch(raw, pattern: #"(\d+)天前"#),
+           let d = Int(m.replacingOccurrences(of: "天前", with: "")) {
+            return cal.date(byAdding: .day, value: -d, to: now)
+        }
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "zh_CN")
+        df.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        for fmt in ["yyyy年M月d日", "yyyy-MM-dd", "yyyy-M-d"] {
+            df.dateFormat = fmt
+            if let d = df.date(from: raw) { return d }
+        }
+        return nil
+    }
+
+    /// EvidenceRanking 新鲜度降权需要解析日期；这里暴露一个只读入口。
+    static func parseDateTokenPublic(_ raw: String) -> Date? { parseDateToken(raw) }
+
     private static func percentEncode(_ s: String) -> String? {
         s.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
     }
@@ -596,6 +717,8 @@ enum WebSearchService {
 
     // MARK: - 网络与解析工具
 
+    /// 底层 GET：伪装桌面 Safari UA（部分站点对非浏览器 UA 直接拒答）、
+    /// 强制绕过本地缓存、流式读取并以 2MB 硬上限防大页撑爆内存；失败返回 nil。
     private static func rawGet(_ url: URL, timeout: TimeInterval) async -> Data? {
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -609,11 +732,17 @@ enum WebSearchService {
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   response.expectedContentLength <= 2_097_152 else { return nil }
             var data = Data(); data.reserveCapacity(32768)
+            var pending = [UInt8](); pending.reserveCapacity(16384)
             for try await byte in bytes {
                 try Task.checkCancellation()
-                guard data.count < 2_097_152 else { return nil }
-                data.append(byte)
+                guard data.count + pending.count < 2_097_152 else { return nil }
+                pending.append(byte)
+                if pending.count >= 16384 {
+                    data.append(contentsOf: pending)
+                    pending.removeAll(keepingCapacity: true)
+                }
             }
+            data.append(contentsOf: pending)
             return data
         } catch { return nil }
     }
@@ -657,10 +786,22 @@ enum WebSearchService {
         return out.isEmpty ? nil : out
     }
 
+    /// NSRegularExpression 编译开销可观，而 findDate / lineScore / isNoiseTitle 等热路径
+    /// 每页正文要执行成百上千次匹配；这里按 pattern+options 缓存编译结果。
+    /// NSRegularExpression 本身线程安全，可被并发匹配共享。
+    private static let regexLock = NSLock()
+    private static var regexCache: [String: NSRegularExpression] = [:]
+    private static func cachedRegex(_ pattern: String, _ options: NSRegularExpression.Options = [.caseInsensitive, .dotMatchesLineSeparators]) -> NSRegularExpression? {
+        let key = pattern + "\u{1}" + String(options.rawValue)
+        regexLock.lock(); defer { regexLock.unlock() }
+        if let cached = regexCache[key] { return cached }
+        let compiled = try? NSRegularExpression(pattern: pattern, options: options)
+        if let compiled { regexCache[key] = compiled }
+        return compiled
+    }
+
     private static func firstMatch(_ text: String, pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.caseInsensitive, .dotMatchesLineSeparators])
-        else { return nil }
+        guard let regex = cachedRegex(pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, options: [], range: range),
               match.numberOfRanges > 1,
@@ -674,9 +815,7 @@ enum WebSearchService {
     /// 导致「日期提取」「纯域名判断」这类没有括号捕获组的正则被它调用了就**永远返回 nil**，
     /// 日期识别和纯域名过滤其实一直没生效过。判断"是否存在"的场景一律用本函数。
     private static func firstWholeMatch(_ text: String, pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern,
-                                                   options: [.caseInsensitive, .dotMatchesLineSeparators])
-        else { return nil }
+        guard let regex = cachedRegex(pattern) else { return nil }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let match = regex.firstMatch(in: text, options: [], range: range),
               let whole = Range(match.range, in: text) else { return nil }
@@ -763,7 +902,11 @@ enum WebSearchService {
         return text
     }
 
-    /// 把搜索结果格式化成给模型阅读的文本
+    /// 把搜索结果格式化成给模型阅读的文本。
+    ///
+    /// 这是"防谎报"的核心注入点：时效说明、外部证据边界（网页内容不是指令，
+    /// 防提示注入）、引用规则（只能引用检索结果里实际出现的数值，缺数必须写
+    /// 「未核实」）、输出结构约束全部在此注入；结果按发布日期倒序、最多注入 8 条。
     static func format(hits: [SearchHit], pages: [(title: String, url: String, text: String)], sourceIDs: [Int] = []) -> String {
         var out = ""
         let formatter = DateFormatter()
@@ -779,8 +922,30 @@ enum WebSearchService {
         在该句后标注来源编号，如「售价 4999 元（来源 3）」，让读者能追溯到对应条目 —— 不要只在文末笼统堆一堆链接。
 
         """
-        out += "【搜索结果】（共 \(hits.count) 条；摘要及发布日期需核实）\n"
-        for (index, hit) in hits.enumerated() {
+        out += "【输出结构】回答用 Markdown 组织：小节标题用 ###；多对象对比用表格，末列写来源编号；每句具体结论句尾标（来源 N）；不要复述本证据块原文，也不要罗列检索过程。未能核实的字段集中在结尾「未核实项」小节，逐项写明原因（官方未公布/检索源无覆盖/日期存疑）。\n"
+        // P0-12 时效强化：①有日期的结果按日期倒序置顶（让模型先看到新鲜页面）
+        // ②注入给模型的结果最多 10 条（此前一次 29 条混杂新旧，模型容易引用旧型号参数）
+        // ③明确禁止"回退到上一代型号参数充当最新"——这是用户反复反馈的失败模式。
+        let hasAnyDate = hits.contains { !$0.publishedAt.isEmpty }
+        let ordered: [SearchHit]
+        if hasAnyDate {
+            ordered = hits.enumerated().sorted { lhs, rhs in
+                let ld = Self.parseDateToken(lhs.element.publishedAt)
+                let rd = Self.parseDateToken(rhs.element.publishedAt)
+                if ld == nil && rd == nil { return lhs.offset < rhs.offset }
+                if ld == nil { return false }
+                if rd == nil { return true }
+                return ld! > rd!
+            }.map(\.element)
+        } else {
+            ordered = hits
+        }
+        // P0 检索质量：注入给模型的候选结果上限 10→8。实测 25+ 条来源混杂新旧与近重复，
+        // 模型反而引用错误条目；8 条以内配合来源过滤，准确率与可追溯性最佳。
+        let concise = Array(ordered.prefix(8))
+        out += "【时效铁律】今天日期：\(formatter.string(from: Date()))。优先采信近 30 天内的页面；若某对象没有近期证据，必须写「未检索到该对象的近期证据」，**严禁用上一代型号的参数、去年发布页或自媒体旧文来充当「最新」**。\n"
+        out += "【搜索结果】（本轮共 \(hits.count) 条，按发布日期倒序取前 \(concise.count) 条注入；摘要及发布日期需核实）\n"
+        for (index, hit) in concise.enumerated() {
             let id = sourceIDs.indices.contains(index) ? sourceIDs[index] : index + 1
             out += "\(id). \(hit.title)\n"
             out += "   日期：\(hit.publishedAt.isEmpty ? "发布时间未核实" : hit.publishedAt)\n"
@@ -797,6 +962,7 @@ enum WebSearchService {
     }
 }
 
+/// 判断字符是否为 CJK 汉字（摘要识别用：摘要必须含中文才算真实内容）
 private extension Character {
     var isCJK: Bool {
         guard let scalar = unicodeScalars.first else { return false }

@@ -4,8 +4,8 @@ name: Build Unsigned IPA
 #  每次要出新包时，只需改下面这两行（把新 overlay 的地址与校验值贴进来）
 # ─────────────────────────────────────────────────────────────
 env:
-  OVERLAY_URL: "https://litter.catbox.moe/amn40b.tgz"
-  OVERLAY_MD5: "96532ab09b6153e19a6703623a745c4f"
+  OVERLAY_URL: "https://litter.catbox.moe/ypg9dt.tgz"
+  OVERLAY_MD5: "e1b120473e454c00534ff43e62e46ad6"
 
 on:
   push:
@@ -21,7 +21,32 @@ permissions:
   contents: write
 
 jobs:
+  # 先跑 SPM 单测（检索质量回归 + ExpertCore 回归），不过则不出包
+  test:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 与出包 job 保持一致：测试必须跑在"套用 overlay 之后"的最新代码上
+      - name: Apply work overlay (shipped out-of-band)
+        run: |
+          curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
+          ACTUAL=$(md5 -q /tmp/overlay.tgz)
+          echo "overlay md5: $ACTUAL"
+          [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
+          tar -xzf /tmp/overlay.tgz -C .
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Run Swift package tests
+        run: swift test
+
   build:
+    needs: test
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -31,9 +56,7 @@ jobs:
       # 校验 MD5，防止镜像内容被篡改或下载不完整。
       - name: Apply work overlay (shipped out-of-band)
         run: |
-          # 镜像站偶发 504/超时：自动重试 6 次，间隔 10 秒（--retry-all-errors 覆盖 5xx）
-          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors \
-            "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
+          curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
           ACTUAL=$(md5 -q /tmp/overlay.tgz)
           echo "overlay md5: $ACTUAL"
           [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
@@ -74,29 +97,19 @@ jobs:
           path: BossAI-unsigned.ipa
           retention-days: 30
 
-      # 免登录取包：IPA 传临时镜像（best-effort：镜像站限流不应让构建变红，IPA 同时有 artifact 兜底）
+      # 免登录取包：IPA 传临时镜像，并把直链提交回仓库（[skip ci] 防止循环构建）
       - name: Upload IPA to file mirror
         id: mirror
-        continue-on-error: true
         run: |
-          for i in 1 2 3; do
-            URL=$(curl -fsS --max-time 300 \
-              -F "reqtype=fileupload" -F "time=72h" \
-              -F "fileToUpload=@BossAI-unsigned.ipa" \
-              https://litterbox.catbox.moe/resources/internals/api.php || true)
-            if [ -n "$URL" ]; then
-              echo "IPA mirror: $URL"
-              echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
-              exit 0
-            fi
-            echo "镜像第 $i 次失败，10s 后重试"; sleep 10
-          done
-          echo "镜像站不可用（不影响出包，请从 Artifact 下载）"; exit 0
+          URL=$(curl -fsS --max-time 300 \
+            -F "reqtype=fileupload" -F "time=72h" \
+            -F "fileToUpload=@BossAI-unsigned.ipa" \
+            https://litterbox.catbox.moe/resources/internals/api.php)
+          echo "IPA mirror: $URL"
+          echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
 
       - name: Publish mirror URL to repo
-        continue-on-error: true
         run: |
-          [ -f mirror-url.txt ] || { echo "无镜像直链，跳过"; exit 0; }
           git config user.name "ci-bot"
           git config user.email "actions@users.noreply.github.com"
           git add mirror-url.txt

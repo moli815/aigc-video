@@ -43,7 +43,7 @@ final class AppPerformanceTests: XCTestCase {
         XCTAssertTrue(completed)
     }
     func testSkillsResourceIsInAppBundle() throws {
-        XCTAssertEqual(try ExpertCapabilityCatalog.configuration.get().count, 11)
+        XCTAssertEqual(try ExpertCapabilityCatalog.configuration.get().count, 15)
     }
     func testNativePermissionAndFileStructureGate() throws {
         let p = try ExpertCapabilityCatalog.profile("legal")

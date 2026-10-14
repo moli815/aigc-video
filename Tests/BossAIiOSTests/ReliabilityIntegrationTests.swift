@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import SwiftUI
 @testable import BossAI
 
 final class ReliabilityIntegrationTests: XCTestCase {
@@ -65,9 +66,17 @@ final class ReliabilityIntegrationTests: XCTestCase {
         XCTAssertEqual(found.first?.id, file.id)
         XCTAssertTrue(found.first?.excerpt.contains("附发票") == true)
     }
-    func testSixThemesHaveSixDifferentLayouts() {
+    /// 主题只更换颜色：几何与字体在全主题下必须一致，强调色两两不同。
+    /// （旧断言「六主题六种布局」的前提已被产品决策取代。）
+    func testThemesShareOneLayoutAndOnlyChangeColor() {
         let layouts = Set(AppTheme.allCases.map { "\($0.cardRadius)/\($0.messageWidth)/\($0.cardPadding)" })
-        XCTAssertEqual(layouts.count, 6)
+        XCTAssertEqual(layouts.count, 1, "主题不应改变布局节奏")
+
+        let designs = Set(AppTheme.allCases.map { "\($0.fontDesign)/\($0.headingDesign)" })
+        XCTAssertEqual(designs.count, 1, "主题不应改变字体")
+
+        let accents = Set(AppTheme.allCases.map { "\($0.accent)" })
+        XCTAssertEqual(accents.count, AppTheme.allCases.count, "各主题强调色必须互不相同")
     }
     func testExcelExportsNumericCellsAndSafeSheetName() throws {
         let bytes = DocumentBuilder.xlsx(title: "A/B:*[]", markdown: "| 值 | 编号 |\n| --- | --- |\n| 10.5 | 001 |")

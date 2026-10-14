@@ -1,5 +1,19 @@
 import Foundation
 
+// ExpertCapabilities.swift —— 专家技能契约层（配置驱动的专家系统）。
+// 职责：定义专家能力档案（ExpertCapability）、从 ExpertSkills.json 加载并校验目录、
+//       提供技能运行时（plan / calculate / validate 三个操作）。
+// 在整个 App 中的角色：专家模式的"宪法"——模型能做什么、不能做什么都由此裁决。
+// 关键设计决策与防呆冗余：
+// 1) 配置驱动而非硬编码：专家定义在 JSON 资源里，改专家不改代码；加载一次性完成，
+//    结果固化在常量 Result 中，后续读取零开销且天然线程安全。
+// 2) 加载期强校验：ID 非空且唯一、计算器必须真实存在、文件格式必须属于白名单，
+//    坏配置直接失败（fail-fast），不让半残专家流入运行时。
+// 3) 工具许可白名单（permits）：专家只能使用档案允许的工具，默认拒绝未知工具。
+// 4) validate 只做结构校验（Markdown 标题 + 字数下限），并在警告中明确
+//    "不证明事实与法律效力正确"——能力边界必须写进输出。
+
+/// 知识卡：给模型注入的领域要点（标题 + 规则列表）。
 struct ExpertKnowledgeCard: Codable, Hashable {
     let title: String
     let rules: [String]
@@ -19,6 +33,7 @@ struct ExpertCapability: Codable, Hashable {
     let knowledge: [ExpertKnowledgeCard]
     let boundaries: [String]
 
+    /// 把契约渲染成注入 system prompt 的指令文本（约束输入缺失、来源标注、边界声明）。
     var instruction: String {
         """
         【可执行技能契约 v1：\(name)】
@@ -35,6 +50,7 @@ struct ExpertCapability: Codable, Hashable {
     }
 }
 
+/// 技能层错误分类：配置错误 / 输入错误 / 权限拒绝，供工具调用结果回传模型。
 enum ExpertSkillError: LocalizedError {
     case configuration(String), invalidInput(String), denied(String)
     var errorDescription: String? {
@@ -46,6 +62,7 @@ enum ExpertSkillError: LocalizedError {
     }
 }
 
+/// 专家目录：从 ExpertSkills.json 一次性加载、校验并索引。
 enum ExpertCapabilityCatalog {
     private struct Configuration: Decodable { let version: Int; let profiles: [ExpertCapability] }
     static let configuration: Result<[String: ExpertCapability], Error> = Result {
@@ -60,6 +77,7 @@ enum ExpertCapabilityCatalog {
         return try decode(Data(contentsOf: url))
     }
 
+    /// 解码并校验配置：版本号必须为 1；ID 唯一；计算器与文件格式都必须是已知集合的子集。
     static func decode(_ data: Data) throws -> [String: ExpertCapability] {
         let config = try JSONDecoder().decode(Configuration.self, from: data)
         guard config.version == 1 else { throw ExpertSkillError.configuration("不支持的版本") }
@@ -85,16 +103,19 @@ enum ExpertCapabilityCatalog {
     }
 }
 
+/// 文档结构校验结果：是否通过、缺失章节与警告。
 struct SkillValidation: Codable {
     let structurePassed: Bool
     let missingSections: [String]
     let warnings: [String]
 }
 
+/// 技能运行时：工具许可裁决与 expert_skill 工具的实际执行。
 enum ExpertSkillRuntime {
+    /// 工具许可白名单：基础技能人人可用；搜索/作图/出文档看专家档案开关，默认拒绝。
     static func permits(_ name: String, profile: ExpertCapability) -> Bool {
         switch name {
-        case "expert_skill", "search_library": return true
+        case "expert_skill", "search_library", "render_chart": return true
         case "web_search", "$web_search": return profile.allowSearch
         case "generate_image": return profile.allowImages
         case "create_document": return !profile.documentFormats.isEmpty
@@ -102,6 +123,8 @@ enum ExpertSkillRuntime {
         }
     }
 
+    /// 校验交付文档结构：格式必须在专家档案允许范围内；只看 Markdown 标题行，
+    /// 不做正文关键词匹配（结构检查，不判断内容对错）；正文至少 40 字符。
     static func validateDocument(_ content: String, format: String, profile: ExpertCapability) throws -> SkillValidation {
         guard profile.documentFormats.contains(format) else { throw ExpertSkillError.denied("文件格式 \(format)") }
         // Inspect headings, not arbitrary matching words in body text. Structural check only.
@@ -117,6 +140,8 @@ enum ExpertSkillRuntime {
                                warnings: ["仅验证交付结构，事实与引用需核实"] + (sufficient ? [] : ["正文不足40字符"]))
     }
 
+    /// expert_skill 工具入口：plan 返回契约 JSON，calculate 受档案白名单约束，
+    /// validate 做结构检查；未知 operation 明确报错。
     static func execute(arguments: String, expertID: String) throws -> String {
         struct Arguments: Decodable {
             let operation: String

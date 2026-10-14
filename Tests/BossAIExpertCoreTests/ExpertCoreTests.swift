@@ -2,8 +2,8 @@ import XCTest
 @testable import BossAIExpertCore
 
 final class ExpertCoreTests: XCTestCase {
-    func testAllElevenExpertsAreConfigured() throws {
-        let expected: Set<String> = ["general", "decision", "strategy", "marketing", "traffic", "model", "funding", "equity", "performance", "speech", "legal"]
+    func testAllFifteenExpertsAreConfigured() throws {
+        let expected: Set<String> = ["general", "decision", "strategy", "marketing", "traffic", "model", "funding", "equity", "performance", "speech", "legal", "boss_ip", "fire_safety", "security", "insurance"]
         XCTAssertEqual(Set(try ExpertCapabilityCatalog.configuration.get().keys), expected)
     }
     func testWeightedMatrix() throws {
@@ -70,6 +70,49 @@ final class ExpertCoreTests: XCTestCase {
     }
     func testBooleanCannotBeNumeric() {
         XCTAssertThrowsError(try BusinessCalculators.calculate(name: "commission", json: #"{"base_pay":true,"eligible_revenue":1000,"commission_rate":0.1}"#))
+    }
+    func testContentROI() throws {
+        let r = try BusinessCalculators.calculate(name: "content_roi", json: #"{"content_cost":5000,"views":100000,"lead_rate":0.02,"close_rate":0.1,"order_value":800}"#)
+        XCTAssertEqual(r.values["expected_leads"], 2000)
+        XCTAssertEqual(r.values["expected_orders"], 200)
+        XCTAssertEqual(r.values["expected_revenue"], 160000)
+        XCTAssertEqual(r.values["roi"], 31.0, accuracy: 0.000001)
+        XCTAssertEqual(r.values["cost_per_lead"], 2.5, accuracy: 0.000001)
+    }
+    func testRiskExposure() throws {
+        let r = try BusinessCalculators.calculate(name: "risk_exposure", json: #"{"probability":0.05,"loss_amount":2000000,"mitigation_cost":60000,"mitigation_effect":0.8}"#)
+        XCTAssertEqual(r.values["expected_loss"], 100000)
+        XCTAssertEqual(r.values["residual_expected_loss"], 20000, accuracy: 0.000001)
+        XCTAssertEqual(r.values["mitigation_net_benefit"], 20000, accuracy: 0.000001)
+    }
+    func testRiskExposurePairedMitigationRequired() {
+        XCTAssertThrowsError(try BusinessCalculators.calculate(name: "risk_exposure", json: #"{"probability":0.5,"loss_amount":1000,"mitigation_effect":0.5}"#))
+    }
+    func testCoverageNeed() throws {
+        let r = try BusinessCalculators.calculate(name: "coverage_need", json: #"{"annual_income":300000,"replacement_years":10,"total_debt":500000,"liquid_assets":200000,"premium_rate":0.003}"#)
+        XCTAssertEqual(r.values["coverage_need"], 3800000)
+        XCTAssertEqual(r.values["premium_estimate"], 11400, accuracy: 0.000001)
+    }
+    func testCoverageNeedNeverNegative() throws {
+        let r = try BusinessCalculators.calculate(name: "coverage_need", json: #"{"annual_income":100000,"replacement_years":5,"total_debt":0,"liquid_assets":900000}"#)
+        XCTAssertEqual(r.values["coverage_need"], 0)
+    }
+    func testLossPreventionROI() throws {
+        let r = try BusinessCalculators.calculate(name: "loss_prevention_roi", json: #"{"annual_loss":400000,"prevention_investment":300000,"reduction_rate":0.6,"annual_maintenance":30000}"#)
+        XCTAssertEqual(r.values["annual_saved"], 240000, accuracy: 0.000001)
+        XCTAssertEqual(r.values["net_annual_benefit"], 210000, accuracy: 0.000001)
+        XCTAssertEqual(try XCTUnwrap(r.values["payback_months"]), 300000.0 * 12.0 / 210000.0, accuracy: 0.000001)
+    }
+    func testLossPreventionNoPaybackWhenNetNegative() throws {
+        let r = try BusinessCalculators.calculate(name: "loss_prevention_roi", json: #"{"annual_loss":100000,"prevention_investment":500000,"reduction_rate":0.1,"annual_maintenance":50000}"#)
+        XCTAssertNil(r.values["payback_months"])
+        XCTAssertEqual(r.values["net_annual_benefit"], -40000, accuracy: 0.000001)
+    }
+    func testProtectionBudget() throws {
+        let r = try BusinessCalculators.calculate(name: "protection_budget", json: #"{"area_m2":2000,"unit_cost_per_m2":120,"annual_maintenance":15000}"#)
+        XCTAssertEqual(r.values["initial_investment"], 240000, accuracy: 0.000001)
+        XCTAssertEqual(r.values["first_year_total"], 255000, accuracy: 0.000001)
+        XCTAssertEqual(r.values["first_year_cost_per_m2"], 127.5, accuracy: 0.000001)
     }
     func testOversizedAndOverflowInputsRejected() {
         XCTAssertThrowsError(try BusinessCalculators.calculate(name: "commission", json: String(repeating: " ", count: 65537)))

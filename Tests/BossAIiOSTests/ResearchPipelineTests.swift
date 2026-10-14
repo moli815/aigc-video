@@ -238,13 +238,34 @@ final class ResearchPipelineTests: XCTestCase {
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.contains("SwiftSoup 2.13.9")); XCTAssertTrue(text.contains("The MIT License"))
     }
-    func testWhiteExpertBannerLabelsHaveReadableContrastInEveryTheme() {
-        for theme in AppTheme.allCases {
-            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-            XCTAssertTrue(UIColor(theme.accent).getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+    /// 专家横幅已改为深墨玻璃底（bannerFill），白字必须保持 4.5:1 以上。
+    /// 同时校验新配色体系的三条契约：accent 在深空底可读、accentDeep/bannerFill 能承载白字。
+    func testExpertBannerLabelsHaveReadableContrastInEveryTheme() {
+        let dark = UITraitCollection(userInterfaceStyle: .dark)
+        let canvas = UIColor(AppTheme.blue.canvas).resolvedColor(with: dark)
+
+        func components(_ color: UIColor) -> (CGFloat, CGFloat, CGFloat) {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            XCTAssertTrue(color.getRed(&r, green: &g, blue: &b, alpha: &a), "颜色必须是 RGB 可解析的")
+            return (r, g, b)
+        }
+        func luminance(_ color: UIColor) -> Double {
+            let (r, g, b) = components(color)
             func linear(_ value: CGFloat) -> Double { let x = Double(value); return x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4) }
-            let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
-            XCTAssertGreaterThanOrEqual(1.05 / (luminance + 0.05), 4.5, theme.rawValue)
+            return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        func ratio(_ a: UIColor, _ b: UIColor) -> Double {
+            let la = luminance(a), lb = luminance(b)
+            return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+        }
+
+        for theme in AppTheme.allCases {
+            // ① 横幅白字
+            XCTAssertGreaterThanOrEqual(ratio(.white, UIColor(theme.bannerFill)), 4.5, "横幅白字对比度不足：\(theme.rawValue)")
+            // ② 亮色 accent 作图标/强调文字时，在深空底上必须看得清
+            XCTAssertGreaterThanOrEqual(ratio(UIColor(theme.accent), canvas), 4.5, "强调色在深空底上不可读：\(theme.rawValue)")
+            // ③ 实底按钮承载白字
+            XCTAssertGreaterThanOrEqual(ratio(.white, UIColor(theme.accentDeep)), 4.5, "白字压在 accentDeep 上不达标：\(theme.rawValue)")
         }
     }
 }
