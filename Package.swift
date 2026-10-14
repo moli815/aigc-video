@@ -8,9 +8,14 @@ let package = Package(
     name: "BossAIExpertCore",
     platforms: [.macOS(.v12), .iOS(.v17)],
     products: [.library(name: "BossAIExpertCore", targets: ["BossAIExpertCore"])],
+    dependencies: [
+        // WebEvidenceExtractor 的 HTML/DOM 解析依赖（纯 Swift，跨平台）；与 project.yml 锁同版本
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", exactVersion: "2.13.9")
+    ],
     targets: [
         .target(
             name: "BossAIExpertCore",
+            dependencies: [.product(name: "SwiftSoup", package: "SwiftSoup")],
             path: "BossAI",
             sources: [
                 "ExpertCore/BusinessCalculators.swift",
@@ -20,6 +25,7 @@ let package = Package(
                 "ExpertCore/SpreadsheetXMLCore.swift",
                 "Services/WebSearchService.swift",
                 "Services/BoundedHTTPClient.swift",
+                "Services/WebEvidenceExtractor.swift",
             ],
             resources: [.process("ExpertCore/Resources")]
         ),
