@@ -10,7 +10,7 @@ let package = Package(
     products: [.library(name: "BossAIExpertCore", targets: ["BossAIExpertCore"])],
     dependencies: [
         // WebEvidenceExtractor 的 HTML/DOM 解析依赖（纯 Swift，跨平台）；与 project.yml 锁同版本
-        .package(url: "https://github.com/scinfu/SwiftSoup.git", exactVersion: "2.13.9")
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", exact: "2.13.9")
     ],
     targets: [
         .target(
