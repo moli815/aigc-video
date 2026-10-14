@@ -60,12 +60,13 @@ final class SearchQualityTests: XCTestCase {
 
     func testRankRelevantDropsNoiseTitles() {
         // 推荐流/站点导航类标题与查询无相关 → 应被 ResearchIntent.relevance>0 过滤
+        // 注意：噪音条目必须用空 snippet——真实场景里推荐流不会携带查询相关摘要
         let result = WebSearchService.rankRelevant(
             query: "iPhone 17 价格",
             hits: [
                 hit("iPhone 17 官方价格公布", url: "https://www.apple.com/newsroom/price"),
-                hit("相关推荐", url: "https://feed.example.com/rec"),
-                hit("百度为您找到相关结果", url: "https://www.baidu.com/s?wd=1"),
+                hit("相关推荐", url: "https://feed.example.com/rec", snippet: ""),
+                hit("百度为您找到相关结果", url: "https://www.baidu.com/s?wd=1", snippet: ""),
             ],
             count: 8)
         XCTAssertFalse(result.contains { $0.title == "相关推荐" })
@@ -95,12 +96,24 @@ final class SearchQualityTests: XCTestCase {
     }
 
     func testRankRelevantRespectsCount() {
-        var hits: [SearchHit] = []
-        for i in 1...10 {
-            hits.append(hit("iPhone 17 价格资讯第\(i)批独家完整报告", url: "https://site\(i).com/p"))
+        // 10 条主题差异明显的结果（每条 ≥6 个独有字符，重合率<0.6 不触发近重复合并）
+        let titles = [
+            "iPhone 17 相机夜拍表现详解",
+            "iPhone 17 续航实测数据汇总",
+            "iPhone 17 屏幕素质专业分析",
+            "iPhone 17 充电速度全程对比",
+            "iPhone 17 信号强度场景评测",
+            "iPhone 17 外观设计手感点评",
+            "iPhone 17 存储容量选购建议",
+            "iPhone 17 机身材质工艺解析",
+            "iPhone 17 散热架构深度拆解",
+            "iPhone 17 语音助手功能实测",
+        ]
+        let hits = titles.enumerated().map { (i, t) in
+            SearchHit(title: t, url: "https://site\(i).com/p", snippet: "iPhone 17 价格 专题\(i)号内容")
         }
         let result = WebSearchService.rankRelevant(query: "iPhone 17 价格", hits: hits, count: 3)
-        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result.count, 3, "count 钳制应生效：12 上限内返回恰好 3 条")
     }
 
     func testRankRelevantDeduplicatesCanonicalURL() {
