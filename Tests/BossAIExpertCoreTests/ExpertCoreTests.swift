@@ -90,8 +90,9 @@ final class ExpertCoreTests: XCTestCase {
     }
     func testCoverageNeed() throws {
         let r = try BusinessCalculators.calculate(name: "coverage_need", json: #"{"annual_income":300000,"replacement_years":10,"total_debt":500000,"liquid_assets":200000,"premium_rate":0.003}"#)
-        XCTAssertEqual(try XCTUnwrap(r.values["coverage_need"]), 3800000)
-        XCTAssertEqual(try XCTUnwrap(r.values["premium_estimate"]), 11400, accuracy: 0.000001)
+        // 公式：保额=年收入×年限+负债-可变现资产 = 300000×10+500000-200000 = 3,300,000
+        XCTAssertEqual(try XCTUnwrap(r.values["coverage_need"]), 3300000)
+        XCTAssertEqual(try XCTUnwrap(r.values["premium_estimate"]), 9900, accuracy: 0.000001)
     }
     func testCoverageNeedNeverNegative() throws {
         let r = try BusinessCalculators.calculate(name: "coverage_need", json: #"{"annual_income":100000,"replacement_years":5,"total_debt":0,"liquid_assets":900000}"#)
