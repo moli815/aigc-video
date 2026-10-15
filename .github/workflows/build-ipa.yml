@@ -75,6 +75,8 @@ jobs:
 
       - name: Run iOS unit tests (BossAITests)
         run: |
+          # pipefail：管道中 xcodebuild 的失败必须向上传播（此前用 | tail 吞掉了退出码）
+          set -o pipefail
           xcodebuild test -project BossAI.xcodeproj \
             -scheme BossAI \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
@@ -82,8 +84,7 @@ jobs:
             -only-testing:BossAITests \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            -resultBundlePath TestResults.xcresult \
-            | tail -80
+            -resultBundlePath TestResults.xcresult 2>&1 | tee /tmp/ios-tests.log | tail -120
 
       - name: Upload test results on failure
         if: failure()
