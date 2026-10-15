@@ -79,9 +79,34 @@ enum RemoteCatalogService {
     // MARK: - DTO → Expert 映射（防呆：未知工具忽略、未知交付物回退 word、缺字段用内置同 id 专家兜底）
 
     private static func apply(payload: Payload) -> Bool {
-        let fallback = Dictionary(uniqueKeysWithValues: ExpertCatalog.bundledAll.map { ($0.id, $0) })
+        let mapped = mapExperts(payload.experts, bundled: ExpertCatalog.bundledAll)
+        guard !mapped.isEmpty else { return false }
+
+        var starters: [String: [ExpertCatalog.Starter]]? = nil
+        if let sd = payload.starters {
+            var out: [String: [ExpertCatalog.Starter]] = [:]
+            for (key, arr) in sd {
+                out[key] = arr.map { ExpertCatalog.Starter(label: $0.label, content: $0.content) }
+            }
+            starters = out
+        }
+        let ui = payload.ui.flatMap { u -> ExpertCatalog.UISection? in
+            let title = (u.expertsSectionTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let icon = (u.expertsSectionIcon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+            return ExpertCatalog.UISection(title: title, icon: icon.isEmpty ? "crown.fill" : icon)
+        }
+        ExpertCatalog.applyRemote(experts: mapped, starters: starters, ui: ui)
+        return true
+    }
+
+    /// P0-43 DTO → Expert 映射（纯函数，供 XCTest 直接验证）。
+    /// 防呆规则：id/name 为空 → 丢弃该条；工具字符串未知 → 忽略；交付物未知 → 回退 word；
+    /// 任何缺省字段都从**内置同 id 专家**兜底——服务端配置出问题最多让个别专家降级，绝不让 App 崩溃。
+    static func mapExperts(_ dtos: [ExpertDTO], bundled: [Expert]) -> [Expert] {
+        let fallback = Dictionary(uniqueKeysWithValues: bundled.map { ($0.id, $0) })
         var mapped: [Expert] = []
-        for dto in payload.experts {
+        for dto in dtos {
             let base = fallback[dto.id]
             let id = dto.id
             guard !id.isEmpty, !dto.name.isEmpty else { continue }
@@ -105,24 +130,7 @@ enum RemoteCatalogService {
                 emoji: dto.emoji ?? base?.emoji
             ))
         }
-        guard !mapped.isEmpty else { return false }
-
-        var starters: [String: [ExpertCatalog.Starter]]? = nil
-        if let sd = payload.starters {
-            var out: [String: [ExpertCatalog.Starter]] = [:]
-            for (key, arr) in sd {
-                out[key] = arr.map { ExpertCatalog.Starter(label: $0.label, content: $0.content) }
-            }
-            starters = out
-        }
-        let ui = payload.ui.flatMap { u -> ExpertCatalog.UISection? in
-            let title = (u.expertsSectionTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let icon = (u.expertsSectionIcon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return nil }
-            return ExpertCatalog.UISection(title: title, icon: icon.isEmpty ? "crown.fill" : icon)
-        }
-        ExpertCatalog.applyRemote(experts: mapped, starters: starters, ui: ui)
-        return true
+        return mapped
     }
 
     // MARK: - 缓存（Documents/remote_catalog.json）

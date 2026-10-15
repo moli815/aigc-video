@@ -44,6 +44,9 @@ final class ChatViewModel: ObservableObject {
     @Published var inputText = ""
     @Published var researchMode: ResearchMode = .automatic
     @Published var answerStyle: AnswerStyle = .concise
+    /// P0-38 配置面板档位（standard / high / ultra）。按产品要求默认「标准」且不持久化——
+    /// 每次启动/新会话回到默认，避免客户在不知情的情况下长期停在低/高档位。
+    @Published var chatMode: String = "standard"
     @Published private(set) var researchSummary: String?
     @Published var isStreaming = false
     @Published var statusText: String?
@@ -593,7 +596,9 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                for try await event in chatService.stream(messages: apiMessages, enableTools: iteration < roundLimit, expertID: expert.id, allowSearch: researchMode != .local, useNativeSearch: nativeSearch && !nativeEvidenceFallbackUsed && !nativeSearchRejected, tier: researchMode == .online ? "pro" : "flash", fastMode: false) {
+                for try await event in chatService.stream(messages: apiMessages, enableTools: iteration < roundLimit, expertID: expert.id, allowSearch: researchMode != .local, useNativeSearch: nativeSearch && !nativeEvidenceFallbackUsed && !nativeSearchRejected, tier: researchMode == .online ? "pro" : "flash", fastMode: false, expertTools: expert.skill.tools, chatMode: HostedAccount.isHostedActive ? chatMode : nil) {
+                    // P0-38 档位仅会员模式生效：自备 Key 模式直连上游，注入 chatMode 会被上游判为未知参数；
+                    // 同时自备模式没有服务端路由，档位本就无意义（与 line 234 的成本保护同思路）。
                     if Task.isCancelled { break }
                     switch event {
                     case .textDelta(let delta):
@@ -1158,21 +1163,13 @@ final class ChatViewModel: ObservableObject {
         return [messages[0], messages[1]] + selected.reversed()
     }
 
-    /// 读取图片附件 → 必要时等比压缩到最长边 1280px / JPEG → data URL。
+    /// 读取图片附件 → 交给 ImageCompressor 压缩（长边 1024 / JPEG 0.78）→ data URL。
+    /// P0-42：视觉 token ≈ 像素 ÷ 750，压缩到 1K 长边可省约 90% 的识别成本（实测识别质量无损）。
     /// 失败返回 nil：调用方降级为"仅 OCR 文本"，绝不因图片处理失败而中断发送。
     private static func imageDataURL(for file: StoredFile) -> String? {
         let url = FileStore.url(for: file)
         guard let raw = try? Data(contentsOf: url), !raw.isEmpty else { return nil }
-        var payload = raw
-        if let image = UIImage(data: raw), image.size.width > 1280 || image.size.height > 1280 || raw.count > 1_200_000 {
-            let longest = max(image.size.width, image.size.height)
-            let scale = min(1, 1280 / longest)
-            let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: target)
-            let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
-            if let jpeg = resized.jpegData(compressionQuality: 0.72) { payload = jpeg }
-        }
-        guard payload.count <= 2_500_000 else { return nil }
+        guard let payload = ImageCompressor.compressedData(from: raw) else { return nil }
         return "data:image/jpeg;base64," + payload.base64EncodedString()
     }
 

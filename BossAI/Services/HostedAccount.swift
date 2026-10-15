@@ -29,8 +29,47 @@ enum HostedUsageBand: String {
     }
 }
 
-/// 云端账号会话：负责登录、token 持久化、会员状态与用量档位拉取。
-///
+/// P0-38 对话档位选项（服务端 /me 下发；不含真实模型名，仅展示层使用）。
+/// 设计要点：客户端永远不写死档位与文案——管理台改一句话，全端跟着变。
+struct ChatModeOption: Identifiable, Equatable {
+    let key: String          // standard / high / ultra
+    let label: String        // 标准 / 高 / 最高
+    let priceTier: String    // ¥ / ¥¥ / ¥¥¥（价格画像，不暴露具体模型价格）
+    let speed: String        // 快 / 标准
+    let strength: String     // 自动 / 最高
+    let desc: String
+    var id: String { key }
+
+    /// 内置兜底：服务端未下发或字段缺失时使用（与云端默认值保持一致，保证功能永不空缺）
+    static let fallback: [ChatModeOption] = [
+        .init(key: "standard", label: "标准", priceTier: "¥", speed: "快", strength: "自动",
+              desc: "日常问答与常规分析，响应更快"),
+        .init(key: "high", label: "高", priceTier: "¥¥", speed: "标准", strength: "最高",
+              desc: "复杂决策与多步推演，保留完整推理"),
+        .init(key: "ultra", label: "最高", priceTier: "¥¥¥", speed: "标准", strength: "最高",
+              desc: "看图识图、海报与长文档等最复杂任务"),
+    ]
+
+    /// 解析服务端下发的 chatModes 数组。
+    /// 防呆：整体格式不对 → 回退内置三档；单条目缺 key → 丢弃该条；解析后为空 → 回退内置。
+    static func parse(_ raw: Any?) -> [ChatModeOption] {
+        guard let list = raw as? [[String: Any]], !list.isEmpty else { return fallback }
+        let parsed = list.compactMap { item -> ChatModeOption? in
+            guard let key = item["key"] as? String, !key.isEmpty else { return nil }
+            return ChatModeOption(
+                key: key,
+                label: item["label"] as? String ?? key,
+                priceTier: item["priceTier"] as? String ?? "¥",
+                speed: item["speed"] as? String ?? "",
+                strength: item["strength"] as? String ?? "",
+                desc: item["desc"] as? String ?? ""
+            )
+        }
+        return parsed.isEmpty ? fallback : parsed
+    }
+}
+
+/// 云端账号会话：负责登录、token 持久化、会员状态与用量档位拉取。///
 /// 设计要点：**模型 API Key 全部由服务端持有**，App 端只保存一个会员 token，
 /// 这个 token 同时充当「请求凭据」，由 CredentialStore 暴露给 ChatService / ImageService。
 @MainActor
@@ -65,6 +104,10 @@ final class HostedAccount: ObservableObject {
     // P0-15 档位与三层额度（日/周/月）
     @Published private(set) var tier: String = "plus"
     @Published private(set) var tierName: String = "Plus 基础版"
+    // P0-38 对话档位元数据（服务端下发：标准/高/最高 + 价格符号 + 说明；不含真实模型名）
+    @Published private(set) var chatModes: [ChatModeOption] = ChatModeOption.fallback
+    /// 服务端默认档位 key（当前为 standard）
+    @Published private(set) var defaultChatMode: String = "standard"
     @Published private(set) var dayRemainingPct: Double = 100
     @Published private(set) var weekRemainingPct: Double = 100
     @Published private(set) var monthRemainingPct: Double = 100
@@ -502,6 +545,9 @@ final class HostedAccount: ObservableObject {
             }
             }
             if let d = (json["memberDaysLeft"] as? NSNumber)?.intValue { daysLeft = d }
+            // P0-38 对话档位元数据（标准/高/最高；任何异常都回退内置三档，不会让配置面板空缺）
+            if json["chatModes"] != nil { chatModes = ChatModeOption.parse(json["chatModes"]) }
+            if let dm = json["defaultChatMode"] as? String, !dm.isEmpty { defaultChatMode = dm }
             if let feats = json["features"] as? [String: Any] {
                 features = feats
             }

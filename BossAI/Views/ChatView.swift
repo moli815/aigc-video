@@ -36,6 +36,8 @@ struct ChatContainerView: View {
     @StateObject private var viewModelHolder = ViewModelHolder()
     @State private var showIdentity = false
     @State private var showMembership = false
+    /// P0-38 配置面板显隐（模型/强度/速度）
+    @State private var showConfig = false
     @State private var showExportAlert = false
     @State private var exportMessage = ""
     @State private var exporting = false
@@ -80,6 +82,15 @@ struct ChatContainerView: View {
         .navigationTitle(conversation?.title ?? expert.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            // P0-38 配置入口：模型/强度/速度三行面板（对标主流 AI App 的"配置"结构）
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showConfig = true
+                } label: {
+                    Label("配置", systemImage: "slider.horizontal.3")
+                }
+                .accessibilityLabel("对话配置：模型与强度速度")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showIdentity = true
@@ -131,6 +142,14 @@ struct ChatContainerView: View {
         }
         .sheet(isPresented: $showIdentity) {
             IdentitySheet()
+        }
+        // P0-38 配置面板：模型档位写回 viewModel.chatMode，随下一轮请求下发 chatMode 字段；
+        // 每次启动默认「标准」（不持久化，避免客户在不知情下长期停在低/高档位）。
+        .sheet(isPresented: $showConfig) {
+            ChatConfigSheet(chatMode: Binding(
+                get: { viewModelHolder.vm?.chatMode ?? HostedAccount.shared.defaultChatMode },
+                set: { viewModelHolder.vm?.chatMode = $0 }
+            ))
         }
         .sheet(item: $previewFile) { file in
             FilePreviewSheet(file: file)

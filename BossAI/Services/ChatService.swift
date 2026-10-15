@@ -113,7 +113,7 @@ final class ChatService {
     }
 
     /// 单次请求流。工具调用通过 toolCalls 事件交给调用方处理，调用方追加 tool 结果后再次调用本方法继续。
-    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general", allowSearch: Bool = true, useNativeSearch: Bool? = nil, tier: String = "flash", fastMode: Bool = false) -> AsyncThrowingStream<StreamEvent, Error> {
+    func stream(messages: [[String: Any]], enableTools: Bool, expertID: String = "general", allowSearch: Bool = true, useNativeSearch: Bool? = nil, tier: String = "flash", fastMode: Bool = false, expertTools: [ExpertTool]? = nil, chatMode: String? = nil) -> AsyncThrowingStream<StreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 let span = PerformanceTrace.begin("AIRequest")
@@ -139,8 +139,9 @@ final class ChatService {
                                               thinking: fastMode ? .fast : .default)
                     // 混合路由：tier=pro 时服务端切到重思考旗舰（在线研究等深度任务）
                     if tier == "pro" { body["tier"] = "pro" }
+                    if let cm = chatMode { body["chatMode"] = cm }   // P0-38 配置面板档位（标准/高/最高）
                     if enableTools {
-                        try applyTools(to: &body, expertID: expertID, allowSearch: allowSearch, useNativeSearch: useNativeSearch ?? prefersNativeSearch)
+                        try applyTools(to: &body, expertID: expertID, allowSearch: allowSearch, useNativeSearch: useNativeSearch ?? prefersNativeSearch, expertTools: expertTools)
                     }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -153,7 +154,7 @@ final class ChatService {
                         var fallbackBody = body
                         fallbackBody.removeValue(forKey: "tools")
                         fallbackBody.removeValue(forKey: "enable_search")
-                        try applyTools(to: &fallbackBody, expertID: expertID, allowSearch: allowSearch, useNativeSearch: false)
+                        try applyTools(to: &fallbackBody, expertID: expertID, allowSearch: allowSearch, useNativeSearch: false, expertTools: expertTools)
                         request.httpBody = try JSONSerialization.data(withJSONObject: fallbackBody)
                         continuation.yield(.status("模型内置搜索不可用，已切换 App 搜索…"))
                         continuation.yield(.nativeSearchUnavailable)
@@ -348,9 +349,40 @@ final class ChatService {
     /// 另外始终追加 render_chart；按专家能力追加 generate_image、create_document
     /// （format 枚举按专家文档格式动态收窄）、expert_skill 与 search_library。
     /// - Throws: 专家能力档案缺失时抛出
-    private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool) throws {
+    // MARK: - P0-40 工具权限解析（纯函数，供单测）
+
+    /// 某位专家当前可用的工具权限集合。
+    struct ToolPermissions: Equatable {
+        let canSearch: Bool
+        let canImage: Bool
+        /// 可导出的文档格式（word/ppt/excel/pdf 的 rawValue 子集）
+        let docFormats: [String]
+    }
+
+    /// 解析工具权限：**以云端下发的专家工具列表为单一数据源**；列表缺失（nil）时回退本地能力档案。
+    /// 这是"云端开了生图、App 却未挂工具、模型如实拒绝"历史缺陷的回归锚点——
+    /// 任何未来改动都必须保持：expertTools 提供的工具一定生效，不被本地档案否决。
+    static func resolveToolPermissions(expertID: String, expertTools: [ExpertTool]?) throws -> ToolPermissions {
         let capability = try ExpertCapabilityCatalog.profile(expertID)
-        let nativeSearch = capability.allowSearch && allowSearch && useNativeSearch
+        let canSearch = expertTools?.contains(.search) ?? capability.allowSearch
+        let canImage = expertTools?.contains(.image) ?? capability.allowImages
+        let docFormats: [String]
+        if let et = expertTools {
+            docFormats = et.filter { [.word, .ppt, .excel, .pdf].contains($0) }.map { $0.rawValue }
+        } else {
+            docFormats = capability.documentFormats
+        }
+        return ToolPermissions(canSearch: canSearch, canImage: canImage, docFormats: docFormats)
+    }
+
+    /// P0-40 工具挂载以「专家的实际工具列表」为准（云端下发），本地能力档案只作兜底——
+    /// 此前用本地 ExpertSkills.json 的 allowImages 判定，导致"云端已开放生图、App 仍不挂工具、模型如实拒绝"的不一致。
+    private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool, expertTools: [ExpertTool]? = nil) throws {
+        let capability = try ExpertCapabilityCatalog.profile(expertID)
+        let perms = try Self.resolveToolPermissions(expertID: expertID, expertTools: expertTools)
+        let canSearch = perms.canSearch
+        let canImage = perms.canImage
+        let nativeSearch = canSearch && allowSearch && useNativeSearch
         if nativeSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
@@ -367,16 +399,19 @@ final class ChatService {
         }
 
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if capability.allowSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
-        if capability.allowImages { tools.append(["type": "function", "function": Self.generateImageFunction]) }
+        if canSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if canImage { tools.append(["type": "function", "function": Self.generateImageFunction]) }
         tools.append(["type": "function", "function": Self.renderChartFunction])
-        var document = Self.createDocumentFunction
-        var parameters = document["parameters"] as? [String: Any] ?? [:]
-        var properties = parameters["properties"] as? [String: Any] ?? [:]
-        properties["format"] = ["type": "string", "enum": capability.documentFormats]
-        parameters["properties"] = properties
-        document["parameters"] = parameters
-        if !capability.documentFormats.isEmpty { tools.append(["type": "function", "function": document]) }
+        // 文档导出工具：可导出格式由权限解析统一给出（云端工具优先，本地档案兜底）
+        if !perms.docFormats.isEmpty {
+            var document = Self.createDocumentFunction
+            var parameters = document["parameters"] as? [String: Any] ?? [:]
+            var properties = parameters["properties"] as? [String: Any] ?? [:]
+            properties["format"] = ["type": "string", "enum": perms.docFormats]
+            parameters["properties"] = properties
+            document["parameters"] = parameters
+            tools.append(["type": "function", "function": document])
+        }
         tools.append(["type": "function", "function": Self.expertSkillFunction(capability)])
         tools.append(["type": "function", "function": ["name": "search_library",
             "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
