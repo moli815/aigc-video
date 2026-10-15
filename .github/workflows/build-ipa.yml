@@ -52,6 +52,47 @@ jobs:
       - name: Run Swift package tests
         run: swift test
 
+  # P0-43 iOS 单测：编译 App + BossAITests（单测 target）并执行。
+  # 覆盖：配置面板档位解析 / 工具权限（云端优先）/ 图片压缩 / 远程目录映射等回归锚点。
+  # 只跑单测（-only-testing:BossAITests），不跑 UI 测试（慢且易碎，另行手动执行）。
+  ios-tests:
+    needs: test
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.4"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Run iOS unit tests (BossAITests)
+        run: |
+          xcodebuild test -project BossAI.xcodeproj \
+            -scheme BossAI \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -derivedDataPath build \
+            -only-testing:BossAITests \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            -resultBundlePath TestResults.xcresult \
+            | tail -80
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-results
+          path: TestResults.xcresult
+          retention-days: 7
+
   build:
     needs: test
     runs-on: macos-15
@@ -109,19 +150,32 @@ jobs:
           path: BossAI-unsigned.ipa
           retention-days: 30
 
-      # 免登录取包：IPA 传临时镜像，并把直链提交回仓库（[skip ci] 防止循环构建）
+      # 免登录取包：IPA 传临时镜像，并把直链提交回仓库（[skip ci] 防止循环构建）。
+      # 容错：镜像服务（litterbox）为第三方免费服务，偶发 404/限流——失败不阻塞构建，
+      # GitHub Artifact 始终可用（30 天），重跑工作流即可刷新镜像链接。
       - name: Upload IPA to file mirror
         id: mirror
+        continue-on-error: true
         run: |
-          URL=$(curl -fsS --max-time 300 \
-            -F "reqtype=fileupload" -F "time=72h" \
-            -F "fileToUpload=@BossAI-unsigned.ipa" \
-            https://litterbox.catbox.moe/resources/internals/api.php)
-          echo "IPA mirror: $URL"
-          echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
+          for attempt in 1 2 3; do
+            URL=$(curl -fsS --max-time 300 \
+              -F "reqtype=fileupload" -F "time=72h" \
+              -F "fileToUpload=@BossAI-unsigned.ipa" \
+              https://litterbox.catbox.moe/resources/internals/api.php) && break
+            echo "attempt $attempt failed, retrying..."; sleep 15
+          done
+          if [ -n "$URL" ]; then
+            echo "IPA mirror: $URL"
+            echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
+          else
+            echo "::warning::file mirror unavailable after 3 attempts - use GitHub artifact instead"
+            exit 0
+          fi
 
       - name: Publish mirror URL to repo
+        continue-on-error: true
         run: |
+          if [ ! -f mirror-url.txt ]; then echo "no mirror url, skip"; exit 0; fi
           git config user.name "ci-bot"
           git config user.email "actions@users.noreply.github.com"
           git add mirror-url.txt
