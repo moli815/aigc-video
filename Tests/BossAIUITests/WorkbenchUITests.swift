@@ -37,7 +37,9 @@ final class AppWorkbenchUITests: XCTestCase {
         card.tap()
         let input = app.descendants(matching: .any).matching(identifier: "task-input").firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 10))
-        XCTAssertTrue((input.value as? String ?? "").contains("主题："), "草稿未填入输入框")
+        // P0-19 契约变更（产品行为已改，本断言随之更新）：
+        // 通用对话/资料卡**不再预填模板草稿**（用户明确要求"不预填"），
+        // 点击卡片只进入对话界面，输入框保持用户原有内容——不再断言"主题："草稿。
         XCTAssertFalse(app.buttons["停止输出"].exists, "不应自动发送")
         // 新契约：不再有 research-mode / answer-style 手动开关，改为只读的自动调度标识
         XCTAssertFalse(app.buttons["research-mode"].exists, "手动证据方式开关应已移除")

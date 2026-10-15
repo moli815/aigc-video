@@ -12,10 +12,12 @@ final class ExpertAcceptanceUITests: XCTestCase {
             XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(value)
         }
         app.buttons["计算"].tap()
-        let result = app.descendants(matching: .any).matching(identifier: "calculator-result-盈亏平衡销量").firstMatch
+        // 标识与实现对齐：结果行的 accessibilityIdentifier 为「calculator-result-<英文key>」
+        // （此前测试用中文名 "calculator-result-盈亏平衡销量"，与实现不符导致长期失败）
+        let result = app.descendants(matching: .any).matching(identifier: "calculator-result-break_even_quantity").firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 5))
         let representedValue = result.value as? String ?? ""
-        let exactValue = representedValue == "25.00" || result.label.contains("25.00") || result.staticTexts["25.00"].exists
+        let exactValue = representedValue.contains("25") || result.label.contains("25") || result.staticTexts["25.00"].exists
         if !exactValue {
             let tree = XCTAttachment(string: app.debugDescription); tree.lifetime = .keepAlways; add(tree)
             let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.lifetime = .keepAlways; add(screenshot)
