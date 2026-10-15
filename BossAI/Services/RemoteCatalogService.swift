@@ -68,7 +68,7 @@ enum RemoteCatalogService {
             }
             if apply(payload: payload) {
                 saveCache(data)
-                PerformanceTrace.event("remote_catalog.applied_v\(payload.version ?? 0)")
+                PerformanceTrace.event("remote_catalog.applied")
             }
         } catch {
             // 网络失败：保留缓存/内置目录，静默即可
@@ -107,12 +107,17 @@ enum RemoteCatalogService {
         }
         guard !mapped.isEmpty else { return false }
 
-        let starters: [String: [ExpertCatalog.Starter]]? = payload.starters.map { dict in
-            dict.mapValues { $0.map { ExpertCatalog.Starter(label: $0.label, content: $0.content) } }
+        var starters: [String: [ExpertCatalog.Starter]]? = nil
+        if let sd = payload.starters {
+            var out: [String: [ExpertCatalog.Starter]] = [:]
+            for (key, arr) in sd {
+                out[key] = arr.map { ExpertCatalog.Starter(label: $0.label, content: $0.content) }
+            }
+            starters = out
         }
-        let ui = payload.ui.flatMap {
-            let title = $0.expertsSectionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let icon = $0.expertsSectionIcon?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let ui = payload.ui.flatMap { u -> ExpertCatalog.UISection? in
+            let title = (u.expertsSectionTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let icon = (u.expertsSectionIcon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty else { return nil }
             return ExpertCatalog.UISection(title: title, icon: icon.isEmpty ? "crown.fill" : icon)
         }
