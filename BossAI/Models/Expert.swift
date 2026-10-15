@@ -154,6 +154,7 @@ enum ExpertCatalog {
             tools: [.search, .image, .word, .pdf],
             checklist: ["结论是否在第一句", "有没有编造数据", "是否给出可执行的下一步"],
             freshnessCue: "对任何可能随时间变化的资讯都要核实。",
+        ),
         emoji: "🤖"
     )
 
@@ -178,6 +179,7 @@ enum ExpertCatalog {
                 tools: [.search, .excel, .word, .pdf, .image],
                 checklist: ["有没有明确推荐而不是罗列选项", "打分口径是否说明", "是否给了止损条件"],
                 freshnessCue: "行业规模、增速、竞品动作、政策口径必须联网核实。",
+            ),
             emoji: "📊"
         ),
         Expert(
@@ -198,6 +200,7 @@ enum ExpertCatalog {
                 tools: [.search, .word, .ppt, .pdf, .image],
                 checklist: ["定位能否被客户一句话复述", "壁垒是否可验证", "有没有写清放弃项"],
                 freshnessCue: "行业格局、政策与竞品定位需联网核实。",
+            ),
             emoji: "🧭"
         ),
         Expert(
@@ -219,6 +222,7 @@ enum ExpertCatalog {
                 tools: [.search, .image, .ppt, .excel, .word],
                 checklist: ["预算是否给了比例", "每个动作是否有人负责", "是否含复盘节点"],
                 freshnessCue: "平台规则与流量成本变化快，投放前必须联网核实。",
+            ),
             emoji: "📣"
         ),
         Expert(
@@ -239,6 +243,7 @@ enum ExpertCatalog {
                 tools: [.search, .excel, .image, .ppt],
                 checklist: ["是否有投产比测算", "是否只主攻一个渠道", "有没有止损线"],
                 freshnessCue: "平台算法、投放价格、违规红线必须联网核实并标注日期。",
+            ),
             emoji: "📈"
         ),
         Expert(
@@ -259,6 +264,7 @@ enum ExpertCatalog {
                 tools: [.search, .excel, .word, .image],
                 checklist: ["是否有单客经济测算", "方案能否落地到报价单", "压力点是否说清"],
                 freshnessCue: "同行定价与新模式案例需联网核实。",
+            ),
             emoji: "🧩"
         ),
         Expert(
@@ -280,6 +286,7 @@ enum ExpertCatalog {
                 tools: [.search, .ppt, .word, .excel, .image],
                 checklist: ["市场数据是否有出处", "资金用途是否具体", "有没有准备被质询的问题"],
                 freshnessCue: "行业融资案例、估值水平、政策补贴需联网核实。",
+            ),
             emoji: "💰"
         ),
         Expert(
@@ -300,6 +307,7 @@ enum ExpertCatalog {
                 tools: [.excel, .word, .search, .image],
                 checklist: ["控制权安全线是否守住", "是否讲清退出与回购", "末尾必须注明不构成法律意见"],
                 freshnessCue: "公司法与税务口径可能更新，出方案前联网核实。",
+            ),
             emoji: "⚖️"
         ),
         Expert(
@@ -320,6 +328,7 @@ enum ExpertCatalog {
                 tools: [.excel, .word, .search, .image],
                 checklist: ["指标是否可量化可取数", "提成是否做过成本测算", "是否有淘汰与申诉机制"],
                 freshnessCue: "同行薪酬水平与社保个税口径需联网核实。",
+            ),
             emoji: "👥"
         ),
         Expert(
@@ -340,6 +349,7 @@ enum ExpertCatalog {
                 tools: [.word, .ppt, .image, .search],
                 checklist: ["开场 30 秒能否抓住人", "是否有明确行动指令", "金句是否好记"],
                 freshnessCue: "涉及行业数据的演讲内容需联网核实，避免现场被质疑。",
+            ),
             emoji: "🎤"
         ),
         Expert(
@@ -359,6 +369,7 @@ enum ExpertCatalog {
                 tools: [.word, .search, .pdf, .image],
                 checklist: ["是否按四栏结构输出", "是否标注需律师介入项", "末尾必须注明不构成法律意见"],
                 freshnessCue: "法律法规与监管口径必须联网核实，注明现行有效版本。",
+            ),
             emoji: "🛡️"
         ),
         Expert(
@@ -380,6 +391,7 @@ enum ExpertCatalog {
                 tools: [.search, .image, .ppt, .word, .excel],
                 checklist: ["人设主张能否一句话复述", "内容支柱是否匹配业务目标", "是否测算投产比", "是否提示广告法合规"],
                 freshnessCue: "平台流量规则、禁限词与同行IP打法必须联网核实。",
+            ),
             emoji: "🌟"
         ),
         Expert(
@@ -400,6 +412,7 @@ enum ExpertCatalog {
                 tools: [.search, .word, .excel, .pdf, .image],
                 checklist: ["是否按四栏结构输出", "人身安全项是否标注立即整改", "预算是否注明口径", "是否提示以当地消防部门审验为准"],
                 freshnessCue: "消防规范、地方标准与审验口径必须联网核实现行有效版本。",
+            ),
             emoji: "🧯"
         ),
         Expert(
@@ -420,6 +433,7 @@ enum ExpertCatalog {
                 tools: [.search, .excel, .word, .ppt, .image],
                 checklist: ["点位是否说明覆盖逻辑", "是否有回本月数测算", "是否提示隐私合规", "参数是否标注为假设"],
                 freshnessCue: "设备价格、存储方案与数据合规要求必须联网核实。",
+            ),
             emoji: "📹"
         ),
         Expert(
@@ -440,6 +454,7 @@ enum ExpertCatalog {
                 tools: [.search, .excel, .word, .pdf, .image],
                 checklist: ["保额测算是否写明公式与输入", "费率是否标注需核实", "是否核对免责条款", "末尾注明不构成投保建议"],
                 freshnessCue: "保险产品条款、费率与监管口径必须联网核实当期有效版本。",
+            ),
             emoji: "☂️"
         ),
     ]
