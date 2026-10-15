@@ -589,6 +589,58 @@ final class HostedAccount: ObservableObject {
     // MARK: - P0-19 自定义专家（Ultra）
 
     /// 云端自定义专家列表（Ultra 档位）。失败返回空数组，UI 显示空态即可。
+    // MARK: - P0-35 海报生成（图文分离闭环）
+
+    /// 生成一张"零乱码"海报：①请求服务端出**无文字底图**并返回排版文案；
+    /// ②下载底图；③客户端用真实字体叠字（PosterComposer）——中文永不出错，改文案不用重新生图。
+    /// - Parameters:
+    ///   - title: 主标题（必填，服务端会校验）
+    ///   - subtitle: 副标题（可空）
+    ///   - bullets: 要点列表（最多 6 条）
+    ///   - style: 风格描述（可空，走服务端默认商务风）
+    /// - Throws: 网络失败/服务端拒绝/解码失败；调用方 toast 提示，不影响对话主流程。
+    func renderPoster(title: String, subtitle: String, bullets: [String], style: String? = nil) async throws -> UIImage {
+        guard let token, !token.isEmpty else { throw HostedError.network("未登录") }
+        guard let url = URL(string: AppConfig.hostedAPIBase + "/poster") else {
+            throw HostedError.network("服务地址无效")
+        }
+        var body: [String: Any] = ["title": title, "subtitle": subtitle, "bullets": bullets]
+        if let style, !style.isEmpty { body["style"] = style }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        req.timeoutInterval = 120   // 生图链路较慢（约 30~80s），超时必须放宽
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: req)
+        } catch {
+            throw HostedError.network("网络异常，请检查连接后重试")
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if status != 200 {
+            let msg = json["message"] as? String
+            throw HostedError.server(code: json["error"] as? String ?? "POSTER_FAILED", status: status, message: msg)
+        }
+        // 底图 URL → 下载 → 客户端叠字
+        guard let baseURLString = json["imageUrl"] as? String, let baseURL = URL(string: baseURLString) else {
+            throw HostedError.network("海报底图缺失，请重试")
+        }
+        guard let (imgData, _) = try? await URLSession.shared.data(from: baseURL),
+              let base = UIImage(data: imgData) else {
+            throw HostedError.network("底图下载失败，请重试")
+        }
+        guard let composed = PosterComposer.compose(base: base, title: title, subtitle: subtitle, bullets: bullets) else {
+            throw HostedError.network("文字合成失败")
+        }
+        return composed
+    }
+
     func fetchCustomExperts() async -> [[String: Any]] {
         guard let json = try? await request("/custom-experts") else { return [] }
         return (json["list"] as? [[String: Any]]) ?? []

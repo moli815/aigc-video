@@ -10,10 +10,14 @@ import UIKit
 
 final class ImageCompressorTests: XCTestCase {
 
-    /// 造一张指定尺寸的测试图（纯色+几条线，避免纯色被 JPEG 压到极小失真）
+    /// 造一张指定尺寸的测试图（纯色+几条线，避免纯色被 JPEG 压到极小失真）。
+    /// 注意 scale 固定为 1：默认 scale 会随模拟器屏幕倍率（2x/3x）放大实际像素数，
+    /// 让"800×600 输入"变成 1600×1200 —— 曾导致 testSmallImageNotUpscaled 误报失败。
     private func makeImageData(width: CGFloat, height: CGFloat) -> Data {
         let size = CGSize(width: width, height: height)
-        let renderer = UIGraphicsImageRenderer(size: size)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let image = renderer.image { ctx in
             UIColor.systemBlue.setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
