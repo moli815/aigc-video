@@ -71,7 +71,11 @@ struct MainView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .environmentObject(credentials)
-        .task { ensureProvidersDetected() }
+        .task {
+            ensureProvidersDetected()
+            // P0-26 SaaS 化：登录态下拉取云端专家目录（人设/工具/开场白/侧栏文案在线可改）
+            await RemoteCatalogService.refreshIfPossible()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .bossAIKeysChanged)) { _ in
             ensureProvidersDetected()
         }
@@ -248,7 +252,7 @@ struct SidebarView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { expertExpanded.toggle() }
                     } label: {
                         HStack {
-                            Label("专家顾问", systemImage: "person.2.badge.gearshape.fill")
+                            Label(ExpertCatalog.ui.title, systemImage: ExpertCatalog.ui.icon)
                             Spacer()
                             Text("\(ExpertCatalog.all.count)")
                                 .font(.caption)
@@ -625,16 +629,20 @@ struct ExpertRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // P0-23 图标彻底重设计（用户实测 resizable+scaledToFit 两次修复仍不对齐）：
-            // 根因是 SF Symbol 之间的视觉宽度/重心差异是字体固有的，缩放无法根治。
-            // 改用「首字徽章 monogram」：Text 固定 frame + 居中，字形是文字天然居中，
-            // 任何专家、任何字体下都绝对对齐；配色按 id 稳定散列，同一位专家永远同色。
-            Text(String(expert.name.prefix(1)))
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(Self.tint(for: expert.id),
-                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            // P0-26 图标 SaaS 化：云端下发 emoji 优先（在线可换、天然居中）；无 emoji 回退首字徽章。
+            // 固定 frame + 居中 = 任何图标形态下都绝对对齐（P0-23 结论保留）。
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Self.tint(for: expert.id))
+                if let emoji = expert.emoji, !emoji.isEmpty {
+                    Text(emoji).font(.system(size: 15))
+                } else {
+                    Text(String(expert.name.prefix(1)))
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)

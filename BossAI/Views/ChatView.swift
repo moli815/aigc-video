@@ -146,12 +146,19 @@ struct ExpertBanner: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // P0-23 monogram 徽章与侧边栏专家列表统一（SF Symbol 视觉宽度差异根治）
-            Text(String(expert.name.prefix(1)))
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(.white.opacity(0.22), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            // P0-26 emoji 优先（云端下发），无 emoji 回退首字徽章；固定 frame 居中对齐
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(.white.opacity(0.22))
+                if let emoji = expert.emoji, !emoji.isEmpty {
+                    Text(emoji).font(.system(size: 15))
+                } else {
+                    Text(String(expert.name.prefix(1)))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 26, height: 26)
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.footnote.weight(.semibold))
@@ -537,13 +544,19 @@ struct EmptyStateView: View {
     var body: some View {
         VStack(spacing: 14) {
             Spacer(minLength: 90)
-            // P0-23 空态改用大号 monogram：与列表徽章同一视觉语言
-            Text(String(expert.name.prefix(1)))
-                .font(.system(size: 40, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .frame(width: 72, height: 72)
-                .background(ExpertRow.tint(for: expert.id),
-                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            // P0-26 空态大号图标：emoji 优先，回退首字
+            ZStack {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(ExpertRow.tint(for: expert.id))
+                if let emoji = expert.emoji, !emoji.isEmpty {
+                    Text(emoji).font(.system(size: 40))
+                } else {
+                    Text(String(expert.name.prefix(1)))
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 72, height: 72)
             Text(expert.name)
                 .font(.title2.bold())
             Text(expert.subtitle)

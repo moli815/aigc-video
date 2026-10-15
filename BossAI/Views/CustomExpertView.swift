@@ -142,7 +142,7 @@ struct CustomExpertView: View {
         let chunks = (expert["chunkCount"] as? NSNumber)?.intValue ?? 0
         let id = expert["id"] as? String ?? ""
         return HStack(spacing: 11) {
-            // P0-23 与侧边栏专家列表统一 monogram 徽章（SF Symbol 对齐问题根治方案）
+            // P0-23/P0-26 与侧边栏统一的徽章（自定义专家暂无 emoji 字段，保留首字）
             Text(String(name.prefix(1)))
                 .font(.system(size: 14, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)

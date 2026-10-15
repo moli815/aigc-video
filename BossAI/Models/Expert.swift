@@ -10,6 +10,8 @@ struct Expert: Identifiable, Hashable {
     let role: String
     /// 技能包
     let skill: ExpertSkill
+    /// P0-26 云端下发的 emoji 图标（SaaS 化：图标在线改，无需出包）；nil 时回退首字徽章
+    var emoji: String? = nil
 
     var capabilityInstruction: String {
         do { return try ExpertCapabilityCatalog.profile(id).instruction }
@@ -151,8 +153,8 @@ enum ExpertCatalog {
             deliverable: .word,
             tools: [.search, .image, .word, .pdf],
             checklist: ["结论是否在第一句", "有没有编造数据", "是否给出可执行的下一步"],
-            freshnessCue: "对任何可能随时间变化的资讯都要核实。"
-        )
+            freshnessCue: "对任何可能随时间变化的资讯都要核实。",
+        emoji: "🤖"
     )
 
     // MARK: - 14 位经营顾问
@@ -173,10 +175,10 @@ enum ExpertCatalog {
                     "列出前三大风险及对应动作",
                 ],
                 deliverable: .excel,
-                tools: [.search, .excel, .word, .pdf],
+                tools: [.search, .excel, .word, .pdf, .image],
                 checklist: ["有没有明确推荐而不是罗列选项", "打分口径是否说明", "是否给了止损条件"],
-                freshnessCue: "行业规模、增速、竞品动作、政策口径必须联网核实。"
-            )
+                freshnessCue: "行业规模、增速、竞品动作、政策口径必须联网核实。",
+            emoji: "📊"
         ),
         Expert(
             id: "strategy", name: "战略定位", subtitle: "精准定位 · 差异化竞争 · 长期规划",
@@ -193,10 +195,10 @@ enum ExpertCatalog {
                     "明确「不做什么」清单，避免资源分散",
                 ],
                 deliverable: .word,
-                tools: [.search, .word, .ppt, .pdf],
+                tools: [.search, .word, .ppt, .pdf, .image],
                 checklist: ["定位能否被客户一句话复述", "壁垒是否可验证", "有没有写清放弃项"],
-                freshnessCue: "行业格局、政策与竞品定位需联网核实。"
-            )
+                freshnessCue: "行业格局、政策与竞品定位需联网核实。",
+            emoji: "🧭"
         ),
         Expert(
             id: "marketing", name: "营销策划", subtitle: "品牌策划 · 推广策略 · 客户增长",
@@ -216,8 +218,8 @@ enum ExpertCatalog {
                 deliverable: .ppt,
                 tools: [.search, .image, .ppt, .excel, .word],
                 checklist: ["预算是否给了比例", "每个动作是否有人负责", "是否含复盘节点"],
-                freshnessCue: "平台规则与流量成本变化快，投放前必须联网核实。"
-            )
+                freshnessCue: "平台规则与流量成本变化快，投放前必须联网核实。",
+            emoji: "📣"
         ),
         Expert(
             id: "traffic", name: "流量策划", subtitle: "流量获取 · 渠道优化 · 转化提升",
@@ -236,8 +238,8 @@ enum ExpertCatalog {
                 deliverable: .excel,
                 tools: [.search, .excel, .image, .ppt],
                 checklist: ["是否有投产比测算", "是否只主攻一个渠道", "有没有止损线"],
-                freshnessCue: "平台算法、投放价格、违规红线必须联网核实并标注日期。"
-            )
+                freshnessCue: "平台算法、投放价格、违规红线必须联网核实并标注日期。",
+            emoji: "📈"
         ),
         Expert(
             id: "model", name: "商业模式", subtitle: "模式设计 · 价值创新 · 持续盈利",
@@ -256,8 +258,8 @@ enum ExpertCatalog {
                 deliverable: .excel,
                 tools: [.search, .excel, .word, .image],
                 checklist: ["是否有单客经济测算", "方案能否落地到报价单", "压力点是否说清"],
-                freshnessCue: "同行定价与新模式案例需联网核实。"
-            )
+                freshnessCue: "同行定价与新模式案例需联网核实。",
+            emoji: "🧩"
         ),
         Expert(
             id: "funding", name: "融资招商", subtitle: "项目包装 · 融资路演 · 资源对接",
@@ -277,8 +279,8 @@ enum ExpertCatalog {
                 deliverable: .ppt,
                 tools: [.search, .ppt, .word, .excel, .image],
                 checklist: ["市场数据是否有出处", "资金用途是否具体", "有没有准备被质询的问题"],
-                freshnessCue: "行业融资案例、估值水平、政策补贴需联网核实。"
-            )
+                freshnessCue: "行业融资案例、估值水平、政策补贴需联网核实。",
+            emoji: "💰"
         ),
         Expert(
             id: "equity", name: "股权结构", subtitle: "股权设计 · 利益平衡 · 公司治理",
@@ -295,10 +297,10 @@ enum ExpertCatalog {
                     "输出股权比例表与关键条款清单",
                 ],
                 deliverable: .excel,
-                tools: [.excel, .word, .search],
+                tools: [.excel, .word, .search, .image],
                 checklist: ["控制权安全线是否守住", "是否讲清退出与回购", "末尾必须注明不构成法律意见"],
-                freshnessCue: "公司法与税务口径可能更新，出方案前联网核实。"
-            )
+                freshnessCue: "公司法与税务口径可能更新，出方案前联网核实。",
+            emoji: "⚖️"
         ),
         Expert(
             id: "performance", name: "薪酬绩效", subtitle: "激励设计 · 绩效管理 · 团队成长",
@@ -315,10 +317,10 @@ enum ExpertCatalog {
                     "模拟三种业绩水平下的员工收入与公司成本",
                 ],
                 deliverable: .excel,
-                tools: [.excel, .word, .search],
+                tools: [.excel, .word, .search, .image],
                 checklist: ["指标是否可量化可取数", "提成是否做过成本测算", "是否有淘汰与申诉机制"],
-                freshnessCue: "同行薪酬水平与社保个税口径需联网核实。"
-            )
+                freshnessCue: "同行薪酬水平与社保个税口径需联网核实。",
+            emoji: "👥"
         ),
         Expert(
             id: "speech", name: "顶级演讲", subtitle: "演讲表达 · 影响力 · 说服力",
@@ -337,8 +339,8 @@ enum ExpertCatalog {
                 deliverable: .word,
                 tools: [.word, .ppt, .image, .search],
                 checklist: ["开场 30 秒能否抓住人", "是否有明确行动指令", "金句是否好记"],
-                freshnessCue: "涉及行业数据的演讲内容需联网核实，避免现场被质疑。"
-            )
+                freshnessCue: "涉及行业数据的演讲内容需联网核实，避免现场被质疑。",
+            emoji: "🎤"
         ),
         Expert(
             id: "legal", name: "法务风控", subtitle: "法律合规 · 风险控制 · 危机管理",
@@ -354,10 +356,10 @@ enum ExpertCatalog {
                     "标注需要线下咨询执业律师的高风险事项",
                 ],
                 deliverable: .word,
-                tools: [.word, .search, .pdf],
+                tools: [.word, .search, .pdf, .image],
                 checklist: ["是否按四栏结构输出", "是否标注需律师介入项", "末尾必须注明不构成法律意见"],
-                freshnessCue: "法律法规与监管口径必须联网核实，注明现行有效版本。"
-            )
+                freshnessCue: "法律法规与监管口径必须联网核实，注明现行有效版本。",
+            emoji: "🛡️"
         ),
         Expert(
             id: "boss_ip", name: "老板IP", subtitle: "IP定位 · 内容经营 · 信任资产",
@@ -377,8 +379,8 @@ enum ExpertCatalog {
                 deliverable: .ppt,
                 tools: [.search, .image, .ppt, .word, .excel],
                 checklist: ["人设主张能否一句话复述", "内容支柱是否匹配业务目标", "是否测算投产比", "是否提示广告法合规"],
-                freshnessCue: "平台流量规则、禁限词与同行IP打法必须联网核实。"
-            )
+                freshnessCue: "平台流量规则、禁限词与同行IP打法必须联网核实。",
+            emoji: "🌟"
         ),
         Expert(
             id: "fire_safety", name: "消防专家", subtitle: "消防合规 · 隐患排查 · 整改方案",
@@ -395,10 +397,10 @@ enum ExpertCatalog {
                     "给出整改排期、验收标准与日常巡查制度",
                 ],
                 deliverable: .word,
-                tools: [.search, .word, .excel, .pdf],
+                tools: [.search, .word, .excel, .pdf, .image],
                 checklist: ["是否按四栏结构输出", "人身安全项是否标注立即整改", "预算是否注明口径", "是否提示以当地消防部门审验为准"],
-                freshnessCue: "消防规范、地方标准与审验口径必须联网核实现行有效版本。"
-            )
+                freshnessCue: "消防规范、地方标准与审验口径必须联网核实现行有效版本。",
+            emoji: "🧯"
         ),
         Expert(
             id: "security", name: "安防专家", subtitle: "风险评估 · 监控方案 · 损失预防",
@@ -415,10 +417,10 @@ enum ExpertCatalog {
                     "给出合规提醒：员工与客户隐私、数据存储合规",
                 ],
                 deliverable: .excel,
-                tools: [.search, .excel, .word, .ppt],
+                tools: [.search, .excel, .word, .ppt, .image],
                 checklist: ["点位是否说明覆盖逻辑", "是否有回本月数测算", "是否提示隐私合规", "参数是否标注为假设"],
-                freshnessCue: "设备价格、存储方案与数据合规要求必须联网核实。"
-            )
+                freshnessCue: "设备价格、存储方案与数据合规要求必须联网核实。",
+            emoji: "📹"
         ),
         Expert(
             id: "insurance", name: "保险专家", subtitle: "风险敞口 · 保额测算 · 保障规划",
@@ -435,10 +437,10 @@ enum ExpertCatalog {
                     "给出投保顺序、免责条款核对清单与理赔资料准备清单",
                 ],
                 deliverable: .excel,
-                tools: [.search, .excel, .word, .pdf],
+                tools: [.search, .excel, .word, .pdf, .image],
                 checklist: ["保额测算是否写明公式与输入", "费率是否标注需核实", "是否核对免责条款", "末尾注明不构成投保建议"],
-                freshnessCue: "保险产品条款、费率与监管口径必须联网核实当期有效版本。"
-            )
+                freshnessCue: "保险产品条款、费率与监管口径必须联网核实当期有效版本。",
+            emoji: "☂️"
         ),
     ]
 
@@ -446,6 +448,21 @@ enum ExpertCatalog {
     struct Starter {
         let label: String      // 按钮上的短标签
         let content: String    // 填充到输入框的完整内容
+    }
+
+    // MARK: - P0-26 SaaS 化：云端专家目录覆盖（远程下发，失败回退内置目录）
+    /// 远程下发后在此覆盖内置目录；nil = 尚未拉取/拉取失败（用内置）
+    static private(set) var remoteExperts: [Expert]?
+    static private(set) var remoteStarters: [String: [Starter]]?
+    /// 侧边栏分区标题/图标（云端可改，内置默认"您的专属军师"）
+    struct UISection: Hashable { var title: String; var icon: String }
+    static private(set) var ui = UISection(title: "您的专属军师", icon: "crown.fill")
+
+    /// P0-26 远程目录注入（RemoteCatalogService 拉取成功后调用）
+    static func applyRemote(experts: [Expert], starters: [String: [Starter]]?, ui: UISection?) {
+        remoteExperts = experts
+        remoteStarters = starters
+        if let ui { self.ui = ui }
     }
 
     /// 每个专家的开场提示；未配置的专家回退到通用任务背景模板
@@ -528,6 +545,8 @@ enum ExpertCatalog {
     ]
 
     static func starters(for expert: Expert) -> [Starter] {
+        // P0-26：云端下发的开场白优先
+        if let remote = remoteStarters, let custom = remote[expert.id], !custom.isEmpty { return custom }
         if let custom = startersByExpert[expert.id], !custom.isEmpty { return custom }
         // 兜底：未配置的专家给通用任务背景模板
         return [.init(label: "填写任务背景",
@@ -535,7 +554,11 @@ enum ExpertCatalog {
     }
 
     /// 展示顺序：新增的四位专家（老板IP/消防/安防/保险）排到最前，其余保持原相对顺序
-    static let all: [Expert] = [general] + reorderedExperts
+    /// P0-26：云端目录优先，未拉取/失败时回退内置目录（安全冗余，永不空列表）
+    static var all: [Expert] { remoteExperts ?? [general] + reorderedExperts }
+
+    /// P0-26 内置兜底目录（RemoteCatalogService 字段缺失时的回退源）
+    static var bundledAll: [Expert] { [general] + experts }
 
     private static let reorderedExperts: [Expert] = Array(experts.suffix(4)) + Array(experts.dropLast(4))
 
