@@ -77,6 +77,17 @@ struct ChatContainerView: View {
                 onConversationCreated(created)
             }
             viewModelHolder.vm = vm
+            // P0-45 打开历史会话时请求一次强制刷新（首帧时序兜底）；
+            // 并在 0.8s 后做一次自愈检查：若视图仍为空但会话确有消息（首帧缓存了空结果），
+            // 再强制刷新一次——彻底消除"打开历史对话空白且永不自愈"。
+            vm.requestMessageReload()
+            Task { @MainActor [weak vm] in
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                guard let vm else { return }
+                if vm.sortedMessages.isEmpty, (vm.conversation?.messages.count ?? 0) > 0 {
+                    vm.requestMessageReload()
+                }
+            }
         }
         .onDisappear { viewModelHolder.vm?.stop() }
         .navigationTitle(conversation?.title ?? expert.name)

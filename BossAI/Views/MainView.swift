@@ -124,8 +124,17 @@ struct MainView: View {
                     .id(key)
             } else {
                 let raw = String(key.dropFirst("conv-".count))
-                if let uuid = UUID(uuidString: raw),
-                   let conv = conversations.first(where: { $0.id == uuid && $0.ownerKey == HostedAccount.scopeKey }) {
+                let uuid = UUID(uuidString: raw)
+                // P0-45 打开兜底：优先按归属匹配；老数据归属未回填等原因找不到时，
+                // 忽略归属再找一次（打开动作本身会触发归属回填）；两者都找不到才显示欢迎页。
+                // 此前严格归属过滤失败时静默显示欢迎页——用户感知为"历史对话打不开/记录丢了"。
+                let scopedConv = uuid.flatMap { id in
+                    conversations.first(where: { $0.id == id && $0.ownerKey == HostedAccount.scopeKey })
+                }
+                let anyConv = uuid.flatMap { id in
+                    conversations.first(where: { $0.id == id })
+                }
+                if let conv = scopedConv ?? anyConv {
                     ChatContainerView(conversation: conv, expert: conv.expert)
                         .id(key)
                 } else {

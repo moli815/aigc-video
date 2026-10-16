@@ -247,7 +247,10 @@ final class ChatService {
                                     let index = tc["index"] as? Int ?? 0
                                     guard (0..<24).contains(index) else { throw ChatError.incomplete("工具索引超过上限") }
                                     var entry = toolCallBuffer[index] ?? (id: "", name: "", args: "")
-                                    if let id = tc["id"] as? String { entry.id = id }
+                                    // P0-45 修复（实测千问流式格式）：分片会携带 "id":""（空串）——
+                                    // 旧代码 `if let id` 会把空串当成有效值，覆盖首片的真实 ID，
+                                    // 最终触发"工具调用缺少ID"并把整条回复丢掉。空串一律不覆盖。
+                                    if let id = tc["id"] as? String, !id.isEmpty { entry.id = id }
                                     if let fn = tc["function"] as? [String: Any] {
                                         // name 与 arguments 都可能分片下发，必须累加而非覆盖
                                         if let name = fn["name"] as? String { entry.name += name }
@@ -291,16 +294,21 @@ final class ChatService {
                     guard sawDone || finishReason == "stop" || finishReason == "tool_calls" else {
                         throw ChatError.incomplete("连接提前结束，缺少完成标记")
                     }
-                    // 工具调用汇总：按 index 还原顺序，并做总量与字段完整性终检
-                    let calls = toolCallBuffer.sorted { $0.key < $1.key }
+                    // 工具调用汇总与归一化（P0-45，借鉴 DeepSeek Harness 的"管道归一化"原则）：
+                    // 畸形调用（缺 ID / 缺名 / 超参）只丢弃自身，绝不牵连整轮回复——
+                    // 只要能解析出正文或至少一个有效调用，就正常完成；全部无效才视为服务端异常。
+                    let rawCalls = toolCallBuffer.sorted { $0.key < $1.key }
                         .map { ToolCall(id: $0.value.id, name: $0.value.name, arguments: $0.value.args) }
-                    guard calls.count <= 24, calls.allSatisfy({ !$0.id.isEmpty && !$0.name.isEmpty && $0.arguments.utf8.count <= 262144 }) else {
-                        throw ChatError.incomplete("工具调用缺少ID或超过安全上限")
+                    let validCalls = Array(rawCalls
+                        .filter { !$0.id.isEmpty && !$0.name.isEmpty && $0.arguments.utf8.count <= 262_144 }
+                        .prefix(24))
+                    if validCalls.count < rawCalls.count {
+                        PerformanceTrace.event("ToolCallsNormalized")   // 观测：被归一化丢弃的畸形调用次数
                     }
-                    // 空回复防呆：既无正文也无工具调用，视为服务端异常
-                    guard !text.isEmpty || !calls.isEmpty else { throw ChatError.incomplete("服务端返回了空回复") }
-                    if !calls.isEmpty {
-                        continuation.yield(.toolCalls(calls, assistantText: text))
+                    // 空回复防呆：既无正文也无有效工具调用，视为服务端异常
+                    guard !text.isEmpty || !validCalls.isEmpty else { throw ChatError.incomplete("服务端返回了空回复") }
+                    if !validCalls.isEmpty {
+                        continuation.yield(.toolCalls(validCalls, assistantText: text))
                     } else {
                         continuation.yield(.finished)
                     }

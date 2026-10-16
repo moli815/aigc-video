@@ -120,9 +120,24 @@ final class ChatViewModel: ObservableObject {
 
     private var orderedMessageCache: [Message] = []
     private var orderedMessageCount = -1
+    /// P0-45 消息刷新信号：sortedMessages 的缓存失效由手动控制（数量变化自动失效之外，
+    /// 打开历史会话/数据晚到时由 requestMessageReload() 强制失效）。
+    /// 该属性是 @Published——视图 body 读取 sortedMessages（内部会读取本属性）即可建立
+    /// SwiftUI 依赖，任何强制刷新都会触发重渲染——修复"打开历史对话空白且永不自愈"。
+    @Published private(set) var messageRevision = 0
+
+    /// 强制消息列表刷新（重置排序缓存 + 触发视图更新）。
+    /// 使用场景：①打开历史会话首帧（SwiftData 关系解析时序可能返回空）②切后台回来 ③兜底自愈。
+    func requestMessageReload() {
+        orderedMessageCount = -1
+        messageRevision &+= 1
+    }
+
     /// 会话消息按时间排序（带缓存：消息数不变时直接返回上次结果，
-    /// 避免每帧 body 重算排序；数量变化才重建）
+    /// 避免每帧 body 重算排序；数量变化才重建）。
+    /// P0-45：getter 内读取 messageRevision 建立 SwiftUI 依赖——视图与刷新信号强绑定。
     var sortedMessages: [Message] {
+        _ = messageRevision   // 建立依赖（不要删除）
         let messages = conversation?.messages ?? []
         if orderedMessageCount != messages.count {
             orderedMessageCache = messages.sorted { $0.createdAt < $1.createdAt }
@@ -664,6 +679,9 @@ final class ChatViewModel: ObservableObject {
                 }
                 streamingText = fullText
                 assistantMessage.text = fullText
+                // P0-45 落库加固：每个稳定点（工具循环轮次之间）立即显式保存——
+                // 不再依赖系统自动保存的时机，切换会话/杀进程也不会丢已完成的正文。
+                try? modelContext.save()
 
                 if Task.isCancelled { break loop }
                 if pendingToolCalls.isEmpty { exhausted = false; break loop }
