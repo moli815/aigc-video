@@ -287,10 +287,16 @@ final class HostedAccount: ObservableObject {
         return v
     }
     // P0-70 生图动效文案（云端可配）：管理台改文案，30 秒生效、不出包
-    nonisolated static var cachedImgStage1: String { behaviorString("imgStage1", default: "正在构思画面构图…") }
-    nonisolated static var cachedImgStage2: String { behaviorString("imgStage2", default: "正在绘制细节与光影…") }
-    nonisolated static var cachedImgStage3: String { behaviorString("imgStage3", default: "正在精修渲染，马上就好…") }
+    nonisolated static var cachedImgStage1: String { behaviorString("imgStage1", default: "正在绘制中...") }
+    nonisolated static var cachedImgStage2: String { behaviorString("imgStage2", default: "正在绘制中...") }
+    nonisolated static var cachedImgStage3: String { behaviorString("imgStage3", default: "正在绘制中...") }
     nonisolated static var cachedImgEta: String { behaviorString("imgEta", default: "AI 生成约需 1 分钟") }
+    /// P0-74 生图后视觉验证（不符自动重试一次）；云端可关
+    nonisolated static var cachedImageVerify: Bool {
+        guard isHostedActive else { return false }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["imageVerify"] as? Bool
+        return v ?? true
+    }
 
     nonisolated static var cachedDeepResearchEnabled: Bool {
         if !isHostedActive { return false }   // 自备 Key 模式不放大成本
@@ -423,6 +429,7 @@ final class HostedAccount: ObservableObject {
             "imgStage2": (appBehavior?["imgStage2"] as? String) ?? "",
             "imgStage3": (appBehavior?["imgStage3"] as? String) ?? "",
             "imgEta": (appBehavior?["imgEta"] as? String) ?? "",
+            "imageVerify": (appBehavior?["imageVerify"] as? Bool) ?? true,
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
