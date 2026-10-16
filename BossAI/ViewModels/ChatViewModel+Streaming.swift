@@ -454,9 +454,26 @@ extension ChatViewModel {
                 failedUserMessageID = sortedMessages.last(where: { $0.role == "user" })?.id
                 failedAssistantMessageID = assistantMessage.id
                 let received = !assistantMessage.text.isEmpty || assistantMessage.imageData != nil
-                errorMessage = (received ? "回复中断，已保留部分内容。重新生成将替换这次回复。\n" : "未收到有效回复，可重新生成。\n") + error.localizedDescription
-                if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
-                    modelContext.delete(assistantMessage)
+                // P0-60 稳定调用核心防线：网络类中断（超时/断连，非用户停止）且未收到任何内容
+                // → 自动重试一次（复用 retryReply 状态机；弱网/切网由系统自动恢复，用户无感）。
+                // 仅自动重试一次（didAutoRetry 防死循环），且仅在"什么都没收到"时（避免内容重复）。
+                let transient = ((error as? URLError) != nil) && ((error as? URLError)?.code != .cancelled)
+                if transient, !received, !didAutoRetry {
+                    didAutoRetry = true
+                    errorMessage = nil
+                    if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
+                        modelContext.delete(assistantMessage)
+                    }
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)   // 等网络恢复窗口
+                        guard let self, !Task.isCancelled, self.canRetryReply else { return }
+                        self.retryReply()
+                    }
+                } else {
+                    errorMessage = (received ? "回复中断，已保留部分内容。重新生成将替换这次回复。\n" : "未收到有效回复，可重新生成。\n") + error.localizedDescription
+                    if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
+                        modelContext.delete(assistantMessage)
+                    }
                 }
             }
         }
