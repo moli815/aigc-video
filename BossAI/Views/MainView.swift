@@ -570,12 +570,7 @@ struct QuotaSidebarWidget: View {
                 }
             }
             HStack(spacing: 6) {
-                QuotaSidebarRing(pct: HostedAccount.cachedDayRemainingPct,
-                                 tint: theme.accent, label: "今日",
-                                 resetAt: HostedAccount.cachedDayResetAt)
-                QuotaSidebarRing(pct: HostedAccount.cachedWeekRemainingPct,
-                                 tint: theme.accentSecondary, label: "本周",
-                                 resetAt: HostedAccount.cachedWeekResetAt)
+                // P0-57 额度展示精简：只保留「本月」额度环（用户明确要求取消周/日显示）
                 QuotaSidebarRing(pct: HostedAccount.cachedMonthRemainingPct,
                                  tint: .cyan, label: "本月",
                                  resetAt: HostedAccount.cachedMonthResetAt)
