@@ -280,6 +280,18 @@ final class HostedAccount: ObservableObject {
     /// 生图失败重试次数（0=关闭）；云端可调，默认 1
     nonisolated static var cachedImageRetry: Int { behaviorInt("imageRetry", default: 1) }
 
+    private nonisolated static func behaviorString(_ key: String, default def: String) -> String {
+        guard isHostedActive else { return def }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? String
+        guard let v, !v.isEmpty else { return def }
+        return v
+    }
+    // P0-70 生图动效文案（云端可配）：管理台改文案，30 秒生效、不出包
+    nonisolated static var cachedImgStage1: String { behaviorString("imgStage1", default: "正在构思画面构图…") }
+    nonisolated static var cachedImgStage2: String { behaviorString("imgStage2", default: "正在绘制细节与光影…") }
+    nonisolated static var cachedImgStage3: String { behaviorString("imgStage3", default: "正在精修渲染，马上就好…") }
+    nonisolated static var cachedImgEta: String { behaviorString("imgEta", default: "AI 生成约需 1 分钟") }
+
     nonisolated static var cachedDeepResearchEnabled: Bool {
         if !isHostedActive { return false }   // 自备 Key 模式不放大成本
         return (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["deepResearch"] as? Bool) ?? false
@@ -407,6 +419,10 @@ final class HostedAccount: ObservableObject {
             "imageTimeout": (appBehavior?["imageTimeout"] as? NSNumber)?.doubleValue ?? 180,
             "streamRetry": (appBehavior?["streamRetry"] as? NSNumber)?.doubleValue ?? 1,
             "imageRetry": (appBehavior?["imageRetry"] as? NSNumber)?.doubleValue ?? 1,
+            "imgStage1": (appBehavior?["imgStage1"] as? String) ?? "",
+            "imgStage2": (appBehavior?["imgStage2"] as? String) ?? "",
+            "imgStage3": (appBehavior?["imgStage3"] as? String) ?? "",
+            "imgEta": (appBehavior?["imgEta"] as? String) ?? "",
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
