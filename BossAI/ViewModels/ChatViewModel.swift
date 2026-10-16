@@ -201,10 +201,15 @@ final class ChatViewModel: ObservableObject {
 
     /// P0-52 Hermes 式失败重试：上游网关/超时类失败自动重试一次（网络抖动救回；参数/额度不重试）。
     /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
+    /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
+    /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
     nonisolated static func generateImageWithRetry(prompt: String, reference: Data?, service: ImageService) async throws -> Data {
         do {
             return try await service.generate(prompt: prompt, reference: reference)
-        } catch let e as ImageService.ImageError where e.isRetryable {
+        } catch {
+            let retryable = (error as? URLError) != nil
+                || ((error as? ImageService.ImageError)?.isRetryable ?? false)
+            guard retryable else { throw error }
             try await Task.sleep(nanoseconds: 1_200_000_000)
             return try await service.generate(prompt: prompt, reference: reference)
         }
