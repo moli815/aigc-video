@@ -299,6 +299,9 @@ extension ChatViewModel {
                                 "content": String(format: "本月生图额度已用完（上限 ¥%.0f，已用约 ¥%.2f）。请告知用户：可在设置中调整生图额度，或等下月 1 日自动恢复；本次未生成图片。", BudgetTracker.imageLimit(), BudgetTracker.imageSpent()),
                             ])
                         } else {
+                        // P0-50 ChatGPT 式生图加载：执行期间在消息流里显示占位动画行
+                        pendingImage = String(prompt.prefix(24))
+                        defer { pendingImage = nil }
                         do {
                             let reference = editLast ? lastGeneratedImage : nil
                             let imageData = try await imageService.generate(prompt: prompt, reference: reference)
@@ -314,10 +317,12 @@ extension ChatViewModel {
                                 "content": "图片已生成并展示给用户。",
                             ])
                         } catch {
+                            // P0-50 防谎报强化：失败信息必须让模型"不可能误读为成功"——
+                            // 此前弱措辞被模型忽略，出现"没生成却说已生成"的严重体验问题。
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "图片生成失败：\(error.localizedDescription)，请用文字回复用户并致歉。",
+                                "content": "【严重错误：图片生成失败，用户没有收到任何图片】\n失败原因：\(error.localizedDescription)\n\n你必须严格遵守：\n1. 明确告诉用户图片没有生成成功；\n2. 简述上面的失败原因；\n3. 建议用户点击重试或稍后再试。\n\n禁止使用「已生成」「已展示」「请查收」「已按您的要求生成」等任何暗示成功的表述——本次调用没有产出任何图片。",
                             ])
                         }
                         }
