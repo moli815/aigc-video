@@ -186,6 +186,8 @@ final class SyncService {
         context.insert(conv)
         for raw in (dict["messages"] as? [[String: Any]]) ?? [] {
             let msg = Message(role: raw["role"] as? String ?? "user", text: raw["text"] as? String ?? "")
+        msg.conversation = conv
+        msg.conversationID = conv.id
             if let mid = raw["id"] as? String, let muuid = UUID(uuidString: mid) { msg.id = muuid }
             msg.sourcesJSON = raw["sourcesJSON"] as? String ?? ""
             msg.attachmentIds = raw["attachmentIds"] as? String ?? ""
