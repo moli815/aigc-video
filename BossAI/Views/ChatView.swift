@@ -48,6 +48,23 @@ struct ChatContainerView: View {
     var onConversationCreated: (Conversation) -> Void = { _ in }
     var initialText: String = ""
 
+    /// P0-46 @Query 派生视图：消息渲染改为 SwiftData 响应式数据源（数据变化自动刷新，
+    /// 根治"打开历史对话空白/同步回来不显示"类问题）。草稿态（conversation 为 nil）
+    /// 仍走 VM 的 sortedMessages（发送后才落库）。
+    @Query private var liveMessages: [Message]
+
+    init(conversation: Conversation?, expert: Expert,
+         onConversationCreated: @escaping (Conversation) -> Void = { _ in },
+         initialText: String = "") {
+        self.conversation = conversation
+        self.expert = expert
+        self.onConversationCreated = onConversationCreated
+        self.initialText = initialText
+        let cid = conversation?.id
+        _liveMessages = Query(filter: #Predicate<Message> { $0.conversationID == cid },
+                              sort: \Message.createdAt)
+    }
+
     /// VM 延迟持有器：body 首次求值时 VM 还未创建，用 Optional 包一层，
     /// 建好后触发 ChatView 挂载
     final class ViewModelHolder: ObservableObject {
@@ -57,7 +74,10 @@ struct ChatContainerView: View {
     var body: some View {
         Group {
             if let vm = viewModelHolder.vm {
-                ChatView(viewModel: vm, previewFile: $previewFile)
+                ChatView(viewModel: vm,
+                         liveMessages: liveMessages,
+                         useLiveMessages: conversation != nil,
+                         previewFile: $previewFile)
             } else {
                 Color.clear
             }
@@ -238,12 +258,29 @@ struct ChatView: View {
     private final class ScrollClock { var lastTime: TimeInterval = 0; var pending: Task<Void, Never>? }
     @ObservedObject var viewModel: ChatViewModel
     @Binding var previewFile: StoredFile?
+    // P0-46 @Query 派生视图：已有会话时用 SwiftData 响应式消息源（自动刷新），
+    // 草稿态回退 VM 的 sortedMessages。
+    let liveMessages: [Message]
+    let useLiveMessages: Bool
     // P0-4 编辑重发
     @State private var editTarget: Message?
 
+    init(viewModel: ChatViewModel, liveMessages: [Message] = [], useLiveMessages: Bool = false,
+         previewFile: Binding<StoredFile?>) {
+        self.viewModel = viewModel
+        self.liveMessages = liveMessages
+        self.useLiveMessages = useLiveMessages
+        self._previewFile = previewFile
+    }
+
+    /// 渲染数据源：已有会话走 @Query（响应式），草稿态走 VM 缓存。
+    private var displayMessages: [Message] {
+        useLiveMessages ? liveMessages : viewModel.sortedMessages
+    }
+
     /// 一次性贴底请求：写入末条消息 id，由 ScrollViewReader 消费后立即清空（关键：不做持久锚定）。
     private func requestScrollToBottom(animated: Bool = false, delay: TimeInterval = 0) {
-        guard let lastID = viewModel.sortedMessages.last?.id else { return }
+        guard let lastID = displayMessages.last?.id else { return }
         let fire = {
             pendingScrollAnimated = animated
             pendingScrollTarget = lastID
@@ -307,17 +344,17 @@ struct ChatView: View {
         ScrollViewReader { proxy in
         ScrollView {
                 LazyVStack(spacing: 0) {
-                    if viewModel.sortedMessages.isEmpty {
+                    if displayMessages.isEmpty {
                         EmptyStateView(expert: viewModel.expert)
                     }
-                    ForEach(viewModel.sortedMessages, id: \.id) { message in
+                    ForEach(displayMessages, id: \.id) { message in
                         Group {
                             if message.id == viewModel.streamingMessageId {
                                 StreamingMessageRow(message: message, buffer: viewModel.replyBuffer,
                                                     files: viewModel.files(for: message), onPreview: { previewFile = $0 })
                             } else {
                                 MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 },
-                                           isLastAssistant: message.role == "assistant" && message.id == viewModel.sortedMessages.last?.id,
+                                           isLastAssistant: message.role == "assistant" && message.id == displayMessages.last?.id,
                                            onRegenerate: viewModel.canRegenerateLast ? { viewModel.regenerateLastReply() } : nil)
                             }
                         }
@@ -392,7 +429,7 @@ struct ChatView: View {
             .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { value in
                 if abs(value.translation.height) > abs(value.translation.width), value.translation.height > 5 { followOutput = false }
             })
-            .onChange(of: viewModel.sortedMessages.count) { _, _ in
+            .onChange(of: displayMessages.count) { _, _ in
                 guard followOutput else { return }
                 requestScrollToBottom()
             }
@@ -433,7 +470,7 @@ struct ChatView: View {
             }
 
             // P0-5 专家开场提示：空会话时展示在输入框上方，点击填充（可编辑再发送）
-            if viewModel.sortedMessages.isEmpty, viewModel.streamingMessageId == nil {
+            if displayMessages.isEmpty, viewModel.streamingMessageId == nil {
                 let starters = ExpertCatalog.starters(for: viewModel.expert)
                 if !starters.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
