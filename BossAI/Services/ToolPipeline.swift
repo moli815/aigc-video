@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftData
 
 // ============================================================================
@@ -47,13 +48,30 @@ enum ToolPipeline {
                                 text: String = "",
                                 context: ModelContext) -> Message {
         let msg = Message(role: "assistant", text: text)
-        if let imageData { msg.imageData = imageData }
+        if let imageData {
+            msg.imageData = imageData
+            msg.thumbnailData = makeThumbnail(imageData)   // P0-69 缩略图分层
+        }
         if let attachmentIDs { msg.attachmentIds = attachmentIDs }
         msg.conversation = conversation
         msg.conversationID = conversation.id
         context.insert(msg)
         try? context.save()
         return msg
+    }
+
+    /// P0-69 缩略图生成（长边 400px、JPEG 0.7）：列表渲染用——防大图（2K 约数 MB）在列表滚动时卡顿；
+    /// 小图原样返回；生成失败回退 nil（渲染层自动用原图）。
+    static func makeThumbnail(_ data: Data) -> Data? {
+        guard let img = UIImage(data: data) else { return nil }
+        let maxSide: CGFloat = 400
+        let longSide = max(img.size.width, img.size.height)
+        guard longSide > maxSide else { return data }
+        let scale = maxSide / longSide
+        let target = CGSize(width: img.size.width * scale, height: img.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let scaled = renderer.image { _ in img.draw(in: CGRect(origin: .zero, size: target)) }
+        return scaled.jpegData(compressionQuality: 0.7)
     }
 
     /// 参数缺失的标准回注（统一）：模型漏传必需参数时明确报错而非静默失败
