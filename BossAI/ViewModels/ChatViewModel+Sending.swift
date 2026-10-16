@@ -39,7 +39,7 @@ extension ChatViewModel {
         errorMessage = nil
         failedUserMessageID = nil
         failedAssistantMessageID = nil
-        didAutoRetry = false   // P0-60 新一轮消息重置自动重试标记
+        autoRetryCount = 0   // P0-60/P0-64 新一轮消息重置自动重试计数
         suggestedFollowUps = []
 
         // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
