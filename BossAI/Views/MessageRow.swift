@@ -71,7 +71,7 @@ struct MessageRow: View {
                 HStack(alignment: .top, spacing: 10) {
                     AssistantAvatar()
                     VStack(alignment: .leading, spacing: 8) {
-                        if let data = message.imageData {
+                        if let data = message.thumbnailData ?? message.imageData {   // P0-69 缩略图优先（点开预览用原图）
                             MessageImageView(data: data).equatable()
                         }
                         ForEach(files, id: \.id) { file in
