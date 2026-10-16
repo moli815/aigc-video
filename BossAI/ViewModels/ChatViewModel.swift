@@ -484,9 +484,15 @@ final class ChatViewModel: ObservableObject {
         if HostedAccount.cachedCustomExpertEnabled {
             caps.append("自定义专家：用户可上传公司资料创建专属专家，涉及公司内部知识时可提醒用户在自定义专家里维护资料")
         }
-        guard !caps.isEmpty else { return "" }
-        return "\n【你所在的 App 能力清单】以下是中防AI已支持的功能，相关请求不得回答'做不到'：\n"
-            + caps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        // P0-59 能力清单 = App 功能（云端权限驱动）+ 工具能力边界（ToolRegistry 单一真相来源）。
+        // 后者让模型明确知道每个工具"能做什么/不能做什么"，根治能力幻觉导致的谎报。
+        var text = ""
+        if !caps.isEmpty {
+            text = "\n【你所在的 App 能力清单】以下是中防AI已支持的功能，相关请求不得回答'做不到'：\n"
+                + caps.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        }
+        text += "\n\n" + ToolRegistry.capabilityManifest(cloudExtra: HostedAccount.cachedCapabilityExtra, overrides: HostedAccount.cachedCapabilityOverrides)
+        return text
     }
 }
 
