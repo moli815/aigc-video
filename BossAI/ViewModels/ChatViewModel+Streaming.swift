@@ -291,6 +291,12 @@ extension ChatViewModel {
                         statusText = "正在生成图片…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
+                        // P0-64 missingArgsNote 接入：prompt 缺失（且无用户原话兜底）时明确报错而非执行空请求
+                        if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                "content": ToolPipeline.missingArgsNote(pluginID: "generate_image", missing: ["prompt"])])
+                            continue
+                        }
                         let editLast = args?["edit_last_image"] as? Bool ?? false
                         // P0-57 支持编辑用户上传的图（此前只支持编辑 AI 生成的图，导致"把Logo放图二上"静默失败）
                         let useAttached = args?["use_attached_image"] as? Bool ?? false
@@ -337,6 +343,12 @@ extension ChatViewModel {
                         let filename = args?["filename"] as? String ?? "文档"
                         let title = (args?["title"] as? String) ?? filename
                         let content = args?["content"] as? String ?? ""
+                        // P0-64 missingArgsNote 接入：正文为空时明确报错
+                        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                "content": ToolPipeline.missingArgsNote(pluginID: "create_document", missing: ["content"])])
+                            continue
+                        }
                         let format: DocumentFormat = {
                             switch formatRaw {
                             case "ppt", "pptx", "powerpoint", "slide": return .ppt
@@ -458,8 +470,10 @@ extension ChatViewModel {
                 // → 自动重试一次（复用 retryReply 状态机；弱网/切网由系统自动恢复，用户无感）。
                 // 仅自动重试一次（didAutoRetry 防死循环），且仅在"什么都没收到"时（避免内容重复）。
                 let transient = ((error as? URLError) != nil) && ((error as? URLError)?.code != .cancelled)
-                if transient, !received, !didAutoRetry {
-                    didAutoRetry = true
+                // P0-64 重试上限云端可调（在线可修复）
+                let retryLimit = HostedAccount.isHostedActive ? HostedAccount.cachedStreamRetry : 1
+                if transient, !received, autoRetryCount < retryLimit {
+                    autoRetryCount += 1
                     errorMessage = nil
                     if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
                         modelContext.delete(assistantMessage)
