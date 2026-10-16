@@ -505,11 +505,11 @@ final class ChatService {
                 ],
                 "edit_last_image": [
                     "type": "boolean",
-                    "description": "是否基于对话中最近一张生成的图片进行编辑修改",
+                    "description": "是否以对话中最近一张生成的图片为底图（如「把这张海报改一改」）。若同时要把用户上传的图（Logo/素材）叠加到底图上，edit_last_image 与 use_attached_image 同时设为 true",
                 ],
                 "use_attached_image": [
                     "type": "boolean",
-                    "description": "是否基于用户本轮上传的图片进行编辑（如「把 Logo 放到这张图上」「给上传的图加字」）。用户明确提到要改他上传的图片时设为 true",
+                    "description": "是否使用用户本轮上传的图片：①单独 true = 编辑上传的图；②与 edit_last_image 同时 true = 双图融合（把上传的 Logo/素材叠加到最近生成的图上，提示词里说明叠加位置），如「把 Logo 加到刚才的海报上」「在图片二上面加我们的 logo」等场景",
                 ],
             ],
             "required": ["prompt"],
