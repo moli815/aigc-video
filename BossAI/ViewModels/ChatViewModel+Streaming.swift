@@ -276,7 +276,7 @@ extension ChatViewModel {
                             let args = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any]
                             let result = try ExpertKnowledgeService.toolResult(args?["query"] as? String ?? userText, context: modelContext)
                             apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
-                        } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": error.localizedDescription]) }
+                        } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "资料库检索失败：" + error.localizedDescription + "。请明确告知用户检索失败、未找到相关资料。"]) }
                     case "expert_skill":
                         do {
                             let span = PerformanceTrace.begin("ExpertSkill")
@@ -285,7 +285,7 @@ extension ChatViewModel {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
                         } catch {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                "content": error.localizedDescription])
+                                                "content": "专家技能执行失败：" + error.localizedDescription + "。请明确告知用户该操作未能完成，不要声称已完成。"])
                         }
                     case "generate_image":
                         statusText = "正在生成图片…"
@@ -382,10 +382,11 @@ extension ChatViewModel {
                             toast = "已生成 \(finalName)"
                             // Local document packaging has no additional model API fee.
                         } catch {
+                            // P0-51 防谎报：文档失败也要强措辞（此前与生图同款弱措辞，模型会无视继续"已生成"）
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "文件生成失败：\(error.localizedDescription)",
+                                "content": "【严重错误：文件生成失败，用户没有收到任何文件】\n失败原因：\(error.localizedDescription)\n\n你必须：1. 明确告诉用户文件没有生成成功；2. 简述失败原因；3. 建议重试。\n禁止使用「已生成」「已保存」「请查收」「已放入资料库」等任何暗示成功的表述。",
                             ])
                         }
 
@@ -422,7 +423,7 @@ extension ChatViewModel {
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "图表参数无效（labels 与 values 必须一一对应且不超过 8 项）。请检查后重试，或改用 Markdown 表格呈现数据。",
+                                "content": "【图表未生成】参数无效（labels 与 values 必须一一对应且不超过 8 项）。请明确告知用户图表未能生成，建议改用 Markdown 表格呈现数据。",
                             ])
                         }
 
