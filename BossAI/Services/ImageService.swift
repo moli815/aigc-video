@@ -84,12 +84,12 @@ final class ImageService {
                 // 修复「把用户上传的 Logo 加到 AI 上次生成的图上」这类双图场景（此前单图只能传一张，底图会搞错）
                 let uris = references.map { ref -> String in
                     let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
-                    return "data://(mime);base64,//(ref.base64EncodedString())"
+                    return "data:\(mime);base64,\(ref.base64EncodedString())"
                 }
                 body["image"] = uris.count == 1 ? uris[0] : uris   // 单图保持字符串（兼容），多图传数组
             }
         case .zhipu:
-            if reference != nil { throw ImageError.unsupportedEdit }
+            if !references.isEmpty { throw ImageError.unsupportedEdit }
             // CogView：仅文生图，返回 URL
             break
         }
