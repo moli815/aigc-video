@@ -79,7 +79,7 @@ extension ChatViewModel {
     }
 
     /// 一次性把资料库文件读进内存缓存，避免每条消息各查一次数据库
-    private func ensureFileCache() {
+    func ensureFileCache() {
         guard !fileCacheLoaded else { return }
         let descriptor = FetchDescriptor<StoredFile>()
         let all = (try? modelContext.fetch(descriptor)) ?? []
@@ -87,12 +87,12 @@ extension ChatViewModel {
         fileCacheLoaded = true
     }
 
-    private func invalidateFileCache() {
+    func invalidateFileCache() {
         fileCacheLoaded = false
         fileCache = [:]
     }
 
-    private func storedFile(id: String) -> StoredFile? {
+    func storedFile(id: String) -> StoredFile? {
         guard let uuid = UUID(uuidString: id) else { return nil }
         ensureFileCache()
         return fileCache[uuid]
