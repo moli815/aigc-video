@@ -47,6 +47,8 @@ struct ChatContainerView: View {
     let expert: Expert
     var onConversationCreated: (Conversation) -> Void = { _ in }
     var initialText: String = ""
+    /// P0-47 方案 A：草稿态预置研究模式（侧栏「深度研究」入口 → 新对话默认联网研究）
+    var initialResearchMode: ResearchMode?
 
     /// P0-46 @Query 派生视图：消息渲染改为 SwiftData 响应式数据源（数据变化自动刷新，
     /// 根治"打开历史对话空白/同步回来不显示"类问题）。草稿态（conversation 为 nil）
@@ -55,11 +57,13 @@ struct ChatContainerView: View {
 
     init(conversation: Conversation?, expert: Expert,
          onConversationCreated: @escaping (Conversation) -> Void = { _ in },
-         initialText: String = "") {
+         initialText: String = "",
+         initialResearchMode: ResearchMode? = nil) {
         self.conversation = conversation
         self.expert = expert
         self.onConversationCreated = onConversationCreated
         self.initialText = initialText
+        self.initialResearchMode = initialResearchMode
         let cid = conversation?.id
         _liveMessages = Query(filter: #Predicate<Message> { $0.conversationID == cid },
                               sort: \Message.createdAt)
@@ -93,6 +97,8 @@ struct ChatContainerView: View {
                 imageKey: { credentials.imageKey }
             )
             vm.inputText = initialText
+            // P0-47 方案 A：预置研究模式（深度研究入口）
+            if let initialResearchMode { vm.researchMode = initialResearchMode }
             vm.onConversationCreated = { created in
                 onConversationCreated(created)
             }
