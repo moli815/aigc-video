@@ -409,12 +409,15 @@ final class ChatService {
             }
         }
 
+        // P0-59 可用性预过滤（对照 Hermes check_fn 语义）：不可用的能力不进 tools[]——
+        // 模型看不到就不会误调用/不会谎报能做到（"调用顺畅且不易出错"的第一道防线）
+        let availableIDs = Set(ToolRegistry.availablePlugins().map { $0.id })
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if canSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
-        if canImage { tools.append(["type": "function", "function": Self.generateImageFunction]) }
-        tools.append(["type": "function", "function": Self.renderChartFunction])
+        if canSearch && allowSearch && !nativeSearch && availableIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if canImage && availableIDs.contains("generate_image") { tools.append(["type": "function", "function": Self.generateImageFunction]) }
+        if availableIDs.contains("render_chart") { tools.append(["type": "function", "function": Self.renderChartFunction]) }
         // 文档导出工具：可导出格式由权限解析统一给出（云端工具优先，本地档案兜底）
-        if !perms.docFormats.isEmpty {
+        if !perms.docFormats.isEmpty && availableIDs.contains("create_document") {
             var document = Self.createDocumentFunction
             var parameters = document["parameters"] as? [String: Any] ?? [:]
             var properties = parameters["properties"] as? [String: Any] ?? [:]
@@ -423,10 +426,10 @@ final class ChatService {
             document["parameters"] = parameters
             tools.append(["type": "function", "function": document])
         }
-        tools.append(["type": "function", "function": Self.expertSkillFunction(capability)])
-        tools.append(["type": "function", "function": ["name": "search_library",
+        if availableIDs.contains("expert_skill") { tools.append(["type": "function", "function": Self.expertSkillFunction(capability)]) }
+        if availableIDs.contains("search_library") { tools.append(["type": "function", "function": ["name": "search_library",
             "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
-            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]])
+            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]]) }
         body["tools"] = tools
     }
 
