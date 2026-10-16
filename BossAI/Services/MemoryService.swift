@@ -73,7 +73,8 @@ final class MemoryService {
         \(recentDialogue)
         """
 
-        var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
+        guard let url = URL(string: "\(profile.baseURL)/chat/completions") else { return }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
