@@ -100,6 +100,8 @@ final class HostedAccount: ObservableObject {
     /// P0-59 云端能力声明（管理台可改）：补充说明 + 按 id 覆盖（enabled/limits）——能力声明云端化
     private(set) var capabilityExtra: String?
     private(set) var capabilityOverridesRaw: String?
+    /// P0-64 App 远程行为配置（超时/重试次数，云端可调）
+    private(set) var appBehavior: [String: Any]?
     /// P0-19 白标品牌名（Ultra 专属；默认"中防AI"）
     @Published private(set) var appName: String = "中防AI"
     // P0-16 数据隔离键所用的登录名（登录时确定，不随显示名变化）
@@ -255,6 +257,29 @@ final class HostedAccount: ObservableObject {
         return obj
     }
 
+    // MARK: P0-64 App 远程行为配置（在线可修复）——服务端 /me 下发，管理台改数即生效、不用出包
+
+    private nonisolated static func behaviorDouble(_ key: String, default def: Double) -> Double {
+        guard isHostedActive else { return def }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? Double
+        guard let v, v > 0 else { return def }
+        return v
+    }
+    private nonisolated static func behaviorInt(_ key: String, default def: Int) -> Int {
+        guard isHostedActive else { return def }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? Double
+        guard let v, v >= 0 else { return def }
+        return Int(v)
+    }
+    /// 对话请求超时（秒）；云端可调，默认 120
+    nonisolated static var cachedChatTimeout: TimeInterval { behaviorDouble("chatTimeout", default: 120) }
+    /// 生图请求超时（秒）；云端可调，默认 180
+    nonisolated static var cachedImageTimeout: TimeInterval { behaviorDouble("imageTimeout", default: 180) }
+    /// 流式中断自动重试次数（0=关闭）；云端可调，默认 1
+    nonisolated static var cachedStreamRetry: Int { behaviorInt("streamRetry", default: 1) }
+    /// 生图失败重试次数（0=关闭）；云端可调，默认 1
+    nonisolated static var cachedImageRetry: Int { behaviorInt("imageRetry", default: 1) }
+
     nonisolated static var cachedDeepResearchEnabled: Bool {
         if !isHostedActive { return false }   // 自备 Key 模式不放大成本
         return (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["deepResearch"] as? Bool) ?? false
@@ -378,6 +403,10 @@ final class HostedAccount: ObservableObject {
             "customExpert": features?["customExpert"] as? Bool ?? false,
             "capabilityExtra": capabilityExtra ?? "",
             "capabilityOverrides": capabilityOverridesRaw ?? "",
+            "chatTimeout": (appBehavior?["chatTimeout"] as? NSNumber)?.doubleValue ?? 120,
+            "imageTimeout": (appBehavior?["imageTimeout"] as? NSNumber)?.doubleValue ?? 180,
+            "streamRetry": (appBehavior?["streamRetry"] as? NSNumber)?.doubleValue ?? 1,
+            "imageRetry": (appBehavior?["imageRetry"] as? NSNumber)?.doubleValue ?? 1,
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
@@ -586,6 +615,8 @@ final class HostedAccount: ObservableObject {
             if let au = json["appUpdate"] as? [String: Any] { appUpdate = au }
             // P0-59 能力声明云端化：补充说明与覆盖（新能力/边界调整云端配置即生效，无 App 出包）
             capabilityExtra = (json["capabilityExtra"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // P0-64 App 远程行为配置（在线可修复）：超时/重试次数由云端下发
+            if let ab = json["appBehavior"] as? [String: Any] { appBehavior = ab }
             if let ovObj = json["capabilityOverrides"],
                let ovData = try? JSONSerialization.data(withJSONObject: ovObj),
                let ovStr = String(data: ovData, encoding: .utf8) {
