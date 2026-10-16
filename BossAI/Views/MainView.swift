@@ -71,15 +71,11 @@ struct MainView: View {
                 containerKey = nil
                 showLibrary = true
             },
-            onOpenTasks: {
-                // P0-47 方案 A「定时任务」入口：打开身份页（内含定时任务卡：Pro 3 / Ultra 10）
-                showIdentity = true
-            },
+            onHiddenSettings: { showPinEntry = true },
             onOpenResearch: {
                 // P0-47 方案 A「深度研究」入口：新开草稿并预置联网研究模式
                 startNewDraft(ExpertCatalog.find("general"), researchMode: .online)
-            },
-            onHiddenSettings: { showPinEntry = true })
+            })
         } detail: {
             detailContent
         }
@@ -251,8 +247,7 @@ struct SidebarView: View {
     var onDeleteConversation: (Conversation) -> Void = { _ in }
     var onOpenLibrary: () -> Void = {}
     var onHiddenSettings: () -> Void = {}
-    // P0-47 方案 A 实装：顶部一级入口回调
-    var onOpenTasks: () -> Void = {}
+    // P0-47 方案 A 实装：顶部「深度研究」入口回调（定时任务走侧栏内部身份页 sheet）
     var onOpenResearch: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
@@ -284,7 +279,8 @@ struct SidebarView: View {
                 // P0-47 方案 A：一级入口三件套（线性简笔图标，与专家列表视觉语言统一）
                 Section {
                     Button {
-                        onOpenTasks()
+                        // 身份页内含定时任务卡（Pro 3 / Ultra 10），侧栏自带的 sheet 直接打开
+                        showIdentity = true
                     } label: {
                         Label { Text("定时任务") } icon: { Image(systemName: "clock") }
                             .foregroundStyle(Color.primary)
