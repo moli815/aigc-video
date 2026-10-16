@@ -311,8 +311,14 @@ extension ChatViewModel {
                         pendingImage = String(prompt.prefix(24))
                         defer { pendingImage = nil }
                         do {
-                            let reference = editLast ? lastGeneratedImage : (useAttached ? attachedImageData(in: conv) : nil)
-                            let imageData = try await Self.generateImageWithRetry(prompt: prompt, reference: reference, service: imageService)
+                            // P0-65 参考图收集（0-2 张，顺序 = [底图, 叠加元素]）：
+                            // · 仅 edit_last_image → 编辑 AI 上次生成的图
+                            // · 仅 use_attached_image → 编辑用户上传的图
+                            // · 两者都为 true → 双图融合（如"把 logo 加到上次的海报上"）
+                            var refs: [Data] = []
+                            if editLast, let last = lastGeneratedImage { refs.append(last) }
+                            if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
+                            let imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService)
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
                             ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
