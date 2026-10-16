@@ -61,6 +61,8 @@ final class ChatViewModel: ObservableObject {
     @Published var toast: String?
     // P0-50 生图占位（ChatGPT 式加载动效）：非 nil 时消息流底部显示 shimmer 占位行
     @Published var pendingImage: String?
+    // P0-60 稳定调用：本轮是否已自动重试过（防死循环；send 时重置）
+    var didAutoRetry = false
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
     let replyBuffer = StreamingReplyBuffer()
     /// 流式文本的读写代理（实际存储在 replyBuffer）
