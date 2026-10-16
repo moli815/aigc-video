@@ -51,8 +51,10 @@ final class ImageService {
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
     func generate(prompt: String, reference: Data? = nil) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
-
-        var request = URLRequest(url: URL(string: "\(profile.baseURL)/images/generations")!)
+        guard let url = URL(string: "\(profile.baseURL)/images/generations") else {
+            throw ImageError.badResponse(400, "服务地址无效")
+        }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
