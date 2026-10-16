@@ -121,7 +121,10 @@ final class ChatService {
                 var receivedFirstDelta = false
                 do {
                     guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ChatError.missingKey }
-                    var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
+                    guard let url = URL(string: "\(profile.baseURL)/chat/completions") else {
+                        throw ChatError.incomplete("服务地址无效")
+                    }
+                    var request = URLRequest(url: url)
                     request.httpMethod = "POST"
                     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
