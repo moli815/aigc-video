@@ -156,6 +156,7 @@ extension ChatViewModel {
                         firstTokenFlag.set()
                         deepHintTask = nil
                         assistantText += delta
+                        if isReasoning { isReasoning = false }   // P0-68 正文开始，结束思考提示
                         // 合并发布内存缓冲，不逐delta写库；实际视图重算范围需Instruments确认。
                         let now = ProcessInfo.processInfo.systemUptime
                         if streamingText.isEmpty || now - lastPublishTime >= 0.08 {
@@ -164,6 +165,7 @@ extension ChatViewModel {
                         }
                     case .reasoningDelta(let delta):
                         reasoningText += delta
+                        if !isReasoning { isReasoning = true }   // P0-68 思考中提示
                     case .status(let s):
                         statusText = s
                     case .nativeSearchUnavailable:
