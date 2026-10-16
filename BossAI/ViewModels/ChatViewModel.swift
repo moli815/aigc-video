@@ -110,6 +110,35 @@ final class ChatViewModel: ObservableObject {
          researchService: any ResearchSearching = DefaultResearchSearch(),
          searchPlanner: (@Sendable (String, String) async -> SearchPlan?)? = nil) {
         self.conversation = conversation
+        // P0-68 注入服务端官方搜索实现（WebSearchService 不依赖 App 层类型——含本文件亦是，
+        // 由这里提供闭包实现；服务端未配置/失败时返回 nil，搜索自动降级本地多引擎）
+        WebSearchService.hostedSearchProvider = { query, count in
+            let token: String? = await MainActor.run {
+                HostedAccount.isHostedActive ? HostedAccount.shared.token : nil
+            }
+            guard let token, !token.isEmpty,
+                  let url = URL(string: AppConfig.hostedAPIBase + "/tools/search") else { return nil }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["query": query, "count": count])
+            req.timeoutInterval = 15
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = j["results"] as? [[String: Any]], !results.isEmpty else { return nil }
+            let hits: [SearchHit] = results.compactMap { r in
+                guard let title = r["title"] as? String, let u = r["url"] as? String,
+                      !title.isEmpty, !u.isEmpty else { return nil }
+                var snippet = (r["summary"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? (r["snippet"] as? String) ?? ""
+                if let auth = r["authority"] as? Int, auth >= 3 { snippet = "【高权威来源】" + snippet }
+                let date = String(((r["date"] as? String) ?? "").prefix(10))
+                return SearchHit(title: title, url: u, snippet: String(snippet.prefix(500)), publishedAt: date)
+            }
+            return hits.isEmpty ? nil : hits
+        }
         self.expert = expert
         self.modelContext = modelContext
         self.chatKey = chatKey
