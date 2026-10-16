@@ -61,8 +61,8 @@ final class ChatViewModel: ObservableObject {
     @Published var toast: String?
     // P0-50 生图占位（ChatGPT 式加载动效）：非 nil 时消息流底部显示 shimmer 占位行
     @Published var pendingImage: String?
-    // P0-60 稳定调用：本轮是否已自动重试过（防死循环；send 时重置）
-    var didAutoRetry = false
+    // P0-60 稳定调用：本轮已自动重试次数（防死循环；send 时重置；P0-64 上限云端可调）
+    var autoRetryCount = 0
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
     let replyBuffer = StreamingReplyBuffer()
     /// 流式文本的读写代理（实际存储在 replyBuffer）
@@ -218,14 +218,19 @@ final class ChatViewModel: ObservableObject {
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
     /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
     nonisolated static func generateImageWithRetry(prompt: String, reference: Data?, service: ImageService) async throws -> Data {
-        do {
-            return try await service.generate(prompt: prompt, reference: reference)
-        } catch {
-            let retryable = (error as? URLError) != nil
-                || ((error as? ImageService.ImageError)?.isRetryable ?? false)
-            guard retryable else { throw error }
-            try await Task.sleep(nanoseconds: 1_200_000_000)
-            return try await service.generate(prompt: prompt, reference: reference)
+        // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
+        let limit = HostedAccount.isHostedActive ? HostedAccount.cachedImageRetry : 1
+        var attempt = 0
+        while true {
+            do {
+                return try await service.generate(prompt: prompt, reference: reference)
+            } catch {
+                let retryable = (error as? URLError) != nil
+                    || ((error as? ImageService.ImageError)?.isRetryable ?? false)
+                guard retryable, attempt < limit else { throw error }
+                attempt += 1
+                try await Task.sleep(nanoseconds: 1_200_000_000)
+            }
         }
     }
 
