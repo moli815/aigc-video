@@ -38,12 +38,14 @@ final class AppInternalIntegrationTests: XCTestCase {
         XCTAssertNotNil(HostedAccount.currentToken, "登录后应持有会员 token")
     }
 
-    /// CI 海外 runner 访问国内服务延迟高（实测单轮 7 分钟仍超时），
-    /// 故网络集成测试默认在 CI 跳过（保持流水线稳定）；本地 Xcode / 手动触发时完整运行。
-    /// 设置 BOSS_AI_SKIP_NETWORK=1 即跳过；不设置则真实跑。
+    /// CI 海外 runner 访问国内服务延迟高（实测单轮 7 分钟仍超时），且 xcodebuild 的
+    /// shell 环境变量无法透传进模拟器测试进程——因此网络集成测试**默认跳过**（CI 稳定）。
+    /// 本地 Xcode 完整跑：Edit Scheme → Test → Environment Variables 添加
+    ///   BOSS_AI_RUN_NETWORK = 1
+    /// 即可执行完整 7 个真实链路测试（三档/工具生图/多轮/速度/出图/视觉/记忆）。
     private func requireNetwork() throws {
-        if ProcessInfo.processInfo.environment["BOSS_AI_SKIP_NETWORK"] == "1" {
-            throw XCTSkip("CI 已跳过网络集成测试（海外网络延迟）；本地/手动运行时执行完整链路")
+        if ProcessInfo.processInfo.environment["BOSS_AI_RUN_NETWORK"] != "1" {
+            throw XCTSkip("网络集成测试默认跳过；本地 Xcode scheme 设 BOSS_AI_RUN_NETWORK=1 可完整执行")
         }
     }
 
