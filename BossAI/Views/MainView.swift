@@ -255,6 +255,8 @@ struct SidebarView: View {
 
     @State private var expertExpanded = true
     @State private var searchText = ""
+    /// P0-47 方案 A：定时任务入口 → 侧栏自己的身份页 sheet（内含定时任务卡）
+    @State private var showIdentitySheet = false
     @State private var renaming: Conversation?
     @State private var renameText = ""
     @State private var tapCount = 0
@@ -279,8 +281,8 @@ struct SidebarView: View {
                 // P0-47 方案 A：一级入口三件套（线性简笔图标，与专家列表视觉语言统一）
                 Section {
                     Button {
-                        // 身份页内含定时任务卡（Pro 3 / Ultra 10），侧栏自带的 sheet 直接打开
-                        showIdentity = true
+                        // 身份页内含定时任务卡（Pro 3 / Ultra 10），侧栏自己的 sheet 直接打开
+                        showIdentitySheet = true
                     } label: {
                         Label { Text("定时任务") } icon: { Image(systemName: "clock") }
                             .foregroundStyle(Color.primary)
@@ -486,6 +488,8 @@ struct SidebarView: View {
                 renaming = nil
             }
         }
+        // P0-47 方案 A：「定时任务」入口打开身份页（含定时任务卡）
+        .sheet(isPresented: $showIdentitySheet) { IdentitySheet() }
     }
 
     private func delete(_ conv: Conversation) {
