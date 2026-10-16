@@ -199,6 +199,18 @@ final class ChatViewModel: ObservableObject {
         return f.string(from: Date())
     }
 
+    /// P0-57 取本轮用户上传的第一张图片数据（作为生图参考图）——此前生图只支持编辑 AI 生成的图，
+    /// 用户上传的图片（如 Logo、底图）无法作为编辑底图，导致"把 Logo 放到图二上"静默失败。
+    func attachedImageData(in conv: Conversation) -> Data? {
+        let imgExts = ["png", "jpg", "jpeg", "webp", "heic"]
+        let userMsgs = conv.messages.filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
+        guard let lastUser = userMsgs.last else { return nil }
+        for file in files(for: lastUser) where imgExts.contains(file.ext.lowercased()) {
+            if let data = try? Data(contentsOf: FileStore.url(for: file)) { return data }
+        }
+        return nil
+    }
+
     /// P0-52 Hermes 式失败重试：上游网关/超时类失败自动重试一次（网络抖动救回；参数/额度不重试）。
     /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
