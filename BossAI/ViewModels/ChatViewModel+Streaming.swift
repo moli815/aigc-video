@@ -292,6 +292,8 @@ extension ChatViewModel {
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
                         let editLast = args?["edit_last_image"] as? Bool ?? false
+                        // P0-57 支持编辑用户上传的图（此前只支持编辑 AI 生成的图，导致"把Logo放图二上"静默失败）
+                        let useAttached = args?["use_attached_image"] as? Bool ?? false
                         if BudgetTracker.imageExceeded {
                             apiMessages.append([
                                 "role": "tool",
@@ -303,13 +305,15 @@ extension ChatViewModel {
                         pendingImage = String(prompt.prefix(24))
                         defer { pendingImage = nil }
                         do {
-                            let reference = editLast ? lastGeneratedImage : nil
+                            let reference = editLast ? lastGeneratedImage : (useAttached ? attachedImageData(in: conv) : nil)
                             let imageData = try await Self.generateImageWithRetry(prompt: prompt, reference: reference, service: imageService)
                             lastGeneratedImage = imageData
                             let imageMessage = Message(role: "assistant", text: "", imageData: imageData)
                             imageMessage.conversation = conv
                             imageMessage.conversationID = conv.id
                             modelContext.insert(imageMessage)
+                            try? modelContext.save()   // P0-57 关键修复：立即落库！此前缺 save → 图片消息不显示，
+                                                       // AI 说"已生成"但用户看不到图（被当成谎报）
                             BudgetTracker.addImageGeneration()   // B01：生图计入生图池
                             apiMessages.append([
                                 "role": "tool",
