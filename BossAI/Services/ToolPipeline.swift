@@ -60,4 +60,12 @@ enum ToolPipeline {
         let name = ToolRegistry.plugin(pluginID)?.displayName ?? pluginID
         return "【\(name)参数不完整】缺少：\(missing.joined(separator: "、"))；本次未执行。请补充参数后重新调用，或改用其他方式回答用户。"
     }
+
+    /// 结果截断（对照 Hermes max_result_size_chars）：超出该能力的上限时截断并注明——
+    /// 防止超大结果挤爆上下文（Hermes 对此有 2KB 错误体 / 结果上限的双层防护）。
+    static func boundResult(_ text: String, pluginID: String) -> String {
+        let limit = ToolRegistry.plugin(pluginID)?.maxResultChars ?? 12000
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + "\n…[结果过长已截断]"
+    }
 }
