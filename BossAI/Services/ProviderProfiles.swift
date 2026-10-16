@@ -87,7 +87,10 @@ enum ProviderCatalog {
         baseURL: AppConfig.hostedAPIBase,
         model: "cloud",
         memoryModel: "cloud",
-        searchStyle: .none)
+        // P0-61 优先用模型自带联网（dashscope enable_search）：DeepSeek（flash/pro）实测支持且有效
+        // （无搜索答不出实时金价、有搜索直接返回 901.07）。原生搜索一轮完成，比本地多引擎更稳更快；
+        // 原生失败时 runLoop 已有自动降级回本地 web_search 工具（nativeEvidenceFallbackUsed 机制）。
+        searchStyle: .dashscopeParam)
 
     static let hostedImage = ImageProfile(
         id: "hosted",
