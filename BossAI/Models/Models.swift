@@ -62,6 +62,7 @@ final class Message {
     var attachmentIds: String = ""
     var createdAt: Date = Date()
     var conversation: Conversation?
+    var conversationID: UUID? = nil   // P0-46 冗余字段：供 @Query 派生视图按会话过滤（轻量迁移自动加列）
 
     init(role: String, text: String, imageData: Data? = nil) {
         self.role = role
