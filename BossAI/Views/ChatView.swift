@@ -645,7 +645,7 @@ private struct StreamingMessageRow: View {
     @State private var pump: Task<Void, Never>?
 
     var body: some View {
-        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview)
+        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview, isReasoning: viewModel.isReasoning)   // P0-68
             .onChange(of: buffer.text) { _, newText in
                 targetCount = newText.count
                 startPump()
