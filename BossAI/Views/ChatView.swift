@@ -542,10 +542,11 @@ struct ImageGeneratingRow: View {
     @State private var elapsed: Int = 0
 
     private var stageText: String {
+        // P0-70 文案云端可配（管理台 IMGPROG_* 即改即生效；未配置时用内置默认值）
         switch elapsed {
-        case ..<15: return "正在构思画面构图…"
-        case ..<45: return "正在绘制细节与光影…"
-        default: return "正在精修渲染，马上就好…"
+        case ..<15: return HostedAccount.cachedImgStage1
+        case ..<45: return HostedAccount.cachedImgStage2
+        default: return HostedAccount.cachedImgStage3
         }
     }
 
@@ -573,7 +574,7 @@ struct ImageGeneratingRow: View {
                     Text(stageText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text("AI 生成约需 1 分钟")
+                    Text(HostedAccount.cachedImgEta)   // P0-70 云端可配
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
