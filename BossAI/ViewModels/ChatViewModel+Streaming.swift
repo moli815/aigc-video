@@ -304,7 +304,7 @@ extension ChatViewModel {
                         defer { pendingImage = nil }
                         do {
                             let reference = editLast ? lastGeneratedImage : nil
-                            let imageData = try await imageService.generate(prompt: prompt, reference: reference)
+                            let imageData = try await Self.generateImageWithRetry(prompt: prompt, reference: reference, service: imageService)
                             lastGeneratedImage = imageData
                             let imageMessage = Message(role: "assistant", text: "", imageData: imageData)
                             imageMessage.conversation = conv
