@@ -118,6 +118,11 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    deinit {
+        streamTask?.cancel()
+        if let filesObserver { NotificationCenter.default.removeObserver(filesObserver) }
+    }
+
     var orderedMessageCache: [Message] = []
     var orderedMessageCount = -1
     /// P0-45 消息刷新信号：sortedMessages 的缓存失效由手动控制（数量变化自动失效之外，
