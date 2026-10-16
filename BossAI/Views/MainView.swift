@@ -43,6 +43,10 @@ struct MainView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showPinEntry = false
     @State private var showHiddenSettings = false
+    // P0-46 强制升级：云端下发 minVersion，本地低于时提示更新
+    @State private var showUpdateAlert = false
+    @State private var updateMessage = ""
+    @State private var updateChecked = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -100,6 +104,23 @@ struct MainView: View {
         }
         .sheet(isPresented: $showHiddenSettings) {
             SetupView(isModal: true)
+        }
+        // P0-46 强制升级检查：/me 拉取到 appUpdate 后比对版本，低于 minVersion 弹提示。
+        // 只在会员模式生效（自备 Key 模式无服务端版本控制）。
+        .onReceive(HostedAccount.shared.$appUpdate) { update in
+            guard HostedAccount.isHostedActive, !updateChecked,
+                  let minVersion = update["minVersion"] as? String, !minVersion.isEmpty else { return }
+            updateChecked = true
+            if AppConfig.isVersion(AppConfig.appVersion, lowerThan: minVersion) {
+                updateMessage = (update["message"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? "当前版本过低，请更新到最新版以获得最佳体验。"
+                showUpdateAlert = true
+            }
+        }
+        .alert("发现新版本", isPresented: $showUpdateAlert) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text(updateMessage)
         }
     }
 
