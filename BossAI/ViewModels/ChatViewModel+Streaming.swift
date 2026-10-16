@@ -276,7 +276,7 @@ extension ChatViewModel {
                             let args = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any]
                             let result = try ExpertKnowledgeService.toolResult(args?["query"] as? String ?? userText, context: modelContext)
                             apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
-                        } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "资料库检索失败：" + error.localizedDescription + "。请明确告知用户检索失败、未找到相关资料。"]) }
+                        } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": ToolPipeline.failureNote(pluginID: "search_library", reason: error.localizedDescription)]) }
                     case "expert_skill":
                         do {
                             let span = PerformanceTrace.begin("ExpertSkill")
@@ -285,7 +285,7 @@ extension ChatViewModel {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
                         } catch {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                "content": "专家技能执行失败：" + error.localizedDescription + "。请明确告知用户该操作未能完成，不要声称已完成。"])
+                                                "content": ToolPipeline.failureNote(pluginID: "expert_skill", reason: error.localizedDescription)])
                         }
                     case "generate_image":
                         statusText = "正在生成图片…"
@@ -308,25 +308,20 @@ extension ChatViewModel {
                             let reference = editLast ? lastGeneratedImage : (useAttached ? attachedImageData(in: conv) : nil)
                             let imageData = try await Self.generateImageWithRetry(prompt: prompt, reference: reference, service: imageService)
                             lastGeneratedImage = imageData
-                            let imageMessage = Message(role: "assistant", text: "", imageData: imageData)
-                            imageMessage.conversation = conv
-                            imageMessage.conversationID = conv.id
-                            modelContext.insert(imageMessage)
-                            try? modelContext.save()   // P0-57 关键修复：立即落库！此前缺 save → 图片消息不显示，
-                                                       // AI 说"已生成"但用户看不到图（被当成谎报）
+                            // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
+                            ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
                             BudgetTracker.addImageGeneration()   // B01：生图计入生图池
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "图片已生成并展示给用户。",
+                                "content": ToolPipeline.successNote(pluginID: "generate_image", detail: ""),
                             ])
                         } catch {
-                            // P0-50 防谎报强化：失败信息必须让模型"不可能误读为成功"——
-                            // 此前弱措辞被模型忽略，出现"没生成却说已生成"的严重体验问题。
+                            // P0-59 失败统一走管道（防谎报文案由 ToolRegistry 声明生成，不会漏写）
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "【严重错误：图片生成失败，用户没有收到任何图片】\n失败原因：\(error.localizedDescription)\n\n你必须严格遵守：\n1. 明确告诉用户图片没有生成成功；\n2. 简述上面的失败原因；\n3. 建议用户点击重试或稍后再试。\n\n禁止使用「已生成」「已展示」「请查收」「已按您的要求生成」等任何暗示成功的表述——本次调用没有产出任何图片。",
+                                "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: error.localizedDescription),
                             ])
                         }
                         }
@@ -372,25 +367,22 @@ extension ChatViewModel {
                                                             sourceConversationId: conv.id.uuidString,
                                                             textContent: content,
                                                             context: modelContext)
-                            let fileMessage = Message(role: "assistant", text: "")
-                            fileMessage.attachmentIds = record.id.uuidString
-                            fileMessage.conversation = conv
-                            fileMessage.conversationID = conv.id
-                            modelContext.insert(fileMessage)
+                            // P0-59 统一管道落库（含 save）
+                            ToolPipeline.persistArtifact(conversation: conv, attachmentIDs: record.id.uuidString, context: modelContext)
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "文件已生成：\(finalName)，已存入资料库并展示给用户。请简短告知用户，不要再重复正文内容。",
+                                "content": ToolPipeline.successNote(pluginID: "create_document", detail: "文件：\(finalName)，已存入资料库。请简短告知用户，不要再重复正文内容。"),
                             ])
                             invalidateFileCache()
                             toast = "已生成 \(finalName)"
                             // Local document packaging has no additional model API fee.
                         } catch {
-                            // P0-51 防谎报：文档失败也要强措辞（此前与生图同款弱措辞，模型会无视继续"已生成"）
+                            // P0-59 失败统一走管道
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "【严重错误：文件生成失败，用户没有收到任何文件】\n失败原因：\(error.localizedDescription)\n\n你必须：1. 明确告诉用户文件没有生成成功；2. 简述失败原因；3. 建议重试。\n禁止使用「已生成」「已保存」「请查收」「已放入资料库」等任何暗示成功的表述。",
+                                "content": ToolPipeline.failureNote(pluginID: "create_document", reason: error.localizedDescription),
                             ])
                         }
 
@@ -413,21 +405,18 @@ extension ChatViewModel {
                     case "render_chart":
                         statusText = "正在绘制统计图…"
                         if let spec = ChartSpec.parse(call.arguments), let image = ChartRenderer.render(spec) {
-                            let chartMessage = Message(role: "assistant", text: "", imageData: image.jpegData(compressionQuality: 0.92))
-                            chartMessage.conversation = conv
-                            chartMessage.conversationID = conv.id
-                            modelContext.insert(chartMessage)
-                            try? modelContext.save()
+                            // P0-59 统一管道落库（含 save）
+                            ToolPipeline.persistArtifact(conversation: conv, imageData: image.jpegData(compressionQuality: 0.92), context: modelContext)
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "统计图已生成并展示给用户（柱状/折线/环形由 App 本地精确渲染）。请用一句话说明图表结论，不要再重复全部数字。",
+                                "content": ToolPipeline.successNote(pluginID: "render_chart", detail: "请用一句话说明图表结论，不要再重复全部数字。"),
                             ])
                         } else {
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": "【图表未生成】参数无效（labels 与 values 必须一一对应且不超过 8 项）。请明确告知用户图表未能生成，建议改用 Markdown 表格呈现数据。",
+                                "content": ToolPipeline.failureNote(pluginID: "render_chart", reason: "图表参数无效（labels 与 values 必须一一对应且不超过 8 项）"),
                             ])
                         }
 
