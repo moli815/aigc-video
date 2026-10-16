@@ -74,6 +74,10 @@ jobs:
         run: xcodegen generate
 
       - name: Run iOS unit tests (BossAITests)
+        env:
+          # P0-46 真实网络集成测试凭据（未配置时集成测试自动 skip，不误伤 CI）
+          BOSS_AI_TEST_USER: ${{ secrets.BOSS_AI_TEST_USER }}
+          BOSS_AI_TEST_PASS: ${{ secrets.BOSS_AI_TEST_PASS }}
         run: |
           # pipefail：管道中 xcodebuild 的失败必须向上传播（此前用 | tail 吞掉了退出码）
           set -o pipefail
