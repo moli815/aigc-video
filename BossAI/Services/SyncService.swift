@@ -26,6 +26,9 @@ final class SyncService {
     private let lastSyncKey = "bossai.sync.lastSyncAt"
     private let autoSyncKey = "bossai.sync.autoEnabled"
     private var running = false
+    // P0-46 错误可见性：同步失败不再是纯静默——记录最近错误与连续失败次数
+    @Published private(set) var lastSyncError: String?
+    @Published private(set) var consecutiveFailures = 0
 
     /// 上次同步成功时间（UI 展示用）
     var lastSyncAt: Date? {
@@ -50,9 +53,17 @@ final class SyncService {
             try await push(context: context)
             try await pull(context: context)
             lastSyncAt = Date()
+            // P0-46 成功即清零失败计数与错误记录
+            consecutiveFailures = 0
+            lastSyncError = nil
+            try? UserDefaults.standard.removeObject(forKey: "bossai.sync.lastError")
             return true
         } catch {
-            // 同步失败静默：本地数据完整，下次再试
+            // P0-46 错误可见性：不再纯静默——记录最近错误与连续失败次数（供诊断与 UI 提示）。
+            // 本地数据完整，下次仍会重试；连续失败是"信息可能未同步"的可观测信号。
+            consecutiveFailures += 1
+            lastSyncError = (error as NSError).localizedDescription
+            try? UserDefaults.standard.set(lastSyncError, forKey: "bossai.sync.lastError")
             return false
         }
     }
