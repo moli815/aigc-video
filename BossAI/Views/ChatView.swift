@@ -374,6 +374,10 @@ struct ChatView: View {
                             }
                         }
                     }
+                    // P0-50 ChatGPT 式生图加载：工具执行期间在消息流里显示 shimmer 占位行
+                    if let job = viewModel.pendingImage {
+                        ImageGeneratingRow(title: job)
+                    }
                     if !viewModel.isStreaming, viewModel.streamingMessageId == nil,
                        !viewModel.suggestedFollowUps.isEmpty {
                         // ChatGPT 式追问建议：回答结束后给 2-3 条可点的后续问题
@@ -524,6 +528,69 @@ struct ChatView: View {
                 .accessibilityIdentifier("retry-reply")
                 .padding(.bottom, 6)
             }
+    }
+}
+
+/// P0-50 ChatGPT 式生图加载动效：占位画布 + shimmer 扫光 + 阶段文案（按经过时间推进）。
+/// 目标：生图约需 40-100 秒，让用户明确"正在画、画到哪了"，而不是面对静止的等待。
+struct ImageGeneratingRow: View {
+    @Environment(\.appTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let title: String
+    @State private var shimmerOffset: CGFloat = -220
+    @State private var elapsed: Int = 0
+
+    private var stageText: String {
+        switch elapsed {
+        case ..<15: return "正在构思画面构图…"
+        case ..<45: return "正在绘制细节与光影…"
+        default: return "正在精修渲染，马上就好…"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(theme.surface.opacity(0.6))
+                    .frame(width: 260, height: 340)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(theme.border, lineWidth: 0.8))
+                // shimmer 扫光（reduceMotion 时禁用动画，保持静态占位）
+                LinearGradient(colors: [.clear, theme.accent.opacity(0.14), .clear],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .frame(width: 260, height: 340)
+                    .offset(x: shimmerOffset)
+                    .animation(reduceMotion ? nil : .linear(duration: 1.6).repeatForever(autoreverses: false), value: shimmerOffset)
+                VStack(spacing: 10) {
+                    Image(systemName: "paintbrush.pointed.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(theme.accent)
+                    Text("正在绘制「\(title)」")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(stageText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("AI 生成约需 1 分钟")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 18)
+            }
+        }
+        .padding(.vertical, 6)
+        .onAppear {
+            shimmerOffset = 220
+            // 阶段文案按真实经过时间推进（5 秒一档）
+            Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    elapsed += 5
+                }
+            }
+        }
+        .accessibilityLabel("正在生成图片：\(title)")
     }
 }
 
