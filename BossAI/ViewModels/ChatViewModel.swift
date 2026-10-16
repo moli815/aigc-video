@@ -28,7 +28,7 @@ import UIKit
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// 一次 web_search 的执行结果（要在并行 Task 之间传递，需 Sendable）
-private struct SearchOutcome: Sendable {
+struct SearchOutcome: Sendable {
     /// 在本轮工具调用中的顺序，回填时按此排序
     let order: Int
     let callId: String
@@ -47,17 +47,17 @@ final class ChatViewModel: ObservableObject {
     /// P0-38 配置面板档位（standard / high / ultra）。按产品要求默认「标准」且不持久化——
     /// 每次启动/新会话回到默认，避免客户在不知情的情况下长期停在低/高档位。
     @Published var chatMode: String = "standard"
-    @Published private(set) var researchSummary: String?
+    @Published var researchSummary: String?
     @Published var isStreaming = false
     @Published var statusText: String?
     @Published var errorMessage: String?
-    @Published private(set) var failedUserMessageID: UUID?
+    @Published var failedUserMessageID: UUID?
     var failedAssistantMessageID: UUID?
     var canRetryReply: Bool { failedUserMessageID != nil && !isStreaming && !isImporting }
     /// 待发送的附件
     @Published var pendingAttachments: [StoredFile] = []
     @Published var isImporting = false
-    @Published private(set) var isExporting = false
+    @Published var isExporting = false
     @Published var toast: String?
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
     let replyBuffer = StreamingReplyBuffer()
@@ -69,10 +69,10 @@ final class ChatViewModel: ObservableObject {
     /// 正在流式输出的消息 id
     @Published var streamingMessageId: UUID?
     /// 本轮回答结束后的追问建议（ChatGPT 式 chips，本地启发式生成，零成本零延迟）
-    @Published private(set) var suggestedFollowUps: [String] = []
+    @Published var suggestedFollowUps: [String] = []
 
     /// 会话（nil = 草稿态：用户还没发第一条消息，此时不写入数据库）
-    private(set) var conversation: Conversation?
+    var conversation: Conversation?
     /// 草稿态首次发消息、真正建出会话时回调，用于侧栏切换过去
     var onConversationCreated: ((Conversation) -> Void)?
     let expert: Expert
@@ -124,7 +124,7 @@ final class ChatViewModel: ObservableObject {
     /// 打开历史会话/数据晚到时由 requestMessageReload() 强制失效）。
     /// 该属性是 @Published——视图 body 读取 sortedMessages（内部会读取本属性）即可建立
     /// SwiftUI 依赖，任何强制刷新都会触发重渲染——修复"打开历史对话空白且永不自愈"。
-    @Published private(set) var messageRevision = 0
+    @Published var messageRevision = 0
 
     /// 强制消息列表刷新（重置排序缓存 + 触发视图更新）。
     /// 使用场景：①打开历史会话首帧（SwiftData 关系解析时序可能返回空）②切后台回来 ③兜底自愈。
@@ -406,12 +406,12 @@ final class ChatViewModel: ObservableObject {
     /// 执行一次 web_search：搜索 → 并行抓正文 → 格式化成给模型看的上下文
     ///
     /// Network and DOM parsing do not execute on MainActor; priority order survives concurrency.
-    nonisolated private static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {
+    nonisolated static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {
         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
         let query = (args?["query"] as? String) ?? fallback
         return (query, (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query))
     }
-    nonisolated private static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String, provider: any ResearchSearching) async -> SearchOutcome {
+    nonisolated static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String, provider: any ResearchSearching) async -> SearchOutcome {
         let span = PerformanceTrace.begin("WebSearch")
         defer { PerformanceTrace.end("WebSearch", span) }
         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
@@ -568,7 +568,7 @@ final class ChatViewModel: ObservableObject {
     /// 读取图片附件 → 交给 ImageCompressor 压缩（长边 1024 / JPEG 0.78）→ data URL。
     /// P0-42：视觉 token ≈ 像素 ÷ 750，压缩到 1K 长边可省约 90% 的识别成本（实测识别质量无损）。
     /// 失败返回 nil：调用方降级为"仅 OCR 文本"，绝不因图片处理失败而中断发送。
-    private static func imageDataURL(for file: StoredFile) -> String? {
+    static func imageDataURL(for file: StoredFile) -> String? {
         let url = FileStore.url(for: file)
         guard let raw = try? Data(contentsOf: url), !raw.isEmpty else { return nil }
         guard let payload = ImageCompressor.compressedData(from: raw) else { return nil }
@@ -691,7 +691,7 @@ extension UIImage {
 /// 线程安全的首 token 标记：深度答 6 秒进度提示用。
 /// 流事件在 AsyncThrowingStream 回调线程到达，定时器任务读取时需跨并发域，
 /// 用锁保护的布尔位避免 data race（比 actor 更轻，适合单布尔）。
-private final class FirstTokenFlag: @unchecked Sendable {
+final class FirstTokenFlag: @unchecked Sendable {
     let lock = NSLock()
     var value = false
     var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
