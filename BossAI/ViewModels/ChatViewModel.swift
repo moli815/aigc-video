@@ -244,6 +244,27 @@ final class ChatViewModel: ObservableObject {
         return nil
     }
 
+    /// P0-74 视觉审核（调服务端 qwen3-vl-plus）：判断生成图是否满足"用户要求"。
+    /// 返回 nil = 无法验证（未登录/未配置/网络失败）——调用方不阻断出图（验证是增强，不是依赖）。
+    nonisolated static func visionCheck(imageData: Data, requirement: String) async -> (ok: Bool, note: String)? {
+        let token: String? = await MainActor.run { HostedAccount.isHostedActive ? HostedAccount.shared.token : nil }
+        guard let token, !token.isEmpty,
+              let url = URL(string: AppConfig.hostedAPIBase + "/vision-check") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "image": "data:image/jpeg;base64," + imageData.base64EncodedString(),
+            "question": "用户要求：\(String(requirement.prefix(200)))。生成的图片是否满足该要求？",
+        ])
+        req.timeoutInterval = 45
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return (ok: (j["ok"] as? Bool) ?? true, note: (j["note"] as? String) ?? "")
+    }
+
     /// P0-52 Hermes 式失败重试：上游网关/超时类失败自动重试一次（网络抖动救回；参数/额度不重试）。
     /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
