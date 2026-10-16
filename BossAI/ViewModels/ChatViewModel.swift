@@ -63,6 +63,8 @@ final class ChatViewModel: ObservableObject {
     @Published var pendingImage: String?
     // P0-60 稳定调用：本轮已自动重试次数（防死循环；send 时重置；P0-64 上限云端可调）
     var autoRetryCount = 0
+    // P0-68 深度思考状态（最高档推理模型首字延迟 ~11s）：流式期间显示"深度思考中…"，消除空等感
+    @Published var isReasoning = false
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
     let replyBuffer = StreamingReplyBuffer()
     /// 流式文本的读写代理（实际存储在 replyBuffer）
