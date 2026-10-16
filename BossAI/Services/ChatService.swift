@@ -130,7 +130,8 @@ final class ChatService {
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     // 声明接受事件流：让服务端明确走 SSE，而不是一次性返回 JSON
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    request.timeoutInterval = 120
+                    // P0-64 超时云端可调（在线可修复）：管理台改 APP_CHAT_TIMEOUT 即生效
+                    request.timeoutInterval = HostedAccount.isHostedActive ? HostedAccount.cachedChatTimeout : 120
 
                     var body: [String: Any] = [
                         "model": profile.model,
