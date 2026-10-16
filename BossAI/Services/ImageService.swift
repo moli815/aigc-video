@@ -67,7 +67,8 @@ final class ImageService {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180
+        // P0-64 超时云端可调（在线可修复）：管理台改 APP_IMAGE_TIMEOUT 即生效
+        request.timeoutInterval = HostedAccount.isHostedActive ? HostedAccount.cachedImageTimeout : 180
 
         var body: [String: Any] = [
             "model": profile.model,
