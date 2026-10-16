@@ -37,6 +37,15 @@ final class ImageService {
             }
             return false
         }
+        /// P0-52 是否可重试：仅上游网关/超时类错误（5xx）可自动重试；
+        /// 参数(4xx)/额度/会话失效等不可重试（重试无意义或有副作用）。
+        var isRetryable: Bool {
+            switch self {
+            case .badResponse(let code, _): return code >= 500
+            case .hosted(let code, _, _): return code >= 500
+            default: return false
+            }
+        }
     }
 
     private let profile: ImageProfile
