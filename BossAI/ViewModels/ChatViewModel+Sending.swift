@@ -208,11 +208,6 @@ extension ChatViewModel {
         return Array(out.prefix(3))
     }
 
-    deinit {
-        streamTask?.cancel()
-        if let filesObserver { NotificationCenter.default.removeObserver(filesObserver) }
-    }
-
     /// 清空当前会话全部消息并重置失败状态
     func clearConversation() {
         failedUserMessageID = nil
