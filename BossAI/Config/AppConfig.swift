@@ -14,6 +14,21 @@ enum AppConfig {
     // MARK: 构建版本标识（每次交付 overlay 时递增，显示在对话标题右下角）
     static let appVersion = "v1.2.0"
 
+    // MARK: P0-46 版本比较（强制升级：云端下发 minVersion，本地低于则提示更新）
+    /// 解析 "v1.2.0" / "1.2.0" / "1.2" 形式为数字三元组；无法解析返回 nil。
+    static func versionComponents(_ v: String) -> (Int, Int, Int)? {
+        let nums = v.lowercased()
+            .split(whereSeparator: { !$0.isNumber })
+            .compactMap { Int($0) }
+        guard nums.count >= 1 else { return nil }
+        return (nums[0], nums.count > 1 ? nums[1] : 0, nums.count > 2 ? nums[2] : 0)
+    }
+    /// current 是否低于 minimum（任一版本号格式不对返回 false，不打扰用户）。
+    static func isVersion(_ current: String, lowerThan minimum: String) -> Bool {
+        guard let c = versionComponents(current), let m = versionComponents(minimum) else { return false }
+        return (c.0, c.1, c.2) < (m.0, m.1, m.2)
+    }
+
     // MARK: 云端账号服务（会员制）
     /// 账号与 AI 中转服务的地址。App 只与它通信，模型 Key 全部由服务端持有。
     static let hostedAPIBase = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api"
