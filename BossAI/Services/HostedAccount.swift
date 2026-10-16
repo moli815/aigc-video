@@ -97,6 +97,9 @@ final class HostedAccount: ObservableObject {
     @Published private(set) var daysLeft: Int?
     /// P0-19 档位功能开关（服务端单一数据源下发，App 不写死）
     @Published private(set) var features: [String: Any]?
+    /// P0-59 云端能力声明（管理台可改）：补充说明 + 按 id 覆盖（enabled/limits）——能力声明云端化
+    private(set) var capabilityExtra: String?
+    private(set) var capabilityOverridesRaw: String?
     /// P0-19 白标品牌名（Ultra 专属；默认"中防AI"）
     @Published private(set) var appName: String = "中防AI"
     // P0-16 数据隔离键所用的登录名（登录时确定，不随显示名变化）
@@ -234,6 +237,24 @@ final class HostedAccount: ObservableObject {
         return (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["appName"] as? String) ?? "中防AI"
     }
 
+    /// P0-59 云端能力补充说明（可空）：管理台可改、30 秒生效——能力声明云端化（Hermes 式插件目录的第一步）。
+    /// 追加进系统提示的能力清单（ToolRegistry.capabilityManifest 的 cloudExtra）。
+    nonisolated static var cachedCapabilityExtra: String? {
+        guard isHostedActive else { return nil }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["capabilityExtra"] as? String
+        return (v?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? v : nil
+    }
+
+    /// P0-59 云端能力开关（JSON 字符串，可空）：形如 {"generate_image":{"enabled":false,"limits":["..."]}}
+    /// App 端按 id 覆盖本地 ToolRegistry 声明的限界/开关，新能力调整无需出包。
+    nonisolated static var cachedCapabilityOverrides: [String: Any]? {
+        guard isHostedActive else { return nil }
+        guard let raw = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["capabilityOverrides"] as? String,
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj
+    }
+
     nonisolated static var cachedDeepResearchEnabled: Bool {
         if !isHostedActive { return false }   // 自备 Key 模式不放大成本
         return (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["deepResearch"] as? Bool) ?? false
@@ -355,6 +376,8 @@ final class HostedAccount: ObservableObject {
             "deepResearch": features?["deepResearch"] as? Bool ?? false,
             "appName": appName,
             "customExpert": features?["customExpert"] as? Bool ?? false,
+            "capabilityExtra": capabilityExtra ?? "",
+            "capabilityOverrides": capabilityOverridesRaw ?? "",
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
@@ -561,6 +584,13 @@ final class HostedAccount: ObservableObject {
                 )
             }
             if let au = json["appUpdate"] as? [String: Any] { appUpdate = au }
+            // P0-59 能力声明云端化：补充说明与覆盖（新能力/边界调整云端配置即生效，无 App 出包）
+            capabilityExtra = (json["capabilityExtra"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            if let ovObj = json["capabilityOverrides"],
+               let ovData = try? JSONSerialization.data(withJSONObject: ovObj),
+               let ovStr = String(data: ovData, encoding: .utf8) {
+                capabilityOverridesRaw = ovStr
+            }
             if let feats = json["features"] as? [String: Any] {
                 features = feats
             }
