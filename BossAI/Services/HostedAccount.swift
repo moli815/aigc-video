@@ -108,6 +108,10 @@ final class HostedAccount: ObservableObject {
     @Published private(set) var chatModes: [ChatModeOption] = ChatModeOption.fallback
     /// 服务端默认档位 key（当前为 standard）
     @Published private(set) var defaultChatMode: String = "standard"
+    // P0-46 云端 UI/行为参数（/me 下发；改参数不出包）
+    @Published private(set) var uiConfig: [String: Any] = [:]
+    // P0-46 版本与更新（minVersion 非空且低于时客户端提示升级）
+    @Published private(set) var appUpdate: [String: Any] = [:]
     @Published private(set) var dayRemainingPct: Double = 100
     @Published private(set) var weekRemainingPct: Double = 100
     @Published private(set) var monthRemainingPct: Double = 100
@@ -548,6 +552,15 @@ final class HostedAccount: ObservableObject {
             // P0-38 对话档位元数据（标准/高/最高；任何异常都回退内置三档，不会让配置面板空缺）
             if json["chatModes"] != nil { chatModes = ChatModeOption.parse(json["chatModes"]) }
             if let dm = json["defaultChatMode"] as? String, !dm.isEmpty { defaultChatMode = dm }
+            // P0-46 云端 UI/行为参数 + 版本控制
+            if let ui = json["uiConfig"] as? [String: Any] {
+                uiConfig = ui
+                ImageCompressor.applyCloudConfig(
+                    edge: (ui["imageMaxEdge"] as? NSNumber).map { CGFloat($0.doubleValue) },
+                    quality: (ui["imageQuality"] as? NSNumber).map { CGFloat($0.doubleValue) }
+                )
+            }
+            if let au = json["appUpdate"] as? [String: Any] { appUpdate = au }
             if let feats = json["features"] as? [String: Any] {
                 features = feats
             }
@@ -641,8 +654,29 @@ final class HostedAccount: ObservableObject {
         return composed
     }
 
-    func fetchCustomExperts() async -> [[String: Any]] {
-        guard let json = try? await request("/custom-experts") else { return [] }
+    // MARK: - P0-46 服务端记忆抽取（Mem0 式合并决策，算法云端化）
+
+    /// 把"最近对话 + 已有记忆"发给服务端，由服务端产出 ADD/UPDATE/DELETE 合并决策。
+    /// 好处：抽取策略/提示词改在服务端（不出包）；各端行为一致；失败静默返回空（抽取是增强，不阻塞）。
+    /// - Returns: ops 数组，元素形如 {op:"add|update|delete", content, index}
+    func extractMemories(dialogue: String, existing: [String]) async -> [[String: Any]] {
+        guard let token, !token.isEmpty, let url = URL(string: AppConfig.hostedAPIBase + "/memories/extract") else {
+            return []
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["dialogue": dialogue, "existing": existing])
+        req.timeoutInterval = 70   // 抽取含一次上游调用，超时放宽
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ops = json["ops"] as? [[String: Any]] else { return [] }
+        return ops
+    }
+
+    func fetchCustomExperts() async -> [[String: Any]] {        guard let json = try? await request("/custom-experts") else { return [] }
         return (json["list"] as? [[String: Any]]) ?? []
     }
 

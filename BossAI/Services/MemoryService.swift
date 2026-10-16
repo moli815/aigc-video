@@ -41,6 +41,13 @@ final class MemoryService {
     /// 后台抽取：对照现有记忆返回 add/update/skip 操作并落库。
     /// source：本条记忆来自哪段对话（会话标题），落到每条记忆上，供查看与纠错定位。
     func extract(from recentDialogue: String, source: String = "", context: ModelContext) async {
+        // P0-46 修复：会员模式（hosted）走服务端抽取——此前本地抽取依赖 apiKey，
+        // 而会员模式的 apiKey 为空 → 记忆抽取从未生效（记忆功能在会员模式失效）。
+        // 服务端抽取算法可热更（改策略不出包），且各端行为一致。
+        if HostedAccount.isHostedActive {
+            await extractViaHosted(from: recentDialogue, source: source, context: context)
+            return
+        }
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { return }
 
         // 请求任何模型前先查预算并确认任务未被取消：记忆是增强功能，超支即放弃
@@ -115,6 +122,48 @@ final class MemoryService {
                     // 模型给出的 index 越界（幻觉）：退化为新增，不丢内容
                     context.insert(MemoryItem(content: text, source: source))
                 }
+            default:
+                continue
+            }
+        }
+        try? context.save()
+    }
+
+    // MARK: - P0-46 会员模式：服务端抽取（Mem0 式合并决策）
+
+    /// 调用服务端 /memories/extract 产出合并决策，并本地执行 ADD/UPDATE/DELETE 落库。
+    /// 防呆：决策越界（update/delete 的 index 无效）退化为 add；失败静默（抽取是增强，不阻塞对话）。
+    private func extractViaHosted(from recentDialogue: String, source: String, context: ModelContext) async {
+        guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
+        var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        descriptor.fetchLimit = 100
+        let existing = (try? context.fetch(descriptor)) ?? []
+        let existingContents = existing.map(\.content)
+
+        let ops = await HostedAccount.shared.extractMemories(dialogue: recentDialogue, existing: existingContents)
+        guard !ops.isEmpty, !Task.isCancelled else { return }
+
+        var known = Set(existingContents)
+        for op in ops {
+            let kind = op["op"] as? String ?? "add"
+            let content = String((op["content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+            let index = op["index"] as? Int
+            switch kind {
+            case "add":
+                guard !content.isEmpty, !known.contains(content) else { continue }
+                known.insert(content)
+                context.insert(MemoryItem(content: content, source: source))
+            case "update":
+                if let index, existing.indices.contains(index), !content.isEmpty {
+                    existing[index].content = content
+                    if !source.isEmpty { existing[index].source = source }
+                } else if !content.isEmpty, !known.contains(content) {
+                    // index 越界（幻觉）：退化为新增，不丢内容
+                    known.insert(content)
+                    context.insert(MemoryItem(content: content, source: source))
+                }
+            case "delete":
+                if let index, existing.indices.contains(index) { context.delete(existing[index]) }
             default:
                 continue
             }
