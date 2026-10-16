@@ -55,7 +55,8 @@ enum RemoteCatalogService {
             PerformanceTrace.event("remote_catalog.cache_applied")
         }
         guard let token = HostedAccount.shared.token else { return }
-        var req = URLRequest(url: URL(string: AppConfig.hostedAPIBase + "/experts")!)
+        guard let url = URL(string: AppConfig.hostedAPIBase + "/experts") else { return }
+        var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 10
         do {
