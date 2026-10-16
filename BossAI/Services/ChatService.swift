@@ -503,6 +503,10 @@ final class ChatService {
                     "type": "boolean",
                     "description": "是否基于对话中最近一张生成的图片进行编辑修改",
                 ],
+                "use_attached_image": [
+                    "type": "boolean",
+                    "description": "是否基于用户本轮上传的图片进行编辑（如「把 Logo 放到这张图上」「给上传的图加字」）。用户明确提到要改他上传的图片时设为 true",
+                ],
             ],
             "required": ["prompt"],
         ]
