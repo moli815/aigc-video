@@ -75,9 +75,12 @@ jobs:
 
       - name: Run iOS unit tests (BossAITests)
         env:
-          # P0-46 真实网络集成测试凭据（未配置时集成测试自动 skip，不误伤 CI）
+          # P0-46 真实网络集成测试凭据（密文内置也可，环境变量优先）
           BOSS_AI_TEST_USER: ${{ secrets.BOSS_AI_TEST_USER }}
           BOSS_AI_TEST_PASS: ${{ secrets.BOSS_AI_TEST_PASS }}
+          # CI 海外 runner 访问国内服务延迟高，默认跳过网络集成测试（离线单测全量执行）。
+          # 手动/本地跑完整网络链路时，移除此变量或设为 0。
+          BOSS_AI_SKIP_NETWORK: "1"
         run: |
           # pipefail：管道中 xcodebuild 的失败必须向上传播（此前用 | tail 吞掉了退出码）
           set -o pipefail
