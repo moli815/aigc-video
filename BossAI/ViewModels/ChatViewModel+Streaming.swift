@@ -320,7 +320,22 @@ extension ChatViewModel {
                             var refs: [Data] = []
                             if editLast, let last = lastGeneratedImage { refs.append(last) }
                             if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
-                            let imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService)
+                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService)
+                            // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
+                            // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
+                            // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
+                            if HostedAccount.cachedImageVerify {
+                                let requirement = String(userText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+                                if !requirement.isEmpty,
+                                   let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
+                                   !check.ok {
+                                    let fixPrompt = prompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
+                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService) {
+                                        imageData = retryData
+                                        BudgetTracker.addImageGeneration()   // 重试按真实成本计费
+                                    }
+                                }
+                            }
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
                             ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
