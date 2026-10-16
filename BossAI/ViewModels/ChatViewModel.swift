@@ -59,6 +59,8 @@ final class ChatViewModel: ObservableObject {
     @Published var isImporting = false
     @Published var isExporting = false
     @Published var toast: String?
+    // P0-50 生图占位（ChatGPT 式加载动效）：非 nil 时消息流底部显示 shimmer 占位行
+    @Published var pendingImage: String?
     /// 流式输出中的文本（不落库，只驱动 UI，消除每 delta 写 SwiftData 的卡顿）
     let replyBuffer = StreamingReplyBuffer()
     /// 流式文本的读写代理（实际存储在 replyBuffer）
@@ -190,8 +192,14 @@ final class ChatViewModel: ObservableObject {
     /// 执行一次 web_search：搜索 → 并行抓正文 → 格式化成给模型看的上下文
     ///
     /// Network and DOM parsing do not execute on MainActor; priority order survives concurrency.
-    nonisolated static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {
-        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
+    /// P0-50 当前年月（中文格式，搜索时效增强用）
+    nonisolated static func currentYearMonth() -> String {
+        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy年M月"
+        return f.string(from: Date())
+    }
+
+    nonisolated static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
         let query = (args?["query"] as? String) ?? fallback
         return (query, (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query))
     }
@@ -199,7 +207,13 @@ final class ChatViewModel: ObservableObject {
         let span = PerformanceTrace.begin("WebSearch")
         defer { PerformanceTrace.end("WebSearch", span) }
         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
-        let query = (args?["query"] as? String) ?? fallback
+        let rawQuery = (args?["query"] as? String) ?? fallback
+        // P0-50 搜索时效性增强：行情/价格/新闻类查询且未含年份时，自动附加当前年月——
+        // 实测搜索引擎对无时间词的查询倾向返回旧页面快照（用户实机曾搜到一年前的金价数据）。
+        let timewords = ["行情", "价格", "多少钱", "最新", "今天", "今日", "新闻", "汇率", "金价", "股价", "报价", "走势", "天气"]
+        let hasYear = rawQuery.range(of: #"20\d{2}"#, options: .regularExpression) != nil
+        let needsFresh = timewords.contains { rawQuery.contains($0) }
+        let query = (needsFresh && !hasYear) ? rawQuery + " " + Self.currentYearMonth() : rawQuery
         let recency = (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query)
         let hits = await provider.search(query: query, count: 6, recency: recency)
 
