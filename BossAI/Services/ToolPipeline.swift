@@ -12,8 +12,9 @@ import SwiftData
 
 enum ToolPipeline {
 
-    /// 失败回注（统一防谎报）：任何工具失败都走这里
+    /// 失败回注（统一防谎报）：任何工具失败都走这里（并顺带上报云端，供管理台诊断）
     static func failureNote(pluginID: String, reason: String) -> String {
+        reportFailure(pluginID: pluginID, reason: reason)
         let plugin = ToolRegistry.plugin(pluginID)
         let name = plugin?.displayName ?? pluginID
         let advice = plugin?.failureAdvice ?? "建议稍后重试"
@@ -59,6 +60,23 @@ enum ToolPipeline {
     static func missingArgsNote(pluginID: String, missing: [String]) -> String {
         let name = ToolRegistry.plugin(pluginID)?.displayName ?? pluginID
         return "【\(name)参数不完整】缺少：\(missing.joined(separator: "、"))；本次未执行。请补充参数后重新调用，或改用其他方式回答用户。"
+    }
+
+    /// P0-64 工具失败上报（fire-and-forget、静默）：业务错误对云端可见（此前只有崩溃上报）。
+    /// 管理台可据此发现"某个能力在特定账号上持续失败"——在线定位问题、减少人工排查。
+    static func reportFailure(pluginID: String, reason: String) {
+        guard HostedAccount.isHostedActive else { return }
+        Task { @MainActor in
+            guard let token = HostedAccount.shared.token,
+                  let url = URL(string: AppConfig.hostedAPIBase + "/tool-event") else { return }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["tool": pluginID, "reason": String(reason.prefix(300))])
+            req.timeoutInterval = 10
+            _ = try? await URLSession.shared.data(for: req)
+        }
     }
 
     /// 结果截断（对照 Hermes max_result_size_chars）：超出该能力的上限时截断并注明——
