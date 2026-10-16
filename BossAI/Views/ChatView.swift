@@ -357,7 +357,8 @@ struct ChatView: View {
                         Group {
                             if message.id == viewModel.streamingMessageId {
                                 StreamingMessageRow(message: message, buffer: viewModel.replyBuffer,
-                                                    files: viewModel.files(for: message), onPreview: { previewFile = $0 })
+                                                    files: viewModel.files(for: message), onPreview: { previewFile = $0 },
+                                                    isReasoning: viewModel.isReasoning)
                             } else {
                                 MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 },
                                            isLastAssistant: message.role == "assistant" && message.id == displayMessages.last?.id,
@@ -638,6 +639,8 @@ private struct StreamingMessageRow: View {
     @ObservedObject var buffer: StreamingReplyBuffer
     let files: [StoredFile]
     let onPreview: (StoredFile) -> Void
+    /// P0-68 深度思考中状态（由调用方传入）
+    var isReasoning: Bool = false
     /// 已平滑展示的字符数（打字机游标）
     @State private var shownCount = 0
     /// 打字机目标长度（随 buffer 增长）
@@ -645,7 +648,7 @@ private struct StreamingMessageRow: View {
     @State private var pump: Task<Void, Never>?
 
     var body: some View {
-        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview, isReasoning: viewModel.isReasoning)   // P0-68
+        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview, isReasoning: isReasoning)   // P0-68
             .onChange(of: buffer.text) { _, newText in
                 targetCount = newText.count
                 startPump()
