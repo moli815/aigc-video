@@ -101,8 +101,42 @@ enum WebSearchService {
     static func search(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
         let bounded = min(12, max(0, count))
         guard bounded > 0 else { return [] }
+        // P0-68 优先服务端 DeepSeek 官方搜索（结构化结果：权威性/日期/长摘要，实测 0.5s 级、质量稳定）；
+        // 未配置/失败/无结果时降级本地多引擎（原链路完整保留作为兜底）——搜索从此有双通道。
+        if let serverHits = await hostedSearch(query: recency.query(query), count: bounded), !serverHits.isEmpty {
+            return rankRelevant(query: query, hits: serverHits, count: bounded, recency: recency)
+        }
         let raw = await searchUnranked(query: recency.query(query), count: bounded, recency: recency)
         return rankRelevant(query: query, hits: raw, count: bounded, recency: recency)
+    }
+
+    /// P0-68 服务端代理的 DeepSeek 官方搜索（hosted 模式专用）：POST /api/tools/search
+    /// 结构化字段映射：title/url 直用；summary（600-800字长摘要）优先于 snippet；
+    /// date（发布时间）用于时效；authority≥3 标注「高权威来源」（模型据此判断可信度）。
+    private static func hostedSearch(query: String, count: Int) async -> [SearchHit]? {
+        let token: String? = await MainActor.run { HostedAccount.shared.token }
+        guard let token, !token.isEmpty,
+              let url = URL(string: AppConfig.hostedAPIBase + "/tools/search") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["query": query, "count": count])
+        req.timeoutInterval = 15
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = j["results"] as? [[String: Any]], !results.isEmpty else { return nil }
+        let hits: [SearchHit] = results.compactMap { r in
+            guard let title = r["title"] as? String, let u = r["url"] as? String,
+                  !title.isEmpty, !u.isEmpty else { return nil }
+            var snippet = (r["summary"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                ?? (r["snippet"] as? String) ?? ""
+            if let auth = r["authority"] as? Int, auth >= 3 { snippet = "【高权威来源】" + snippet }
+            let date = String(((r["date"] as? String) ?? "").prefix(10))
+            return SearchHit(title: title, url: u, snippet: String(snippet.prefix(500)), publishedAt: date)
+        }
+        return hits.isEmpty ? nil : hits
     }
 
     /// Search engines may return unrelated pages. Never send zero-match candidates to the model.
