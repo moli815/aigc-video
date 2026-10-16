@@ -38,6 +38,8 @@ struct MainView: View {
     @State private var showLibrary = false
     @State private var draftPrompt = ""
     @State private var draftConversationID: UUID?
+    /// P0-47 方案 A：草稿态预置研究模式（侧栏「深度研究」入口用）
+    @State private var draftResearchMode: ResearchMode?
     @State private var providerTask: Task<Void, Never>?
     @State private var showNewChat = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -68,6 +70,14 @@ struct MainView: View {
                 selectedConversationId = nil
                 containerKey = nil
                 showLibrary = true
+            },
+            onOpenTasks: {
+                // P0-47 方案 A「定时任务」入口：打开身份页（内含定时任务卡：Pro 3 / Ultra 10）
+                showIdentity = true
+            },
+            onOpenResearch: {
+                // P0-47 方案 A「深度研究」入口：新开草稿并预置联网研究模式
+                startNewDraft(ExpertCatalog.find("general"), researchMode: .online)
             },
             onHiddenSettings: { showPinEntry = true })
         } detail: {
@@ -141,7 +151,8 @@ struct MainView: View {
                                       // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
                                       selectedConversationId = created.id
                                       draftConversationID = created.id
-                                  }, initialText: draftPrompt)
+                                  }, initialText: draftPrompt,
+                                  initialResearchMode: draftResearchMode)
                     .id(key)
             } else {
                 let raw = String(key.dropFirst("conv-".count))
@@ -171,8 +182,9 @@ struct MainView: View {
         }
     }
 
-    private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false) {
+    private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false, researchMode: ResearchMode? = nil) {
         if !keepPrompt { draftPrompt = "" }
+        draftResearchMode = researchMode
         showLibrary = false
         selectedConversationId = nil
         // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
@@ -239,6 +251,9 @@ struct SidebarView: View {
     var onDeleteConversation: (Conversation) -> Void = { _ in }
     var onOpenLibrary: () -> Void = {}
     var onHiddenSettings: () -> Void = {}
+    // P0-47 方案 A 实装：顶部一级入口回调
+    var onOpenTasks: () -> Void = {}
+    var onOpenResearch: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
@@ -266,14 +281,34 @@ struct SidebarView: View {
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             List(selection: $selectedConversationId) {
+                // P0-47 方案 A：一级入口三件套（线性简笔图标，与专家列表视觉语言统一）
                 Section {
+                    Button {
+                        onOpenTasks()
+                    } label: {
+                        Label { Text("定时任务") } icon: { Image(systemName: "clock") }
+                            .foregroundStyle(Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("entry-tasks")
+
+                    Button {
+                        onOpenResearch()
+                    } label: {
+                        Label { Text("深度研究") } icon: { Image(systemName: "magnifyingglass") }
+                            .foregroundStyle(Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("entry-research")
+
                     Button {
                         onOpenLibrary()
                     } label: {
-                        Label("资料库", systemImage: "folder.fill")
+                        Label { Text("资料库") } icon: { Image(systemName: "folder") }
                             .foregroundStyle(showLibrary ? Color.accentColor : Color.primary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("entry-library")
                 }
 
                 // 可折叠的专家团
@@ -384,11 +419,23 @@ struct SidebarView: View {
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     QuotaSidebarWidget()
-                    Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(theme.accentDeep)
-                        .padding([.horizontal, .bottom], 12)
-                        .accessibilityIdentifier("new-task")
+                    // P0-47 方案 A：底部"新对话"大胶囊按钮（预览同款渐变胶囊）
+                    Button(action: onNewChat) {
+                        Label("新对话", systemImage: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        LinearGradient(colors: [theme.accent, theme.accentDeep],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: theme.accent.opacity(0.35), radius: 10, y: 4)
+                    .padding([.horizontal, .bottom], 12)
+                    .accessibilityIdentifier("new-task")
                 }
                 // 底部区做成玻璃面板：额度环与新建按钮浮在毛玻璃上
                 .background(.ultraThinMaterial)
