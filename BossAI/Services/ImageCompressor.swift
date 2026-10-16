@@ -23,15 +23,46 @@ enum ImageCompressor {
     /// 压缩产物的体积上限（超过则降质重试；仍超则放弃）。
     static let maxBytes = 1_500_000
 
+    // P0-46 云端覆盖：服务端 /me 下发 uiConfig（改参数不出包）；未下发时用内置默认。
+    // 用锁保护写入（applyCloudConfig 可能从非 MainActor 上下文触发）。
+    private static let lock = NSLock()
+    private static var cloudEdge: CGFloat?
+    private static var cloudQuality: CGFloat?
+
+    /// 应用云端压缩参数（HostedAccount 拉取 /me 时调用）。nil 参数表示该字段不变。
+    static func applyCloudConfig(edge: CGFloat?, quality: CGFloat?) {
+        lock.lock(); defer { lock.unlock() }
+        if let edge, edge > 0 { cloudEdge = edge }
+        if let quality, (0.1...1.0).contains(quality) { cloudQuality = quality }
+    }
+
+    /// 复位云端覆盖（测试隔离用；生产不应调用）
+    static func resetCloudConfig() {
+        lock.lock(); defer { lock.unlock() }
+        cloudEdge = nil; cloudQuality = nil
+    }
+
+    /// 生效的长边（云端优先，否则内置默认）
+    static var effectiveMaxEdge: CGFloat {
+        lock.lock(); defer { lock.unlock() }
+        return cloudEdge ?? maxEdge
+    }
+    /// 生效的质量（云端优先，否则内置默认）
+    static var effectiveQuality: CGFloat {
+        lock.lock(); defer { lock.unlock() }
+        return cloudQuality ?? quality
+    }
+
     /// 把原始图片数据压缩为适合多模态上传的 JPEG 数据。
     /// - Parameter raw: 原始图片数据（任意常见格式，UIImage 可解码即可）
     /// - Returns: 压缩后的 JPEG Data；无法解码或压缩后仍超限时返回 nil。
     static func compressedData(from raw: Data) -> Data? {
         guard let image = UIImage(data: raw) else { return nil }
 
-        // 等比缩放到长边不超过 maxEdge（小图不放大：scale 上限 1）
+        // 等比缩放到长边不超过 effectiveMaxEdge（小图不放大：scale 上限 1）
         let longest = max(image.size.width, image.size.height)
-        let scale = longest > maxEdge ? maxEdge / longest : 1
+        let edge = effectiveMaxEdge
+        let scale = longest > edge ? edge / longest : 1
         let target = CGSize(
             width: max(1, (image.size.width * scale).rounded()),
             height: max(1, (image.size.height * scale).rounded())
@@ -45,8 +76,9 @@ enum ImageCompressor {
             image.draw(in: CGRect(origin: .zero, size: target))
         }
 
-        // 首选质量
-        if let jpeg = resized.jpegData(compressionQuality: quality), jpeg.count <= maxBytes {
+        // 首选质量（云端可覆盖）
+        let qualityValue = effectiveQuality
+        if let jpeg = resized.jpegData(compressionQuality: qualityValue), jpeg.count <= maxBytes {
             return jpeg
         }
         // 降质重试一次（大面积纯色/噪点图可能体积异常大）
