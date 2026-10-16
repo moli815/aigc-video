@@ -58,6 +58,9 @@ final class Message {
     var text: String = ""
     var sourcesJSON: String = ""
     var imageData: Data? = nil         // 生成的图片（assistant 消息）
+    // P0-69 缩略图分层：列表渲染用（长边 400px）——原图直存导致"图多了列表变慢"，
+    // 缩略图先渲染、点开预览才加载原图；老消息无缩略图自动回退原图（SwiftData 可选字段轻量迁移）
+    var thumbnailData: Data? = nil
     /// 附件（StoredFile.id 的字符串形式，逗号分隔）
     var attachmentIds: String = ""
     var createdAt: Date = Date()
