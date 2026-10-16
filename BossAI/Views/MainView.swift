@@ -659,12 +659,17 @@ struct ExpertRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // P0-26 图标 SaaS 化：云端下发 emoji 优先（在线可换、天然居中）；无 emoji 回退首字徽章。
+            // P0-47 简笔风图标（方案 A 实装）：SF Symbol 线性描边（去 .fill 变体）+ 低饱和底，
+            // 替代卡通 emoji——与设计预览一致；symbol 缺失时才回退 emoji/首字徽章。
             // 固定 frame + 居中 = 任何图标形态下都绝对对齐（P0-23 结论保留）。
             ZStack {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Self.tint(for: expert.id))
-                if let emoji = expert.emoji, !emoji.isEmpty {
+                    .fill(Self.tint(for: expert.id).opacity(0.15))
+                if !expert.symbol.isEmpty {
+                    Image(systemName: Self.lineSymbol(for: expert))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Self.tint(for: expert.id))
+                } else if let emoji = expert.emoji, !emoji.isEmpty {
                     Text(emoji).font(.system(size: 15))
                 } else {
                     Text(String(expert.name.prefix(1)))
@@ -682,6 +687,13 @@ struct ExpertRow: View {
                     .lineLimit(1)
             }
         }
+    }
+
+    /// 简笔线性图标：把 SF Symbol 的 .fill 变体转成描边风格（与方案 A 简笔预览一致）。
+    /// 云端 symbol 可随时调整——换图标不出包（专家目录云端下发）。
+    static func lineSymbol(for expert: Expert) -> String {
+        let base = expert.symbol.isEmpty ? "bubble.left.and.bubble.right.fill" : expert.symbol
+        return base.replacingOccurrences(of: ".fill", with: "")
     }
 
     /// 稳定配色：按专家 id 做字符和散列映射到固定色板（8 色循环），
