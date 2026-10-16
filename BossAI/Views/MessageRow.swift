@@ -38,6 +38,8 @@ struct MessageRow: View {
     var isLastAssistant: Bool = false
     /// 「重新生成」回调；为 nil 时不显示按钮
     var onRegenerate: (() -> Void)? = nil
+    /// P0-68 深度思考中（最高档推理模型首字延迟 ~11s）：流式且无正文时显示"深度思考中…"
+    var isReasoning: Bool = false
 
     /// 按角色分流：user 右对齐气泡；AI 左侧头像 + 平铺内容
     var body: some View {
@@ -83,8 +85,12 @@ struct MessageRow: View {
                                                 isLastAssistant: isLastAssistant,
                                                 onRegenerate: onRegenerate).equatable()
                         } else if message.imageData == nil && files.isEmpty {
-                            // 既无文本也无图片/文件：流式刚开始，显示光标占位
-                            BlinkingCursor()
+                            // 既无文本也无图片/文件：流式刚开始——P0-68 推理中显示"深度思考中…"（消除空等感）
+                            if streamingText != nil && isReasoning {
+                                ReasoningIndicator()
+                            } else {
+                                BlinkingCursor()
+                            }
                         }
                     }
                 }
@@ -94,6 +100,28 @@ struct MessageRow: View {
                 .padding(.vertical, 10)
             }
         }
+    }
+}
+
+/// P0-68 深度思考指示（推理模型首字延迟期间显示）：脉动光点 + 文案
+struct ReasoningIndicator: View {
+    @State private var phase = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .opacity(phase ? 1.0 : 0.35)
+            Text("深度思考中…")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .opacity(phase ? 1.0 : 0.55)
+        }
+        .padding(.vertical, 6)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { phase = true }
+        }
+        .accessibilityLabel("深度思考中")
     }
 }
 
