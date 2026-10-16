@@ -58,7 +58,7 @@ final class ImageService {
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    func generate(prompt: String, reference: Data? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = []) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
         guard let url = URL(string: "\(profile.baseURL)/images/generations") else {
             throw ImageError.badResponse(400, "服务地址无效")
@@ -79,10 +79,14 @@ final class ImageService {
             body["size"] = "2K"
             body["response_format"] = "b64_json"
             body["watermark"] = false
-            if let reference {
-                // 火山方舟 Seedream 4.0 参考图：base64 data URI
-                let mime = reference.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
-                body["image"] = "data:\(mime);base64,\(reference.base64EncodedString())"
+            if !references.isEmpty {
+                // P0-65 多图参考：Seedream 支持数组（[底图, 叠加元素] 顺序融合）——
+                // 修复「把用户上传的 Logo 加到 AI 上次生成的图上」这类双图场景（此前单图只能传一张，底图会搞错）
+                let uris = references.map { ref -> String in
+                    let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
+                    return "data://(mime);base64,//(ref.base64EncodedString())"
+                }
+                body["image"] = uris.count == 1 ? uris[0] : uris   // 单图保持字符串（兼容），多图传数组
             }
         case .zhipu:
             if reference != nil { throw ImageError.unsupportedEdit }
