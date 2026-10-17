@@ -259,17 +259,26 @@ final class HostedAccount: ObservableObject {
 
     // MARK: P0-64 App 远程行为配置（在线可修复）——服务端 /me 下发，管理台改数即生效、不用出包
 
-    private nonisolated static func behaviorDouble(_ key: String, default def: Double) -> Double {
-        guard isHostedActive else { return def }
-        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? Double
-        guard let v, v > 0 else { return def }
-        return v
+    // P0-77 通用行为配置读取（预留通道）：服务端 appBehavior 里的任意 key 都能读——
+    // 以后新增云端参数（超时/开关/文案）只需服务端配置 + 调用 behaviorX，无需改解析代码。
+    nonisolated static func behaviorValue(_ key: String) -> Any? {
+        guard isHostedActive else { return nil }
+        return UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key]
     }
-    private nonisolated static func behaviorInt(_ key: String, default def: Int) -> Int {
-        guard isHostedActive else { return def }
-        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? Double
-        guard let v, v >= 0 else { return def }
-        return Int(v)
+    nonisolated static func behaviorDouble(_ key: String, default def: Double) -> Double {
+        if let v = behaviorValue(key) as? NSNumber, v.doubleValue > 0 { return v.doubleValue }
+        if let s = behaviorValue(key) as? String, let d = Double(s), d > 0 { return d }
+        return def
+    }
+    nonisolated static func behaviorInt(_ key: String, default def: Int) -> Int {
+        if let v = behaviorValue(key) as? NSNumber, v.intValue >= 0 { return v.intValue }
+        if let s = behaviorValue(key) as? String, let i = Int(s), i >= 0 { return i }
+        return def
+    }
+    nonisolated static func behaviorBool(_ key: String, default def: Bool) -> Bool {
+        if let v = behaviorValue(key) as? Bool { return v }
+        if let s = behaviorValue(key) as? String { return !["0", "false", "no"].contains(s.lowercased()) }
+        return def
     }
     /// 对话请求超时（秒）；云端可调，默认 120
     nonisolated static var cachedChatTimeout: TimeInterval { behaviorDouble("chatTimeout", default: 120) }
@@ -280,10 +289,8 @@ final class HostedAccount: ObservableObject {
     /// 生图失败重试次数（0=关闭）；云端可调，默认 1
     nonisolated static var cachedImageRetry: Int { behaviorInt("imageRetry", default: 1) }
 
-    private nonisolated static func behaviorString(_ key: String, default def: String) -> String {
-        guard isHostedActive else { return def }
-        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key] as? String
-        guard let v, !v.isEmpty else { return def }
+    nonisolated static func behaviorString(_ key: String, default def: String) -> String {
+        guard let v = behaviorValue(key) as? String, !v.isEmpty else { return def }
         return v
     }
     // P0-70 生图动效文案（云端可配）：管理台改文案，30 秒生效、不出包
@@ -430,6 +437,9 @@ final class HostedAccount: ObservableObject {
             "imgStage3": (appBehavior?["imgStage3"] as? String) ?? "",
             "imgEta": (appBehavior?["imgEta"] as? String) ?? "",
             "imageVerify": (appBehavior?["imageVerify"] as? Bool) ?? true,
+            // P0-77 通用行为通道：appBehavior 全量平铺写入（服务端加任何 APP_* 参数自动生效）
+            // 注意：放在固定字段之后——固定字段优先，通用通道只补缺
+        
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
@@ -444,6 +454,10 @@ final class HostedAccount: ObservableObject {
             "weekRemainingPct": weekRemainingPct,
             "monthRemainingPct": monthRemainingPct,
         ]
+        // P0-77 通用行为通道：appBehavior 全量平铺（任意新 key 自动写入，无需改代码）
+        if let ab = appBehavior {
+            for (k, v) in ab where dict[k] == nil { dict[k] = v }
+        }
         let iso = ISO8601DateFormatter()
         if let d = dayResetAt { dict["dayResetAt"] = iso.string(from: d) }
         if let w = weekResetAt { dict["weekResetAt"] = iso.string(from: w) }
