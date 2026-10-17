@@ -40,9 +40,11 @@ final class ImageService {
         /// P0-52 是否可重试：仅上游网关/超时类错误（5xx）可自动重试；
         /// 参数(4xx)/额度/会话失效等不可重试（重试无意义或有副作用）。
         var isRetryable: Bool {
+            // P0-80 瞬时错误可重试（App 端双保险）：5xx + 429/430/439（网关限流/上游抖动——
+            // "不要直接反馈给用户，先自己多尝试几次"；服务端也有一层重试）
             switch self {
-            case .badResponse(let code, _): return code >= 500
-            case .hosted(let code, _, _): return code >= 500
+            case .badResponse(let code, _): return code >= 500 || [429, 430, 439].contains(code)
+            case .hosted(let code, _, _): return code >= 500 || [429, 430, 439].contains(code)
             default: return false
             }
         }
