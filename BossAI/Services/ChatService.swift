@@ -415,7 +415,13 @@ final class ChatService {
         let availableIDs = Set(ToolRegistry.availablePlugins().map { $0.id })
         var tools = (body["tools"] as? [[String: Any]]) ?? []
         if canSearch && allowSearch && !nativeSearch && availableIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
-        if canImage && availableIDs.contains("generate_image") { tools.append(["type": "function", "function": Self.generateImageFunction]) }
+        // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
+        // 旧 generate_image 不再注册（执行分支仍兼容旧名，防旧模型残留调用）
+        if canImage && availableIDs.contains("generate_image") {
+            for plugin in Self.imageToolPlugins {
+                tools.append(["type": "function", "function": plugin.definition])
+            }
+        }
         if availableIDs.contains("render_chart") { tools.append(["type": "function", "function": Self.renderChartFunction]) }
         // 文档导出工具：可导出格式由权限解析统一给出（云端工具优先，本地档案兜底）
         if !perms.docFormats.isEmpty && availableIDs.contains("create_document") {
@@ -516,11 +522,80 @@ final class ChatService {
         ]
         let functionDefinition: [String: Any] = [
             "name": "generate_image",
-            "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。注意：数据统计图/图表禁止使用本工具，请改用 Markdown 数据表呈现。返回后图片会自动展示给用户，你只需补充简短说明。",
+            "description": "生成或编辑图片（兼容旧名；新代码请用 image_generate / image_edit）。",
             "parameters": generateImageParameters,
         ]
         return functionDefinition
     }()
+
+    // ── 10-19 拆 4 工具（仿 Harness"工具即契约"）：职责隔离，消除"忘带图→退化成文生图" ──
+
+    /// ① 纯文生图：**不存在**任何图片入参（模型想"编辑"只能换工具）
+    static let imageGenerateFunction: [String: Any] = [
+        "name": "image_generate",
+        "description": "纯文生图：根据文字描述从零生成一张新图片（海报、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。数据统计图请改用 Markdown 数据表。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "详细的图像描述（中文）：主体、风格、构图、光影、文字内容"],
+            ],
+            "required": ["prompt"],
+        ],
+    ]
+
+    /// ② 图生图编辑：source 必须明确指定底图（enum 强制，不再靠两个 boolean 猜）
+    static let imageEditFunction: [String: Any] = [
+        "name": "image_edit",
+        "description": "编辑已有图片（改风格/加元素/去元素/换背景）。**source 必填**：last=最近生成的图、attached=用户本轮上传的图、both=双图融合（底图+上传素材）。用户说「这张图/这张照片」且刚上传过图 → attached；说「刚才那张/你生成的」→ last；要把 Logo/人物加到生成图上 → both。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "编辑指令：具体改什么、在哪里、保持什么不变（会由服务端叠加一致性/阴影/保持/排除约束）"],
+                "source": [
+                    "type": "string",
+                    "enum": ["last", "attached", "both"],
+                    "description": "底图来源：last=最近生成 | attached=用户上传 | both=双图融合（第一张为底图，第二张为叠加素材）",
+                ],
+            ],
+            "required": ["prompt", "source"],
+        ],
+    ]
+
+    /// ③ 图层拆分：把图片拆成底图 + 可独立编辑的图层（Seedream Pro/Flash 能力）
+    static let imageDecomposeFunction: [String: Any] = [
+        "name": "image_decompose",
+        "description": "图层拆分：把一张图拆成 1 张底图 + 若干独立图层（便于后续单独替换/移动元素）。用户说「拆图层/分层/把元素分开」时使用。仅支持已有图片（最近生成的图或用户上传的图）。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "说明要拆哪些元素（可选；不填则整体拆分）"],
+                "source": ["type": "string", "enum": ["last", "attached"], "description": "拆分哪张图：last=最近生成 | attached=用户上传"],
+            ],
+            "required": ["source"],
+        ],
+    ]
+
+    /// ④ 组图（多张关联图）：仅 Seedream 5.0 Lite 支持（Pro 传参直接 400）
+    static let imageSeriesFunction: [String: Any] = [
+        "name": "image_series",
+        "description": "组图生成：一次生成多张内容关联的图片（漫画分镜、品牌视觉系列）。用户说「生成一组/一套/N张/分镜」时使用。注意：需模型支持组图能力，当前若不可用会返回明确提示。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "整组图的统一描述（各图差异点写清楚）"],
+                "count": ["type": "integer", "description": "生成张数（1-4）"],
+            ],
+            "required": ["prompt"],
+        ],
+    ]
+
+    /// 4 工具注册表（仿 Harness 的插件契约表：新增能力只加一项）
+    static let imageToolPlugins: [(name: String, definition: [String: Any])] = [
+        ("image_generate", imageGenerateFunction),
+        ("image_edit", imageEditFunction),
+        ("image_decompose", imageDecomposeFunction),
+        ("image_series", imageSeriesFunction),
+    ]
 
     /// 自定义文档生成工具定义：让 AI 直接产出可下载的 Word/PPT/Excel/PDF
     static let createDocumentFunction: [String: Any] = {
