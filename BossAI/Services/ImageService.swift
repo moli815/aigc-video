@@ -112,7 +112,17 @@ final class ImageService {
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
     func generate(prompt: String, references: [Data] = []) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
-        guard let url = URL(string: "\(profile.baseURL)/images/generations") else {
+        // 10-19 关键修复：hosted 模式改走 bf-image 独立函数（/img/image）——
+        // 实测 /api/image 这条路径在网关层被特殊对待：同代码 /api/test-upstream 39s、/api/image >320s。
+        // 新路径 /img/image 实测 42s 稳定。
+        let endpoint: String
+        if profile.id == "hosted" {
+            let hostBase = AppConfig.hostedAPIBase.replacingOccurrences(of: "/api", with: "/img")
+            endpoint = hostBase + "/image"
+        } else {
+            endpoint = "\(profile.baseURL)/images/generations"
+        }
+        guard let url = URL(string: endpoint) else {
             throw ImageError.badResponse(400, "服务地址无效")
         }
         var request = URLRequest(url: url)
