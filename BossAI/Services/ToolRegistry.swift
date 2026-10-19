@@ -85,6 +85,57 @@ enum ToolRegistry {
             retryOnTransient: false, producesArtifact: false,
             failureAdvice: "明确告知本轮未能联网核实，缺失字段标注未核实"
         ),
+        // ── 10-19 拆 4 工具（Harness 插件契约）：每个工具独立能力/边界/可用性/失败建议 ──
+        CapabilityPlugin(
+            id: "image_generate", toolset: "media", displayName: "文生图", executor: .local,
+            abilities: ["纯文生图（海报/插画/封面/示意图），无任何参考图入参"],
+            limits: ["改图/加元素/换背景必须用 image_edit——禁止用本工具处理已有图片"],
+            requiresEnv: ["生图 API Key"],
+            availability: {
+                if HostedAccount.isHostedActive { return (HostedAccount.cachedPoolRemainingPercent ?? 100) > 0 }
+                return true
+            },
+            maxResultChars: 4000, executionTimeout: 180,
+            retryOnTransient: true, producesArtifact: true,
+            failureAdvice: "建议点击重试或稍后再试（这类接口异常通常是临时的）"
+        ),
+        CapabilityPlugin(
+            id: "image_edit", toolset: "media", displayName: "图片编辑", executor: .local,
+            abilities: [
+                "编辑最近生成的图（source=last）",
+                "编辑用户上传的图（source=attached）",
+                "双图融合：上传素材叠加到生成图（source=both）",
+            ],
+            limits: ["source 必填；找不到底图时明确报错，绝不退化成文生图"],
+            requiresEnv: ["生图 API Key"],
+            availability: {
+                if HostedAccount.isHostedActive { return (HostedAccount.cachedPoolRemainingPercent ?? 100) > 0 }
+                return true
+            },
+            maxResultChars: 4000, executionTimeout: 180,
+            retryOnTransient: true, producesArtifact: true,
+            failureAdvice: "请确认要编辑的图片是否存在，或改用 image_generate 生成新图"
+        ),
+        CapabilityPlugin(
+            id: "image_decompose", toolset: "media", displayName: "图层拆分", executor: .local,
+            abilities: [],
+            limits: ["当前版本暂不支持（需模型图层能力与图层编辑 UI）"],
+            requiresEnv: [],
+            availability: { false },
+            maxResultChars: 4000, executionTimeout: 180,
+            retryOnTransient: false, producesArtifact: false,
+            failureAdvice: "如实告知用户该能力暂未开放"
+        ),
+        CapabilityPlugin(
+            id: "image_series", toolset: "media", displayName: "组图生成", executor: .local,
+            abilities: [],
+            limits: ["当前版本暂不支持（需 Seedream Lite 模型开通）"],
+            requiresEnv: [],
+            availability: { false },
+            maxResultChars: 4000, executionTimeout: 180,
+            retryOnTransient: false, producesArtifact: false,
+            failureAdvice: "如实告知用户该能力暂未开放"
+        ),
         CapabilityPlugin(
             id: "generate_image", toolset: "media", displayName: "图片生成", executor: .local,
             abilities: [
