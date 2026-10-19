@@ -400,8 +400,9 @@ final class ChatViewModel: ObservableObject {
 
             for file in attached {
                 if file.isImage {
-                    // P0-13 真·看图：除 OCR 文本外把原图作为多模态 image_url 输入（≤3 张、单张压缩后 ≤2.5MB）
-                    if imageURLs.count < 3, let dataURL = Self.imageDataURL(for: file) {
+                    // P0-13 真·看图：除 OCR 文本外把原图作为多模态 image_url 输入（10-19 张数 3→6，
+                    // 配合参考图压缩 768/0.65，单次 6 张约 0.5MB 仍在云网关限制内）
+                    if imageURLs.count < 6, let dataURL = Self.imageDataURL(for: file) {
                         imageURLs.append(dataURL)
                     }
                     let ocr = file.contextText(limit: 2000)
