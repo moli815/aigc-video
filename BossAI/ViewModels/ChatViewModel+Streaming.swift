@@ -289,7 +289,7 @@ extension ChatViewModel {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                 "content": ToolPipeline.failureNote(pluginID: "expert_skill", reason: error.localizedDescription)])
                         }
-                    case "generate_image":
+                    case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":   // 10-19 拆 4 工具（统一执行器，旧名兼容）
                         statusText = "正在生成图片…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
@@ -317,9 +317,35 @@ extension ChatViewModel {
                             // · 仅 edit_last_image → 编辑 AI 上次生成的图
                             // · 仅 use_attached_image → 编辑用户上传的图
                             // · 两者都为 true → 双图融合（如"把 logo 加到上次的海报上"）
+                            // 10-19 4 工具分派：refs 由工具契约决定（不再靠两个 boolean 猜）
                             var refs: [Data] = []
-                            if editLast, let last = lastGeneratedImage { refs.append(last) }
-                            if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
+                            let toolName = call.name
+                            if toolName == "image_edit" {
+                                switch (args?["source"] as? String) ?? "last" {
+                                case "attached":
+                                    if let up = attachedImageData(in: conv) { refs.append(up) }
+                                case "both":
+                                    if let last = lastGeneratedImage { refs.append(last) }
+                                    if let up = attachedImageData(in: conv) { refs.append(up) }
+                                default:
+                                    if let last = lastGeneratedImage { refs.append(last) }
+                                }
+                                if refs.isEmpty {
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(pluginID: "image_edit", reason: "没有找到要编辑的图片（source=\((args?["source"] as? String) ?? "last")）。请让用户确认要改哪张图，或改用 image_generate 生成新图。")])
+                                    continue
+                                }
+                            } else if toolName == "image_decompose" || toolName == "image_series" {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(pluginID: toolName, reason: "当前版本暂不支持该能力（图层拆分/组图需模型能力与界面支持）。请改用 image_edit 或 image_generate。")])
+                                continue
+                            } else if toolName == "image_generate" {
+                                // 纯文生图：契约上就不带参考图
+                            } else {
+                                // 旧 generate_image：沿用旧 boolean（兼容旧模型残留调用）
+                                if editLast, let last = lastGeneratedImage { refs.append(last) }
+                                if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
+                            }
                             var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService)
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
