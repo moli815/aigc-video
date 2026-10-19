@@ -57,6 +57,56 @@ final class ImageService {
         self.apiKeyProvider = apiKeyProvider
     }
 
+    /// 方案A（10-19）：参考图直传云存储，返回公网临时 URL（1 小时）。
+    /// 链路：① 服务端签上传凭证 → ② App 用凭证 PUT 到 COS（App 网络，不受云函数出网限制）
+    /// → ③ 回传 fileID 换公网 URL。任何一步失败返回 nil（调用方回退 base64）。
+    static func uploadForHosted(_ data: Data) async -> String? {
+        let token: String? = await MainActor.run { HostedAccount.isHostedActive ? HostedAccount.shared.token : nil }
+        guard let token, !token.isEmpty, !data.isEmpty else { return nil }
+        let base = AppConfig.hostedAPIBase
+
+        // ① 签凭证
+        guard let credURL = URL(string: base + "/upload-credential") else { return nil }
+        var credReq = URLRequest(url: credURL)
+        credReq.httpMethod = "POST"
+        credReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        credReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        credReq.httpBody = try? JSONSerialization.data(withJSONObject: ["ext": "jpg"])
+        credReq.timeoutInterval = 20
+        guard let (credData, credResp) = try? await URLSession.shared.data(for: credReq),
+              (credResp as? HTTPURLResponse)?.statusCode == 200,
+              let credJSON = try? JSONSerialization.jsonObject(with: credData) as? [String: Any],
+              let putURLString = credJSON["url"] as? String,
+              let putURL = URL(string: putURLString),
+              let fileID = credJSON["fileID"] as? String, !fileID.isEmpty else { return nil }
+
+        // ② 直传 COS（PUT）
+        var putReq = URLRequest(url: putURL)
+        putReq.httpMethod = "PUT"
+        putReq.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Authorization") }
+        if let cosToken = credJSON["token"] as? String { putReq.setValue(cosToken, forHTTPHeaderField: "x-cos-security-token") }
+        putReq.httpBody = data
+        putReq.timeoutInterval = 60
+        guard let (_, putResp) = try? await URLSession.shared.data(for: putReq),
+              (putResp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+
+        // ③ fileID → 公网 URL
+        guard let fileURL = URL(string: base + "/file-url") else { return nil }
+        var fileReq = URLRequest(url: fileURL)
+        fileReq.httpMethod = "POST"
+        fileReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        fileReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        fileReq.httpBody = try? JSONSerialization.data(withJSONObject: ["fileIDs": [fileID]])
+        fileReq.timeoutInterval = 20
+        guard let (fileData, fileResp) = try? await URLSession.shared.data(for: fileReq),
+              (fileResp as? HTTPURLResponse)?.statusCode == 200,
+              let fileJSON = try? JSONSerialization.jsonObject(with: fileData) as? [String: Any],
+              let urls = fileJSON["urls"] as? [String],
+              let url = urls.first, !url.isEmpty else { return nil }
+        return url
+    }
+
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
@@ -84,9 +134,17 @@ final class ImageService {
             if !references.isEmpty {
                 // P0-65 多图参考：Seedream 支持数组（[底图, 叠加元素] 顺序融合）——
                 // 修复「把用户上传的 Logo 加到 AI 上次生成的图上」这类双图场景（此前单图只能传一张，底图会搞错）
-                let uris = references.map { ref -> String in
-                    let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
-                    return "data:\(mime);base64,\(ref.base64EncodedString())"
+                // 方案A（10-19）：hosted 模式下先把参考图直传云存储拿公网 URL——
+                // 云函数出网代理会 reset"带二进制图的请求"，只有传 URL 才能打通编辑链路。
+                var uris: [String] = []
+                for ref in references {
+                    if profile.id == "hosted", let u = await Self.uploadForHosted(ref) {
+                        uris.append(u)
+                    } else {
+                        // BYOK 直连 / 上传失败：回退内联 base64（原有行为）
+                        let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
+                        uris.append("data:\(mime);base64,\(ref.base64EncodedString())")
+                    }
                 }
                 body["image"] = uris.count == 1 ? uris[0] : uris   // 单图保持字符串（兼容），多图传数组
             }
