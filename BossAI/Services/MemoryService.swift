@@ -87,8 +87,11 @@ final class MemoryService {
         ModelRequestAdapter.apply(to: &body, profile: profile, purpose: .memory)
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200, data.count <= 1_048_576, !Task.isCancelled,
+        // 10-22 统一走 BoundedHTTPClient：与其它网络请求共享「大小上限 / 超时 / 取消传播」语义，
+        // 避免记忆提取这条链路用 URLSession.shared 无上限下载（此前是下载完才检查 1MB）。
+        let memorySession = BoundedHTTPClient.session(resourceTimeout: 60)
+        guard let (data, http) = try? await BoundedHTTPClient.data(for: request, session: memorySession, limit: 1_048_576),
+              http.statusCode == 200, !Task.isCancelled,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
