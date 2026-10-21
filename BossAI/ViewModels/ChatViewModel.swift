@@ -96,6 +96,9 @@ final class ChatViewModel: ObservableObject {
     var streamTask: Task<Void, Never>?
 
     var fileCache: [UUID: StoredFile] = [:]
+    /// 10-22 上下文预算可观测：每次构建请求后记录总字符与是否触发裁剪（先可观测，再谈优化）
+    private(set) var lastContextChars: Int = 0
+    private(set) var contextTruncated: Bool = false
     var fileCacheLoaded = false
     var filesObserver: NSObjectProtocol?
     /// 本轮联网搜索命中的来源链接，去重后作为「信息来源」附在回答末尾
@@ -450,6 +453,19 @@ final class ChatViewModel: ObservableObject {
                 selected.append(message)
             }
         }
+        // 10-22 统一预算观测：把「system 固定块 + 参与预算的正文」合计成总字符数留痕。
+        // 不改变现有裁剪行为（先可观测，避免高风险改动)；多模态消息里的图片不计字符。
+        let systemChars = messages.prefix(2).compactMap { ($0["content"] as? String)?.count }.reduce(0, +)
+        let bodyChars = selected.reduce(0) { acc, msg in
+            if let t = msg["content"] as? String { return acc + t.count }
+            if let parts = msg["content"] as? [[String: Any]] {
+                return acc + parts.compactMap { ($0["text"] as? String)?.count }.reduce(0, +)
+            }
+            return acc
+        }
+        lastContextChars = systemChars + bodyChars
+        contextTruncated = remaining <= 0
+
         return [messages[0], messages[1]] + selected.reversed()
     }
 
