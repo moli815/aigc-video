@@ -139,8 +139,14 @@ final class SearchQualityTests: XCTestCase {
 
     func testRecencyPenaltyForExpiredDate() {
         let base = "iPhone 17 价格"
+        // 10-22 修复：原先硬编码 "2026-10-13"，跨日后变成"9 天前"（超出 .week 窗口）导致断言失败。
+        // 改为相对当前时间生成（2 天前），任何日期运行都稳定。
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        let freshDate = fmt.string(from: Date().addingTimeInterval(-2 * 86400))
         let old = EvidenceRanking.score(query: base, title: "iPhone 17 价格公布", url: "https://a.com", snippet: "价格 内容", publishedAt: "2023-01-01", recency: .week)
-        let fresh = EvidenceRanking.score(query: base, title: "iPhone 17 价格公布", url: "https://a.com", snippet: "价格 内容", publishedAt: "2026-10-13", recency: .week)
+        let fresh = EvidenceRanking.score(query: base, title: "iPhone 17 价格公布", url: "https://a.com", snippet: "价格 内容", publishedAt: freshDate, recency: .week)
         XCTAssertGreaterThan(fresh, old, "时效查询中新鲜结果应排在过期结果前面")
         XCTAssertEqual(fresh - old, 14, "同为有日期结果，仅新鲜度差值应恰好为 14")
     }
