@@ -270,12 +270,14 @@ final class ChatViewModel: ObservableObject {
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
     /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
     nonisolated static func generateImageWithRetry(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil) async throws -> Data {
+        // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
+        let idemKey = UUID().uuidString
         // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
         let limit = HostedAccount.isHostedActive ? HostedAccount.cachedImageRetry : 1
         var attempt = 0
         while true {
             do {
-                return try await service.generate(prompt: prompt, references: references, structured: structured)
+                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey)
             } catch {
                 let retryable = (error as? URLError) != nil
                     || ((error as? ImageService.ImageError)?.isRetryable ?? false)
