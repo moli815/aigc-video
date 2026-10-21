@@ -531,15 +531,30 @@ final class ChatService {
     // ── 10-19 拆 4 工具（仿 Harness"工具即契约"）：职责隔离，消除"忘带图→退化成文生图" ──
 
     /// ① 纯文生图：**不存在**任何图片入参（模型想"编辑"只能换工具）
+    /// 10-21 新增 structured：把需求拆成 7 个视觉字段，服务端按模板拼装成专业 prompt（信息更可控、文字更准）
     static let imageGenerateFunction: [String: Any] = [
         "name": "image_generate",
-        "description": "纯文生图：根据文字描述从零生成一张新图片（海报、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。数据统计图请改用 Markdown 数据表。",
+        "description": "纯文生图：根据文字描述从零生成一张新图片（海报、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。数据统计图请改用 Markdown 数据表。**优先用 structured 传结构化字段**（信息更可控、画面文字更准确）；只有确实无法拆分时才用 prompt。",
         "parameters": [
             "type": "object",
             "properties": [
-                "prompt": ["type": "string", "description": "详细的图像描述（中文）：主体、风格、构图、光影、文字内容"],
+                "prompt": ["type": "string", "description": "（可选，structured 的兜底）详细的图像描述（中文）：主体、场景、构图、光影、材质、文字"],
+                "structured": [
+                    "type": "object",
+                    "description": "结构化视觉字段（推荐）：每字段用完整短句描述，每段独立成句。内容必须来自用户需求，禁止套用示例的具体主体/场景，禁止编造用户未给的店名/地址/电话/价格。",
+                    "properties": [
+                        "subject": ["type": "string", "description": "主体：是什么、什么状态、在做什么"],
+                        "setting": ["type": "string", "description": "场景/环境：地点、前后景、环境元素"],
+                        "composition": ["type": "string", "description": "镜头/构图：视角（俯/平/仰）、焦段、主体位置、留白区域"],
+                        "lighting": ["type": "string", "description": "光影：光源方向、色温、明暗关系、阴影特征"],
+                        "material": ["type": "string", "description": "材质/画质：纹理细节、摄影或插画风格"],
+                        "text": ["type": "string", "description": "画面文字：要渲染的精确文案 + 位置（用户没给就不填）"],
+                        "negative": ["type": "string", "description": "排除项：不要出现的内容，以「禁止」开头"],
+                    ],
+                    "required": ["subject", "setting", "composition", "lighting", "material"],
+                ],
             ],
-            "required": ["prompt"],
+            "required": [],
         ],
     ]
 
