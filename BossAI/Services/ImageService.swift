@@ -110,7 +110,7 @@ final class ImageService {
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    func generate(prompt: String, references: [Data] = []) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
         // 10-19 关键修复：hosted 模式改走 bf-image 独立函数（/img/image）——
         // 实测 /api/image 这条路径在网关层被特殊对待：同代码 /api/test-upstream 39s、/api/image >320s。
@@ -136,6 +136,10 @@ final class ImageService {
             "model": profile.model,
             "prompt": prompt,
         ]
+        // 10-21 结构化视觉字段：服务端按模板拼装成专业 prompt（信息可控、画面文字更准）
+        if let structured, !structured.isEmpty {
+            body["structured"] = structured
+        }
         switch profile.style {
         case .volc:
             body["size"] = "2K"
