@@ -43,6 +43,11 @@ enum ExpertKnowledgeService {
     ///   - context: SwiftData 上下文
     /// - Returns: 按得分与日期排序的前 5 条证据
     /// - Throws: 关键词为空时抛 invalidInput
+    /// ⚠️ 10-22 性能警告：本方法在 @MainActor 上同步执行"最多 200 份 × 每份前 20000 字"的字符串扫描
+    /// （最坏约 400 万字符），UI 层**不要**直接调用——会把主线程占住造成卡顿。
+    /// 当前 App 内无调用点（仅单元测试使用），因此暂未重构为异步；若后续要在界面接入检索，
+    /// 必须先把「fetch+截断」留在主线程、把「scan」搬到 Task.detached（传 Sendable 的行数据），
+    /// 或改为 SQLite FTS 索引（见 docs 里的性能优化记录）。
     static func search(_ query: String, context: ModelContext) throws -> [Evidence] {
         // 拆词：兼容中英文空格与逗号/分号；截到 8 个词防止检索面过大
         let terms = query.split(whereSeparator: { $0.isWhitespace || "，,;；".contains($0) }).map(String.init).prefix(8)
