@@ -57,11 +57,23 @@ extension ChatViewModel {
         modelContext.insert(userMessage)
 
         // 第一条消息自动作为会话标题
+        let previousTitle = conv.title
         if isFirstUserMessage, !text.isEmpty {
             conv.title = String(text.prefix(20))
         }
         conv.updatedAt = Date()
-        try? modelContext.save()
+        // 10-22 关键写入显式处理：保存失败必须回滚并保留输入，绝不「以为存了」却继续发起请求
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.delete(userMessage)
+            conv.title = previousTitle
+            conv.updatedAt = Date()
+            inputText = text
+            pendingAttachments = attachments
+            errorMessage = "消息保存失败（\(error.localizedDescription)）。你的输入已保留，请重试。"
+            return
+        }
 
         // 草稿期上传的附件补记到新会话名下
         for file in attachments where file.sourceConversationId.isEmpty {
