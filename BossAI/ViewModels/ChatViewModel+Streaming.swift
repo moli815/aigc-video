@@ -346,7 +346,9 @@ extension ChatViewModel {
                                 if editLast, let last = lastGeneratedImage { refs.append(last) }
                                 if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
                             }
-                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService)
+                            // 10-21 结构化字段（有则优先，服务端按模板拼装）
+                            let structuredArgs = args?["structured"] as? [String: Any]
+                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs)
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
                             // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
@@ -356,7 +358,7 @@ extension ChatViewModel {
                                    let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
                                    !check.ok {
                                     let fixPrompt = prompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
-                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService) {
+                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
                                     }
