@@ -432,6 +432,12 @@ enum BackupService {
         let names = reader.entryNames()
 
         guard manifest.version == 1 else { throw BackupError.corruptArchive("不支持的备份版本") }
+        // 10-22 P2 安全：压缩炸弹防护。加密包本身 ≤128MB，但解压后可能远超内存。
+        // 先按 manifest 声明的 byteCount 求和设总上限，再进入逐条预检。
+        let declaredTotal = manifest.files.reduce(0) { $0 + max(0, $1.byteCount) }
+        guard declaredTotal <= 512 * 1024 * 1024 else {
+            throw BackupError.corruptArchive("备份内容解压后过大（超过 512MB），已拒绝导入")
+        }
         // Preflight every referenced blob before touching the live database.
         // 先做两阶段预检：把所有二进制完整读入内存暂存并逐项校验（ID 去重、角色合法、
         // 大小一致、图片齐全），全部通过才碰线上数据库——避免导入到一半发现坏数据留下脏库。
