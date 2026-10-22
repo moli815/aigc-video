@@ -23,7 +23,9 @@ final class SyncService {
     static let shared = SyncService()
     static let bgTaskIdentifier = "com.bossai.sync.daily"
 
-    private let lastSyncKey = "bossai.sync.lastSyncAt"
+    // 10-22 P1 隔离修复：游标此前是全局键，A 同步到较晚时间后切 B 会跳过 B 的旧数据。
+    // 改为按当前账号 scopeKey 命名；切换账号即切换游标，首次同步走完整拉取。
+    private var lastSyncKey: String { "bossai.sync.lastSyncAt.\(HostedAccount.scopeKey)" }
     private let autoSyncKey = "bossai.sync.autoEnabled"
     private var running = false
     // P0-46 错误可见性：同步失败不再是纯静默——记录最近错误与连续失败次数
