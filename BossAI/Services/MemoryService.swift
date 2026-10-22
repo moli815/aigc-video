@@ -27,7 +27,10 @@ final class MemoryService {
     /// 注入用：返回「【关于用户的已知信息】」片段
     func injectionFragment(context: ModelContext) -> String {
         // 只取最近 100 条做对照 + 注入上限裁剪：控制 token 成本与提示词长度
+        // 10-22 P1 隔离修复：记忆注入必须只取当前账号，否则 A 的偏好会被注入 B 的提示词
+        let injectKey = HostedAccount.scopeKey
         var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == injectKey },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         descriptor.fetchLimit = AppConfig.memoryInjectLimit
@@ -52,7 +55,12 @@ final class MemoryService {
 
         // 请求任何模型前先查预算并确认任务未被取消：记忆是增强功能，超支即放弃
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
-        var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
+        let memKey = HostedAccount.scopeKey
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == memKey },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
         descriptor.fetchLimit = 100
         let existing = (try? context.fetch(descriptor)) ?? []
         let existingList = existing.enumerated()
@@ -139,7 +147,12 @@ final class MemoryService {
     /// 防呆：决策越界（update/delete 的 index 无效）退化为 add；失败静默（抽取是增强，不阻塞对话）。
     private func extractViaHosted(from recentDialogue: String, source: String, context: ModelContext) async {
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
-        var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
+        let memKey = HostedAccount.scopeKey
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == memKey },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
         descriptor.fetchLimit = 100
         let existing = (try? context.fetch(descriptor)) ?? []
         let existingContents = existing.map(\.content)
