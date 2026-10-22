@@ -99,8 +99,12 @@ final class SyncService {
         let key = HostedAccount.scopeKey
         var items: [[String: Any]] = []
 
-        if let convs = try? context.fetch(FetchDescriptor<Conversation>()) {
-            for c in convs where c.ownerKey == key {
+        // 10-22 P1：fetch 失败不能当成「没有数据」继续同步（会把空推送上去并推进游标）
+        let convsToPush = try context.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.ownerKey == key }
+        ))
+        if !convsToPush.isEmpty {
+            for c in convsToPush {
                 items.append([
                     "kind": "conversation",
                     "refId": c.id.uuidString,
@@ -109,8 +113,11 @@ final class SyncService {
                 ])
             }
         }
-        if let memories = try? context.fetch(FetchDescriptor<MemoryItem>()) {
-            for m in memories where m.ownerKey == key {
+        let memoriesToPush = try context.fetch(FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == key }
+        ))
+        if !memoriesToPush.isEmpty {
+            for m in memoriesToPush {
                 items.append([
                     "kind": "memory",
                     "refId": m.id.uuidString,
@@ -163,18 +170,38 @@ final class SyncService {
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else { return }
 
-        let existing = try context.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == uuid })).first
+        // 10-22 P1：谓词补 ownerKey（此前只按 id 找，可能命中另一账号的同 id 记录）
+        let existing = try context.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.id == uuid && $0.ownerKey == key }
+        )).first
         if deleted {
             if let existing { context.delete(existing) }
             return
         }
         let remoteUpdated = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
         if let existing {
-            // LWW：本机更新就不覆盖（本地为主，云端只补）
-            guard remoteUpdated > existing.updatedAt else { return }
-            existing.title = dict["title"] as? String ?? existing.title
-            existing.rollingSummary = dict["rollingSummary"] as? String ?? existing.rollingSummary
-            existing.updatedAt = remoteUpdated
+            // 10-22 P1 数据丢失修复：此前「已有会话」只更新元数据就 return，
+            // 另一台设备后来新增的消息永远拉不下来（用户以为"同步了"，其实消息少了一半）。
+            // 现在先按消息 id 做增量合并（去重），再对标题/摘要走 LWW。
+            let existingIDs = Set(existing.messages.map { $0.id })
+            for raw in (dict["messages"] as? [[String: Any]]) ?? [] {
+                guard let mid = raw["id"] as? String,
+                      let muuid = UUID(uuidString: mid),
+                      !existingIDs.contains(muuid) else { continue }
+                let msg = Message(role: raw["role"] as? String ?? "user", text: raw["text"] as? String ?? "")
+                msg.id = muuid
+                msg.sourcesJSON = raw["sourcesJSON"] as? String ?? ""
+                msg.attachmentIds = raw["attachmentIds"] as? String ?? ""
+                msg.createdAt = Self.date(fromMilliseconds: raw["createdAt"]) ?? remoteUpdated
+                msg.conversation = existing
+                msg.conversationID = existing.id
+                context.insert(msg)
+            }
+            if remoteUpdated > existing.updatedAt {
+                existing.title = dict["title"] as? String ?? existing.title
+                existing.rollingSummary = dict["rollingSummary"] as? String ?? existing.rollingSummary
+                existing.updatedAt = remoteUpdated
+            }
             return
         }
         // 本机没有 → 新建（含消息）
