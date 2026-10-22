@@ -16,22 +16,27 @@ import UIKit
 @MainActor
 final class AppInternalIntegrationTests: XCTestCase {
 
-    // MARK: - 凭据（密文内置 + 环境变量优先）
+    // MARK: - 凭据（只从环境变量读取）
 
+    // 10-22 P0 安全修复：删除内置 Base64 默认凭证。
+    // Base64 不是加密；这些默认值出现在公开仓库里等同明文泄露真实账号密码。
+    // 现在只认环境变量：CI 由 GitHub Actions Secrets 注入，本地跑集成测试前自行 export。
     private var username: String {
-        if let u = ProcessInfo.processInfo.environment["BOSS_AI_TEST_USER"], !u.isEmpty { return u }
-        return Self.decode("NDIwOTkyMjVAZ21haWwuY29t")
+        ProcessInfo.processInfo.environment["BOSS_AI_TEST_USER"]?.trimmingCharacters(in: .whitespaces) ?? ""
     }
     private var password: String {
-        if let p = ProcessInfo.processInfo.environment["BOSS_AI_TEST_PASS"], !p.isEmpty { return p }
-        return Self.decode("NjhvZGRHRlE=")
+        ProcessInfo.processInfo.environment["BOSS_AI_TEST_PASS"] ?? ""
     }
-    private static func decode(_ b64: String) -> String {
-        Data(base64Encoded: b64).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    /// 未配置凭证时跳过真实集成测试，而不是用内置账号硬跑
+    private func skipIfNoCredentials() throws {
+        if username.isEmpty || password.isEmpty {
+            throw XCTSkip("未设置 BOSS_AI_TEST_USER / BOSS_AI_TEST_PASS，跳过需要真实账号的集成测试")
+        }
     }
 
     private func ensureLogin() async throws {
         try requireNetwork()
+        try skipIfNoCredentials()
         if HostedAccount.currentToken == nil {
             try await HostedAccount.shared.login(username: username, password: password)
         }
@@ -56,14 +61,12 @@ final class AppInternalIntegrationTests: XCTestCase {
         ImageService(profile: ProviderCatalog.hostedImage, apiKeyProvider: { HostedAccount.currentToken })
     }
 
-    private func collectText(_ stream: AsyncThrowingStream<ChatService.StreamEvent, Error>) async -> String {
+    /// 10-22 修复：流异常必须向上抛，不能只返回"已收到的部分文本"——
+    /// 否则"收到几个 token 后断流"的请求会被断言误判为成功。
+    private func collectText(_ stream: AsyncThrowingStream<ChatService.StreamEvent, Error>) async throws -> String {
         var text = ""
-        do {
-            for try await event in stream {
-                if case .textDelta(let delta) = event { text += delta }
-            }
-        } catch {
-            // 流异常（超时/断流）时返回已收集到的部分文本，由断言判断非空——不在此处吞掉测试信号
+        for try await event in stream {
+            if case .textDelta(let delta) = event { text += delta }
         }
         return text
     }
@@ -74,7 +77,7 @@ final class AppInternalIntegrationTests: XCTestCase {
         try await ensureLogin()
         for mode in ["standard", "high", "ultra"] {
             let svc = hostedChatService()
-            let text = await collectText(svc.stream(
+            let text = try await collectText(svc.stream(
                 messages: [["role": "user", "content": "一句话说明什么是复利"]],
                 enableTools: false, chatMode: mode))
             XCTAssertFalse(text.isEmpty, "「\(mode)」档真实链路应返回非空回答")
@@ -96,7 +99,8 @@ final class AppInternalIntegrationTests: XCTestCase {
         for call in calls {
             XCTAssertFalse(call.id.isEmpty, "工具调用 id 不得为空——千问 \"id\":\"\" 覆盖 bug 回归")
             XCTAssertFalse(call.name.isEmpty)
-            XCTAssertEqual(call.name, "generate_image")
+            // 10-22 修复：工具协议已拆成 image_generate / image_edit（旧 generate_image 不再注册）
+            XCTAssertTrue(["image_generate", "image_edit"].contains(call.name), "实际工具名：\(call.name)")
         }
     }
 
@@ -106,12 +110,12 @@ final class AppInternalIntegrationTests: XCTestCase {
         try await ensureLogin()
         let svc = hostedChatService()
         // 轮 1：建立上下文
-        let turn1 = await collectText(svc.stream(
+        let turn1 = try await collectText(svc.stream(
             messages: [["role": "user", "content": "我准备开一家咖啡店，预算30万，帮我分析关键成本项"]],
             enableTools: false, chatMode: "high"))
         XCTAssertFalse(turn1.isEmpty, "轮1应返回成本分析")
         // 轮 2：带上下文追问（多轮连贯性验证）
-        let turn2 = await collectText(svc.stream(
+        let turn2 = try await collectText(svc.stream(
             messages: [
                 ["role": "user", "content": "我准备开咖啡店，预算30万"],
                 ["role": "assistant", "content": turn1],
@@ -161,7 +165,7 @@ final class AppInternalIntegrationTests: XCTestCase {
             ["type": "image_url", "image_url": ["url": dataURL]],
             ["type": "text", "text": "这是一张名片，请提取姓名、电话、公司名三项，直接输出，不要解释。"],
         ]]
-        let reply = await collectText(hostedChatService().stream(messages: [message], enableTools: false))
+        let reply = try await collectText(hostedChatService().stream(messages: [message], enableTools: false))
         XCTAssertFalse(reply.isEmpty, "视觉识别应返回结果")
         // 正确率门槛：三个关键字段至少命中 2 个
         let hits = ["王志远", "138", "中防"].filter { reply.contains($0) }.count
