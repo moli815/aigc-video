@@ -11,12 +11,16 @@ extension ChatViewModel {
 
     func runLoop(userText: String, attachments: [StoredFile], conv: Conversation,
                          assistantMessage: Message) async {
+        // 10-22 长任务编排：进入循环即写进度；正常结束（defer）清除，异常退出时保留供下次恢复。
+        UserDefaults.standard.set(["text": userText, "conv": conv.id.uuidString, "startedAt": Date().timeIntervalSince1970],
+                                  forKey: Self.taskProgressKey)
         defer {
             isStreaming = false
             statusText = nil
             streamingText = ""
             streamingMessageId = nil
             streamTask = nil
+            UserDefaults.standard.removeObject(forKey: Self.taskProgressKey)
         }
 
         let turnSpan = PerformanceTrace.begin("ChatTurn")
