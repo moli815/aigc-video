@@ -110,6 +110,7 @@ final class BriefingService {
             let msg = Message(role: "assistant", text: content)
             msg.createdAt = Date()
             msg.conversation = conv
+            msg.conversationID = conv.id   // 10-22：缺这一行会导致重进会话看不到简报
             context.insert(msg)
             conv.updatedAt = Date()
             // 10-22 P2 修复：此前 `try? save` 失败后仍然写幂等标记——
