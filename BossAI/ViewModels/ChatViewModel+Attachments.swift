@@ -81,7 +81,9 @@ extension ChatViewModel {
     /// 一次性把资料库文件读进内存缓存，避免每条消息各查一次数据库
     func ensureFileCache() {
         guard !fileCacheLoaded else { return }
-        let descriptor = FetchDescriptor<StoredFile>()
+        // 10-22 P1 隔离修复：此前读取全部账号的文件进入缓存
+        let scope = HostedAccount.scopeKey
+        let descriptor = FetchDescriptor<StoredFile>(predicate: #Predicate { $0.ownerKey == scope })
         // 10-22 修复：查询失败时不要标记 loaded——否则同一个 ViewModel 生命周期内不会再重试，
         // 附件会"凭空消失"且没有任何错误提示。失败就保持未加载，下次访问自动重试。
         do {
