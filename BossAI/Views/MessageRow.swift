@@ -72,7 +72,7 @@ struct MessageRow: View {
                     AssistantAvatar()
                     VStack(alignment: .leading, spacing: 8) {
                         if let data = message.thumbnailData ?? message.imageData {   // P0-69 缩略图优先（点开预览用原图）
-                            MessageImageView(data: data).equatable()
+                            MessageImageView(data: data, onRegenerate: onRegenerate).equatable()
                         }
                         ForEach(files, id: \.id) { file in
                             FileCardView(file: file) { onPreview(file) }
@@ -329,6 +329,9 @@ private struct CitationSourceRow: View {
 private struct MessageImageView: View, Equatable {
     /// 图片原始数据
     let data: Data
+    /// 10-22：外部的「换一版」动作。此前直接引用父视图的 onRegenerate，
+    /// 但本结构是独立 View，作用域里找不到 → 编译失败。现在显式传参。
+    var onRegenerate: (() -> Void)? = nil
     /// 后台解码出的缩略图
     @State private var thumbnail: UIImage?
     /// 缩略图解码中
@@ -346,6 +349,11 @@ private struct MessageImageView: View, Equatable {
                     .contextMenu {
                         Button("保存到相册", systemImage: "square.and.arrow.down") {
                             if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
+                        }
+                        if onRegenerate != nil {
+                            Button(action: { onRegenerate?() }) {
+                                Label("换一版", systemImage: "arrow.clockwise")
+                            }
                         }
                     }
             } else if loading { ProgressView("正在读取图片…").frame(height: 120) }
