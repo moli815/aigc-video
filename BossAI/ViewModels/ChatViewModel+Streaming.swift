@@ -24,13 +24,13 @@ extension ChatViewModel {
         guard let capability = try? ExpertCapabilityCatalog.profile(expert.id) else {
             errorMessage = "专家技能配置未加载，无法执行工具。"
             modelContext.delete(assistantMessage)
-            try? modelContext.save()
+            saveOrWarn()
             return
         }
         if researchMode != .local && ResearchIntent.needsSpecificTarget(userText) {
             let topic = ResearchIntent.searchSeed(from: userText)
             assistantMessage.text = "要逐项核实“\(topic)”的最新数据，请先提供具体产品或对象的名称、型号和版本；也可以给我一份要比较的清单。只有类别名称时，搜索结果会混入其他产品，无法可靠核实配置。"
-            try? modelContext.save()
+            saveOrWarn()
             return
         }
         citations = CitationRegistry()
@@ -224,7 +224,7 @@ extension ChatViewModel {
                 assistantMessage.text = fullText
                 // P0-45 落库加固：每个稳定点（工具循环轮次之间）立即显式保存——
                 // 不再依赖系统自动保存的时机，切换会话/杀进程也不会丢已完成的正文。
-                try? modelContext.save()
+                saveOrWarn()
 
                 if Task.isCancelled { break loop }
                 if pendingToolCalls.isEmpty { exhausted = false; break loop }
@@ -576,14 +576,14 @@ extension ChatViewModel {
         }
 
         conv.updatedAt = Date()
-        try? modelContext.save()
+        saveOrWarn()
 
         // 附上信息来源，方便核对。带编号，与回答里的「（来源 N）」对应，可逐条追溯。
         if !citations.urls.isEmpty, !assistantMessage.text.isEmpty {
             assistantMessage.sourcesJSON = String(data: (try? JSONEncoder().encode(citations.sources)) ?? Data(), encoding: .utf8) ?? ""
         }
         citations = CitationRegistry()
-        try? modelContext.save()
+        saveOrWarn()
 
         // 追问建议：只在正常完成的回答后生成（停止/失败不给）
         if !Task.isCancelled, errorMessage == nil, !assistantMessage.text.isEmpty {
