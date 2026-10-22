@@ -52,7 +52,12 @@ enum ExpertKnowledgeService {
         // 拆词：兼容中英文空格与逗号/分号；截到 8 个词防止检索面过大
         let terms = query.split(whereSeparator: { $0.isWhitespace || "，,;；".contains($0) }).map(String.init).prefix(8)
         guard !terms.isEmpty else { throw ExpertSkillError.invalidInput("请输入资料关键词") }
-        var descriptor = FetchDescriptor<StoredFile>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        // 10-22 P1 隔离修复：知识检索只扫当前账号的文件，避免把别的账号文档返回给模型
+        let scope = HostedAccount.scopeKey
+        var descriptor = FetchDescriptor<StoredFile>(
+            predicate: #Predicate { $0.ownerKey == scope },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
         // 检索范围硬上限：最近 200 份——保证轻量无索引检索的耗时可控
         descriptor.fetchLimit = 200
         let matches = try context.fetch(descriptor).compactMap { file -> (Int, Evidence)? in
