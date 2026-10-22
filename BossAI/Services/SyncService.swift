@@ -187,6 +187,11 @@ final class SyncService {
             if let existing { context.delete(existing) }
             return
         }
+        // 10-22 同步墓碑：远端标记删除 → 本地也软删除（保留记录以便再次同步，避免被拉回）
+        if (dict["isDeleted"] as? Bool) == true {
+            if let existing { existing.isDeleted = true; existing.updatedAt = remoteUpdated }
+            return
+        }
         let remoteUpdated = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
         if let existing {
             // 10-22 P1 数据丢失修复：此前「已有会话」只更新元数据就 return，
@@ -276,6 +281,7 @@ final class SyncService {
             "rollingSummary": String(c.rollingSummary.prefix(20_000)),
             "createdAt": Int(c.createdAt.timeIntervalSince1970 * 1000),
             "updatedAt": Int(c.updatedAt.timeIntervalSince1970 * 1000),
+            "isDeleted": c.isDeleted,
             "messages": messages,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()
