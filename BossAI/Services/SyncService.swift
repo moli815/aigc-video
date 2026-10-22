@@ -187,9 +187,13 @@ final class SyncService {
             if let existing { context.delete(existing) }
             return
         }
-        // 10-22 同步墓碑：远端标记删除 → 本地也软删除（保留记录以便再次同步，避免被拉回）
+        // 10-22 同步墓碑：远端标记删除 → 本地也软删除（保留记录以便再次同步，避免被拉回）。
+        // 注意：此处不能用 remoteUpdated（它在下面才定义），直接就地解析时间。
         if (dict["isDeleted"] as? Bool) == true {
-            if let existing { existing.isDeleted = true; existing.updatedAt = remoteUpdated }
+            if let existing {
+                existing.isDeleted = true
+                existing.updatedAt = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
+            }
             return
         }
         let remoteUpdated = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
