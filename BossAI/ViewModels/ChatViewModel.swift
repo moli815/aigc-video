@@ -97,6 +97,10 @@ final class ChatViewModel: ObservableObject {
 
     var fileCache: [UUID: StoredFile] = [:]
     /// 10-22 上下文预算可观测：每次构建请求后记录总字符与是否触发裁剪（先可观测，再谈优化）
+    /// 10-22 长任务编排（最小版）：记录「上次未跑完的任务」，供下次进入会话时提示继续。
+    /// 只存用户原话与开始时间（不存 apiMessages，避免体积与协议配对问题），恢复=重新跑一遍。
+    @Published var resumableTaskText: String?
+    static let taskProgressKey = "bossai.task.progress"
     /// 10-22：关键保存失败的可观测状态（助手正文/引用/迁移）。UI 可据此提示「已生成但未持久化」。
     @Published var persistenceWarning: String?
     private(set) var lastContextChars: Int = 0
@@ -155,6 +159,13 @@ final class ChatViewModel: ObservableObject {
         self.injectedSearchPlanner = searchPlanner
         filesObserver = NotificationCenter.default.addObserver(forName: .bossAIFilesChanged, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.invalidateFileCache() }
+        }
+        // 10-22 长任务编排：若上次任务在同一会话里异常中断，进入时把它挂出来供用户决定是否继续。
+        if let progress = UserDefaults.standard.dictionary(forKey: Self.taskProgressKey),
+           let text = progress["text"] as? String, !text.isEmpty,
+           let convID = progress["conv"] as? String,
+           convID == (conversation?.id.uuidString ?? "") {
+            resumableTaskText = text
         }
     }
 
