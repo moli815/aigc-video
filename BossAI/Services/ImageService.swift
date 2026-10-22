@@ -80,6 +80,12 @@ final class ImageService {
               let putURL = URL(string: putURLString),
               let fileID = credJSON["fileID"] as? String, !fileID.isEmpty else { return nil }
 
+        // 10-22 安全：直传前校验 host 白名单。凭证由服务端签发，但若链路被篡改/配置错误，
+        // 原实现会把用户图片 PUT 到任意第三方域名。这里只放行腾讯云 COS / CloudBase 域。
+        guard let putHost = putURL.host?.lowercased(),
+              putHost.hasSuffix(".myqcloud.com") || putHost.hasSuffix(".tcloudbase.com") || putHost.hasSuffix(".tencentcloudapi.com")
+        else { return nil }
+
         // ② 直传 COS（PUT）
         var putReq = URLRequest(url: putURL)
         putReq.httpMethod = "PUT"
