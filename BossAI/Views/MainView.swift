@@ -204,7 +204,9 @@ struct MainView: View {
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
         if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
-        modelContext.delete(conv)
+        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
+        conv.isDeleted = true
+        conv.updatedAt = Date()
         try? modelContext.save()
     }
 
@@ -263,7 +265,7 @@ struct SidebarView: View {
     /// 过滤后的对话列表：先按账号隔离，再按关键词匹配标题/专家名/消息正文
     private var filtered: [Conversation] {
         // P0-16 数据隔离：只显示当前登录账号名下的对话（同设备换账号互不可见）
-        let scoped = conversations.filter { $0.ownerKey == HostedAccount.scopeKey }
+        let scoped = conversations.filter { $0.ownerKey == HostedAccount.scopeKey && !$0.isDeleted }
         let keyword = searchText.trimmingCharacters(in: .whitespaces)
         guard !keyword.isEmpty else { return scoped }
         return scoped.filter { conv in
@@ -492,7 +494,9 @@ struct SidebarView: View {
 
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
-        modelContext.delete(conv)
+        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
+        conv.isDeleted = true
+        conv.updatedAt = Date()
         try? modelContext.save()
     }
 
