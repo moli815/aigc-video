@@ -42,11 +42,14 @@ enum ToolPipeline {
     /// 历史上"生成了但没显示"就是因为某个分支漏了 save，此函数让这类问题在结构上不可能发生。
     @MainActor
     @discardableResult
+    /// 10-22 修复：改为 throws。此前 `try? context.save()` 后无条件返回 msg，
+    /// 保存失败时调用方仍向模型回「成功」——用户看到图，重开会话却没了。
+    /// 现在失败会回滚插入并抛错，调用方必须据此返回失败文案。
     static func persistArtifact(conversation: Conversation,
                                 imageData: Data? = nil,
                                 attachmentIDs: String? = nil,
                                 text: String = "",
-                                context: ModelContext) -> Message {
+                                context: ModelContext) throws -> Message {
         let msg = Message(role: "assistant", text: text)
         if let imageData {
             msg.imageData = imageData
@@ -56,8 +59,13 @@ enum ToolPipeline {
         msg.conversation = conversation
         msg.conversationID = conversation.id
         context.insert(msg)
-        try? context.save()
-        return msg
+        do {
+            try context.save()
+            return msg
+        } catch {
+            context.delete(msg)
+            throw error
+        }
     }
 
     /// P0-69 缩略图生成（长边 400px、JPEG 0.7）：列表渲染用——防大图（2K 约数 MB）在列表滚动时卡顿；
