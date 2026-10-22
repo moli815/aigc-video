@@ -112,9 +112,15 @@ final class BriefingService {
             msg.conversation = conv
             context.insert(msg)
             conv.updatedAt = Date()
-            try? context.save()
-            // 成功后才写幂等标记：失败不写，下次补偿时自动重试
-            UserDefaults.standard.set(Self.dayString(Date()), forKey: "bossai.briefing.run." + scheduleId)
+            // 10-22 P2 修复：此前 `try? save` 失败后仍然写幂等标记——
+            // 表现就是"今天简报已经生成过了"，但用户第二天打开什么都没有（假成功）。
+            // 现在只有持久化成功才写标记，失败留给下次补偿重试。
+            do {
+                try context.save()
+                UserDefaults.standard.set(Self.dayString(Date()), forKey: "bossai.briefing.run." + scheduleId)
+            } catch {
+                // 保存失败：不写标记；内容仍在内存（本轮会话可见），下次补偿会重新生成
+            }
         } catch {
             // 静默：网络/额度问题下次补偿时再试
         }
