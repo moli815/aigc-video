@@ -484,7 +484,9 @@ enum BackupService {
                     message.sourcesJSON = m.sourcesJSON ?? ""
                     message.id = m.id; message.createdAt = m.createdAt; message.attachmentIds = m.attachmentIds
                     if let entry = m.imageEntry { message.imageData = stagedImages[entry] }
-                    message.conversation = conv; transactionContext.insert(message); summary.messages += 1
+                    message.conversation = conv
+                    message.conversationID = conv.id   // 10-22：缺这一行会导致恢复后重进会话看不到消息
+                    transactionContext.insert(message); summary.messages += 1
                     conv.updatedAt = max(conv.updatedAt, m.createdAt)
                 }
             }
