@@ -21,9 +21,17 @@ const API_BASE = process.env.WB_API_BASE || "https://xmy-test-d5g8c0xcifcefcfd5-
 const IMG_BASE = process.env.WB_IMG_BASE || "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/img";
 const TIMEOUT_MS = Number(process.env.WB_HEALTH_TIMEOUT_MS || 120000);
 
+// 10-22 P0 安全修复：移除内置默认凭证（此前缺失环境变量时会回退到真实账号密码，
+// 而本文件在公开仓库里，等同明文泄露）。现在缺配置就直接失败，绝不使用默认账号。
 const token = process.argv[2] || process.env.WB_TEST_TOKEN || "";
-const account = process.argv[3] || process.env.WB_TEST_ACCOUNT || "42099225@gmail.com";
-const password = process.env.WB_TEST_PASSWORD || "68oddGFQ";
+const account = process.argv[3] || process.env.WB_TEST_ACCOUNT || "";
+const password = process.env.WB_TEST_PASSWORD || "";
+
+if (!token && (!account || !password)) {
+  console.error("[health-check] 缺少测试凭证：请设置 WB_TEST_TOKEN，或同时设置 WB_TEST_ACCOUNT / WB_TEST_PASSWORD。");
+  console.error("[health-check] 出于安全考虑不再提供内置默认账号；CI 请使用 GitHub Actions Secrets 注入。");
+  process.exit(2);
+}
 
 const results = [];
 
