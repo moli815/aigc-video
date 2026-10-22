@@ -446,11 +446,29 @@ final class ChatViewModel: ObservableObject {
                 remaining -= clipped.count
                 selected.append(["role": message["role"] ?? "user", "content": clipped])
             } else if let parts = message["content"] as? [[String: Any]] {
-                // P0-13 修复：多模态消息（图片+文本）此前会被 as? String 判空而整体丢弃——
-                // 图片一旦走 image_url 通道，这条消息就再也不该消失。文本计入预算，图片保留。
+                // P0-13：多模态消息（图片+文本）不能整体丢弃。
+                // 10-22 修复：此前只扣预算不截断，超预算仍完整加入——现在按剩余预算截断文本，
+                // 图片始终保留（图片是当前任务的关键输入，不占字符预算）。
                 let textLen = parts.compactMap { $0["text"] as? String }.joined().count
-                remaining -= min(textLen, remaining)
-                selected.append(message)
+                if textLen <= remaining {
+                    remaining -= textLen
+                    selected.append(message)
+                } else {
+                    var clippedParts: [[String: Any]] = []
+                    var budget = remaining
+                    for part in parts {
+                        if let t = part["text"] as? String {
+                            guard budget > 0 else { continue }
+                            let clipped = String(t.prefix(budget))
+                            budget -= clipped.count
+                            clippedParts.append(["type": "text", "text": clipped])
+                        } else {
+                            clippedParts.append(part)   // 图片等非文本内容保留
+                        }
+                    }
+                    remaining = 0
+                    selected.append(["role": message["role"] ?? "user", "content": clippedParts])
+                }
             }
         }
         // 10-22 统一预算观测：把「system 固定块 + 参与预算的正文」合计成总字符数留痕。
@@ -472,11 +490,19 @@ final class ChatViewModel: ObservableObject {
     /// 读取图片附件 → 交给 ImageCompressor 压缩（长边 1024 / JPEG 0.78）→ data URL。
     /// P0-42：视觉 token ≈ 像素 ÷ 750，压缩到 1K 长边可省约 90% 的识别成本（实测识别质量无损）。
     /// 失败返回 nil：调用方降级为"仅 OCR 文本"，绝不因图片处理失败而中断发送。
+    /// 10-22 性能：图片「读取 → 解压 → 缩放 → 重编码 → base64」只做一次并缓存。
+    /// 此前每轮模型请求都会对同一批附件重做一遍（最多 6 张），多轮工具循环下开销叠加。
+    /// 注：这是最小改动版——彻底方案是把预处理改成异步管道（避免首帧在主线程解码大图）。
+    private static var imageURLCache: [UUID: String] = [:]
+
     static func imageDataURL(for file: StoredFile) -> String? {
+        if let cached = imageURLCache[file.id] { return cached }
         let url = FileStore.url(for: file)
         guard let raw = try? Data(contentsOf: url), !raw.isEmpty else { return nil }
         guard let payload = ImageCompressor.compressedData(from: raw) else { return nil }
-        return "data:image/jpeg;base64," + payload.base64EncodedString()
+        let dataURL = "data:image/jpeg;base64," + payload.base64EncodedString()
+        imageURLCache[file.id] = dataURL
+        return dataURL
     }
 
     // MARK: - 编辑重发（P0-4）
