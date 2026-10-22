@@ -347,6 +347,13 @@ private struct MessageImageView: View, Equatable {
                         Button("保存到相册", systemImage: "square.and.arrow.down") {
                             if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
                         }
+                        // 10-22 恢复「换一版」：改用 Button(action:) 显式闭包形式——
+                        // 上次用 `if let onRegenerate` + systemImage 触发了 SwiftEmitModule 失败。
+                        if onRegenerate != nil {
+                            Button(action: { onRegenerate?() }) {
+                                Label("换一版", systemImage: "arrow.clockwise")
+                            }
+                        }
                     }
             } else if loading { ProgressView("正在读取图片…").frame(height: 120) }
             else { Text("图片无法读取，可尝试重新生成。").font(.footnote).foregroundStyle(.secondary) }
