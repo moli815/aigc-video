@@ -412,7 +412,8 @@ final class ChatService {
 
         // P0-59 可用性预过滤（对照 Hermes check_fn 语义）：不可用的能力不进 tools[]——
         // 模型看不到就不会误调用/不会谎报能做到（"调用顺畅且不易出错"的第一道防线）
-        let availableIDs = Set(ToolRegistry.availablePlugins().map { $0.id })
+        // 10-22：统一应用「本地可用性 + 云端开关」——云端关掉的工具绝不出现在 tools[] 里
+        let availableIDs = Set(ToolRegistry.availablePlugins(overrides: HostedAccount.cachedCapabilityOverrides).map { $0.id })
         var tools = (body["tools"] as? [[String: Any]]) ?? []
         if canSearch && allowSearch && !nativeSearch && availableIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
