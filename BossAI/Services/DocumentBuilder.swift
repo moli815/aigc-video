@@ -550,6 +550,15 @@ enum DocumentBuilder {
     }
 
     private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
+        // 10-22 多版式②：表格页。若本页多数内容行是 Markdown 表格（含 |），
+        // 渲染成 PPT 原生表格（<a:tbl>）——用户在 PowerPoint 里能直接改单元格，比贴图片强。
+        let tableRows = bullets.filter { $0.contains("|") }
+        if tableRows.count >= 2, bullets.count - tableRows.count <= 2 {
+            let parsed = MarkdownParser.table(from: tableRows.joined(separator: "\n"))
+            if parsed.count >= 2, (parsed.first?.count ?? 0) >= 2 {
+                return tableSlideXML(title: title, rows: parsed, pageIndex: pageIndex, totalPages: totalPages, theme: theme)
+            }
+        }
         // 10-22 多版式①：大数字卡片。当一页只有 1~2 条内容、且首条本身就是一个数字/金额/百分比时，
         // 改用「超大数字 + 说明」的版式——这是提案里最有冲击力的页面，比子弹点强得多。
         let bigNumberPattern = "^[¥$€]?[0-9][0-9,.]*(?:%|万|亿|s|秒|天|年|课时)?$"
@@ -583,6 +592,28 @@ enum DocumentBuilder {
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="\(titleSize)" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        """
+    }
+
+    /// 10-22 多版式②：表格页——标题 + 原生表格（首行主题色底、白字加粗）。
+    private static func tableSlideXML(title: String, rows: [[String]], pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
+        let cols = max(1, rows.first?.count ?? 1)
+        let colW = 10515600 / cols
+        let gridXML = (0..<cols).map { _ in "<a:gridCol w=\"\(colW)\"/>" }.joined()
+        let body = rows.enumerated().map { rowIdx, row -> String in
+            let isHeader = rowIdx == 0
+            let cells = row.map { cell -> String in
+                let fill = isHeader ? "<a:solidFill><a:srgbClr val=\"\(theme.primary)\"/></a:solidFill>" : "<a:noFill/>"
+                let color = isHeader ? "FFFFFF" : theme.text
+                let bold = isHeader ? " b=\"1\"" : ""
+                return "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"zh-CN\" sz=\"1400\"\(bold) dirty=\"0\"><a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t>\(xmlEscape(cell))</a:t></a:r></a:p></a:txBody><a:tcPr marL=\"91440\" marR=\"91440\" marT=\"45720\" marB=\"45720\"\(fill.isEmpty ? "" : "")>\(fill)</a:tcPr></a:tc>"
+            }.joined()
+            return "<a:tr h=\"400000\">\(cells)</a:tr>"
+        }.joined()
+
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="900000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="2800" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="20" name="表格"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="838200" y="1600000"/><a:ext cx="10515600" cy="3800000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr firstRow="1" bandRow="1"/><a:tblGrid>\(gridXML)</a:tblGrid>\(body)</a:tbl></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
