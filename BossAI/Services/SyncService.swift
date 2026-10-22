@@ -51,9 +51,16 @@ final class SyncService {
         guard !running, HostedAccount.isHostedActive, HostedAccount.shared.isLoggedIn else { return false }
         running = true
         defer { running = false }
+        // 10-22 账号切换保护：同步跨账号时不能把结果算到新账号头上
+        let ownerAtStart = HostedAccount.scopeKey
         do {
             try await push(context: context)
             try await pull(context: context)
+            guard HostedAccount.scopeKey == ownerAtStart else {
+                // 中途切了账号：不推进游标，下次按新账号完整拉取
+                running = false
+                return false
+            }
             lastSyncAt = Date()
             // P0-46 成功即清零失败计数与错误记录
             consecutiveFailures = 0
