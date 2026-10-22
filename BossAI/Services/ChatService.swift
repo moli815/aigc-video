@@ -418,7 +418,10 @@ final class ChatService {
         // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
         // 旧 generate_image 不再注册（执行分支仍兼容旧名，防旧模型残留调用）
         if canImage && availableIDs.contains("generate_image") {
-            for plugin in Self.imageToolPlugins {
+            // 10-22 修复：逐个按插件 ID 过滤。此前只检查旧 ID "generate_image" 就整批注册，
+            // 导致 availability=false 的 image_decompose / image_series 仍出现在 tools[] 里——
+            // 模型看得见就会尝试调用，执行器再拒绝，白白消耗一轮。
+            for plugin in Self.imageToolPlugins where availableIDs.contains(plugin.name) {
                 tools.append(["type": "function", "function": plugin.definition])
             }
         }
