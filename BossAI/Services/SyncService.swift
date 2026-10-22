@@ -160,7 +160,9 @@ final class SyncService {
                 break
             }
         }
-        try? context.save()
+        // 10-22 P1：保存失败必须抛出——否则 syncNow 会把 lastSyncAt 推进，
+        // 这批没落库的数据永远不会再被拉取（用户看不到消息却以为"已同步"）。
+        try context.save()
     }
 
     /// 合并一条云端对话：墓碑→删除；已存在→LWW（远端更新才覆盖，本地为主）；
