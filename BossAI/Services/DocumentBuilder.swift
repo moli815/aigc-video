@@ -550,6 +550,16 @@ enum DocumentBuilder {
     }
 
     private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
+        // 10-22 多版式①：大数字卡片。当一页只有 1~2 条内容、且首条本身就是一个数字/金额/百分比时，
+        // 改用「超大数字 + 说明」的版式——这是提案里最有冲击力的页面，比子弹点强得多。
+        let bigNumberPattern = "^[¥$€]?[0-9][0-9,.]*(?:%|万|亿|s|秒|天|年|课时)?$"
+        if bullets.count <= 2,
+           let rawFirst = bullets.first,
+           rawFirst.range(of: bigNumberPattern, options: .regularExpression) != nil {
+            return bigNumberSlideXML(title: title, number: rawFirst,
+                                     notes: Array(bullets.dropFirst()),
+                                     pageIndex: pageIndex, totalPages: totalPages, theme: theme)
+        }
         // 10-22 页面自审：标题按字数自适应字号，避免长标题换行后压到正文区（标题框高 1143000 EMU ≈ 1.25 inch）
         let titleLen = title.count
         let titleSize = titleLen > 34 ? 2000 : (titleLen > 26 ? 2400 : (titleLen > 18 ? 2800 : 3200))
@@ -573,6 +583,19 @@ enum DocumentBuilder {
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="\(titleSize)" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        """
+    }
+
+    /// 10-22 多版式①：大数字卡片页——顶部色条 + 小标题 + 超大数字 + 说明。
+    private static func bigNumberSlideXML(title: String, number: String, notes: [String],
+                                          pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
+        let notesXML = notes.prefix(2).enumerated().map { idx, note -> String in
+            "<a:p><a:pPr algn=\"ctr\"><a:spcBef><a:spcPts val=\"\(idx == 0 ? 0 : 500)\"/></a:spcBef></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"1800\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"\(theme.muted)\"/></a:solidFill><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t>\(xmlEscape(note))</a:t></a:r></a:p>"
+        }.joined()
+
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="小标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="800100"/><a:ext cx="10515600" cy="600000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="2400" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="5" name="大数字"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1700000"/><a:ext cx="10515600" cy="2000000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="9000" b="1" dirty="0"><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:latin typeface="\(theme.headerFont)"/><a:ea typeface="\(theme.headerFont)"/></a:rPr><a:t>\(xmlEscape(number))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="说明"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="3900000"/><a:ext cx="10515600" cy="1600000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="t"/><a:lstStyle/>\(notesXML)</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
