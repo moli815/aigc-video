@@ -82,9 +82,15 @@ extension ChatViewModel {
     func ensureFileCache() {
         guard !fileCacheLoaded else { return }
         let descriptor = FetchDescriptor<StoredFile>()
-        let all = (try? modelContext.fetch(descriptor)) ?? []
-        fileCache = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
-        fileCacheLoaded = true
+        // 10-22 修复：查询失败时不要标记 loaded——否则同一个 ViewModel 生命周期内不会再重试，
+        // 附件会"凭空消失"且没有任何错误提示。失败就保持未加载，下次访问自动重试。
+        do {
+            let all = try modelContext.fetch(descriptor)
+            fileCache = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+            fileCacheLoaded = true
+        } catch {
+            fileCacheLoaded = false
+        }
     }
 
     func invalidateFileCache() {
