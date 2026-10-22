@@ -51,6 +51,9 @@ struct LibraryView: View {
     private var files: [StoredFile] {
         let keyword = searchText.trimmingCharacters(in: .whitespaces)
         return allFiles.filter { file in
+            // 10-22 P1 隔离修复：此前只过滤类型/分类/关键词，没看 ownerKey——
+            // 同一设备切换账号后，资料库会显示上一个账号的文件名与内容。
+            guard file.ownerKey == HostedAccount.scopeKey else { return false }
             if let kindFilter, file.kind != kindFilter { return false }
             if let categoryFilter, file.category != categoryFilter { return false }
             if favoritesOnly, !file.isFavorite { return false }
