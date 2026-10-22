@@ -227,12 +227,41 @@ struct DocTheme: Sendable {
         }
     }
 
+    /// 10-22 模板蒸馏（轻量版）：把"风格描述"映射成一套主题色板。
+    /// 借鉴 PPT Master 的"从参考材料提取风格"思路，但我们不做 pptx 解析（成本高），
+    /// 而是让模型输出风格词（如"科技 / 温暖 / 国潮"），由这里确定性地选配色。
+    static func fromStyle(_ style: String) -> DocTheme {
+        let s = style.lowercased()
+        if s.contains("科技") || s.contains("tech") || s.contains("未来") {
+            return DocTheme(primary: "0B3D91", secondary: "00B8D9", light: "DCE9FF", text: "1A2233", muted: "6B7785", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+        }
+        if s.contains("国潮") || s.contains("中式") || s.contains("东方") {
+            return DocTheme(primary: "9B1C1C", secondary: "D4A017", light: "FDF2E3", text: "2A1A14", muted: "8A7361", headerFont: "黑体", bodyFont: "楷体")
+        }
+        if s.contains("温暖") || s.contains("暖") || s.contains("生活") {
+            return DocTheme(primary: "B45309", secondary: "F59E0B", light: "FEF3C7", text: "3A2E26", muted: "8A7A6E", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+        }
+        if s.contains("极简") || s.contains("简约") || s.contains("minimal") {
+            return DocTheme(primary: "111827", secondary: "6B7280", light: "F3F4F6", text: "1F2937", muted: "9CA3AF", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+        }
+        if s.contains("奢华") || s.contains("高端") || s.contains("luxury") {
+            return DocTheme(primary: "1C1C28", secondary: "C9A84C", light: "F5F3EF", text: "1C1C28", muted: "7A7262", headerFont: "微软雅黑", bodyFont: "宋体")
+        }
+        if s.contains("自然") || s.contains("环保") || s.contains("绿色") {
+            return DocTheme(primary: "2D6A4F", secondary: "95D5B2", light: "EAF5EF", text: "1B2A22", muted: "5F7168", headerFont: "微软雅黑", bodyFont: "微软雅黑")
+        }
+        if s.contains("活力") || s.contains("年轻") || s.contains("潮流") { return .vivid }
+        if s.contains("正式") || s.contains("公文") || s.contains("严肃") { return .formal }
+        if s.contains("学术") || s.contains("论文") || s.contains("研究") { return .academic }
+        return .business
+    }
+
     static func named(_ name: String) -> DocTheme {
         switch name.lowercased() {
         case "vivid": return .vivid
         case "formal": return .formal
         case "academic": return .academic
-        default: return .business
+        default: return fromStyle(name)   // 10-22：未知名称按风格词蒸馏，不再一律退回 business
         }
     }
 }
@@ -495,7 +524,36 @@ enum DocumentBuilder {
         return zip.finalize()
     }
 
+    /// 10-22 排版增强：把 bullet 里的数字/金额/百分比拆成独立 run，用主题色加粗，
+    /// 让「¥3980」「22.3s」「97%」在满页文字里一眼可见（PPT 最常见的可读性问题）。
+    private static func bulletRuns(_ text: String, theme: DocTheme, size: Int) -> String {
+        let font = theme.bodyFont
+        func plain(_ seg: String) -> String {
+            return "<a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"\(font)\"/><a:ea typeface=\"\(font)\"/></a:rPr><a:t>\(xmlEscape(seg))</a:t></a:r>"
+        }
+        let ns = text as NSString
+        guard let re = try? NSRegularExpression(pattern: "[¥$€]?[0-9][0-9,.]*\\s?%?") else { return plain(text) }
+        let matches = re.matches(in: text, range: NSRange(location: 0, length: ns.length))
+        if matches.isEmpty { return plain(text) }
+        var runs = ""
+        var cursor = 0
+        for m in matches {
+            if m.range.location > cursor {
+                runs += plain(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor)))
+            }
+            let num = ns.substring(with: m.range)
+            runs += "<a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" b=\"1\" dirty=\"0\"><a:solidFill><a:srgbClr val=\"\(theme.primary)\"/></a:solidFill><a:latin typeface=\"\(font)\"/><a:ea typeface=\"\(font)\"/></a:rPr><a:t>\(xmlEscape(num))</a:t></a:r>"
+            cursor = m.range.location + m.range.length
+        }
+        if cursor < ns.length { runs += plain(ns.substring(from: cursor)) }
+        return runs
+    }
+
     private static func slideXML(_ title: String, _ bullets: [String], pageIndex: Int, totalPages: Int, theme: DocTheme) -> String {
+        // 10-22 页面自审：标题按字数自适应字号，避免长标题换行后压到正文区（标题框高 1143000 EMU ≈ 1.25 inch）
+        let titleLen = title.count
+        let titleSize = titleLen > 34 ? 2000 : (titleLen > 26 ? 2400 : (titleLen > 18 ? 2800 : 3200))
+
         var contentRuns = ""
         let shown = Array(bullets.prefix(8))
         for (index, bullet) in shown.enumerated() {
@@ -504,7 +562,7 @@ enum DocumentBuilder {
             let size = isSub ? 1600 : 1800
             let indent = isSub ? 342900 : 0
             let spaceBefore = index == 0 ? 0 : 600
-            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buClr><a:srgbClr val=\"\(theme.primary)\"/></a:buClr><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr><a:r><a:rPr lang=\"zh-CN\" sz=\"\(size)\" dirty=\"0\"><a:solidFill><a:schemeClr val=\"tx1\"/></a:solidFill><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t>\(xmlEscape(text))</a:t></a:r></a:p>"
+            contentRuns += "<a:p><a:pPr marL=\"\(indent + 285750)\" indent=\"-285750\"><a:spcBef><a:spcPts val=\"\(spaceBefore)\"/></a:spcBef><a:buClr><a:srgbClr val=\"\(theme.primary)\"/></a:buClr><a:buFont typeface=\"Arial\"/><a:buChar char=\"•\"/></a:pPr>\(bulletRuns(text, theme: theme, size: size))</a:p>"
         }
         if contentRuns.isEmpty {
             contentRuns = "<a:p><a:r><a:rPr lang=\"zh-CN\" sz=\"1800\" dirty=\"0\"><a:latin typeface=\"\(theme.bodyFont)\"/><a:ea typeface=\"\(theme.bodyFont)\"/></a:rPr><a:t></a:t></a:r></a:p>"
@@ -514,7 +572,7 @@ enum DocumentBuilder {
 
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="3200" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="4" name="顶部色条"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="76200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="2" name="标题 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="457200"/><a:ext cx="10515600" cy="1143000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:rPr lang="zh-CN" sz="\(titleSize)" b="1" dirty="0"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="内容 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="1825625"/><a:ext cx="10515600" cy="4351338"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/>\(contentRuns)</p:txBody></p:sp>\(pageFooter)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 
