@@ -120,7 +120,9 @@ extension ChatViewModel {
             var iteration = 0
             var executedToolIDs = Set<String>()
             var exhausted = true
-            let roundLimit = min(8, AppConfig.maxToolIterations)
+            // 10-22 修复：此前硬编码 min(8, 配置16)，配置永远是 8 与注释不符。
+            // 现在让配置真正生效（上限 16），复杂多实体任务不会在规划完成前被截断。
+            let roundLimit = min(16, max(1, AppConfig.maxToolIterations))
             loop: while iteration < roundLimit {
                 iteration += 1
                 var pendingToolCalls: [ChatService.ToolCall] = []
@@ -130,7 +132,8 @@ extension ChatViewModel {
                 currentTextCommitted = false
                 requestPromptTokens = 0
                 requestCompletionTokens = 0
-                requestPromptEstimate = BudgetTracker.estimateTokens(String(describing: apiMessages))
+                // 10-22：改用结构化估算，避免把图片 base64 当文本算成天量 token
+                requestPromptEstimate = BudgetTracker.estimateRequestTokens(apiMessages)
                 accounted = false
                 var lastPublishTime = ProcessInfo.processInfo.systemUptime
 
@@ -194,7 +197,7 @@ extension ChatViewModel {
                 // and ask again, rather than displaying an unsourced "I searched" claim.
                 if pendingToolCalls.isEmpty, nativeSearch, needsFreshEvidence,
                    !nativeEvidenceFallbackUsed,
-                   (nativeSearchRejected || (!assistantText.contains("https://") && !assistantText.contains("http://"))) {
+                   (nativeSearchRejected || citations.sources.isEmpty) {   // 10-22：改为看引用注册表，而非扫描答案里是否出现 http
                     nativeEvidenceFallbackUsed = true
                     statusText = "模型未给出可核对来源，正在使用 App 搜索补查…"
                     let query = ResearchIntent.searchSeed(from: userText)
@@ -366,7 +369,13 @@ extension ChatViewModel {
                             }
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
-                            ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
+                            do {
+                                try ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
+                            } catch {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: "图片已生成但保存到本地失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试，不要说已成功。")])
+                                continue
+                            }
                             BudgetTracker.addImageGeneration()   // B01：生图计入生图池
                             apiMessages.append([
                                 "role": "tool",
@@ -431,7 +440,13 @@ extension ChatViewModel {
                                                             textContent: content,
                                                             context: modelContext)
                             // P0-59 统一管道落库（含 save）
-                            ToolPipeline.persistArtifact(conversation: conv, attachmentIDs: record.id.uuidString, context: modelContext)
+                            do {
+                                try ToolPipeline.persistArtifact(conversation: conv, attachmentIDs: record.id.uuidString, context: modelContext)
+                            } catch {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(pluginID: "create_document", reason: "文件已生成但存入资料库失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试。")])
+                                continue
+                            }
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
@@ -469,7 +484,13 @@ extension ChatViewModel {
                         statusText = "正在绘制统计图…"
                         if let spec = ChartSpec.parse(call.arguments), let image = ChartRenderer.render(spec) {
                             // P0-59 统一管道落库（含 save）
-                            ToolPipeline.persistArtifact(conversation: conv, imageData: image.jpegData(compressionQuality: 0.92), context: modelContext)
+                            do {
+                                try ToolPipeline.persistArtifact(conversation: conv, imageData: image.jpegData(compressionQuality: 0.92), context: modelContext)
+                            } catch {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(pluginID: "render_chart", reason: "图表已绘制但保存失败（\(error.localizedDescription)）。请如实告知用户。")])
+                                continue
+                            }
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
