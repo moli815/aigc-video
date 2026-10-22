@@ -197,7 +197,9 @@ extension ChatViewModel {
                 // and ask again, rather than displaying an unsourced "I searched" claim.
                 if pendingToolCalls.isEmpty, nativeSearch, needsFreshEvidence,
                    !nativeEvidenceFallbackUsed,
-                   (nativeSearchRejected || citations.sources.isEmpty) {   // 10-22：改为看引用注册表，而非扫描答案里是否出现 http
+                   // 10-22：优先看引用注册表（citations），同时保留"答案里连 URL 都没有"这一强信号作为兜底。
+                   // 两者都满足才回退，避免把"模型给了链接但未走注册表"的合法回答误判成缺来源。
+                   (nativeSearchRejected || (citations.sources.isEmpty && !assistantText.contains("https://") && !assistantText.contains("http://"))) {
                     nativeEvidenceFallbackUsed = true
                     statusText = "模型未给出可核对来源，正在使用 App 搜索补查…"
                     let query = ResearchIntent.searchSeed(from: userText)
