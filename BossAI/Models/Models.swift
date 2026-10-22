@@ -36,6 +36,9 @@ final class Conversation {
     var summarizedCount: Int = 0
     /// P0-16 数据隔离：归属账号键（同一设备多账号互不可见）
     var ownerKey: String = ""
+    /// 10-22 同步墓碑（客户端半边）：软删除标记。删除只置位不物理删，
+    /// 这样"本机删除"会随同步推上去，另一台设备拉取后也会标记删除，不会"删了又复活"。
+    var isDeleted: Bool = false
 
     /// 初始化：ownerKey 固定为当前登录账号的 scopeKey（P0-16 数据隔离锚点）。
     init(expertId: String, title: String) {
