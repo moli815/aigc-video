@@ -97,6 +97,8 @@ final class ChatViewModel: ObservableObject {
 
     var fileCache: [UUID: StoredFile] = [:]
     /// 10-22 上下文预算可观测：每次构建请求后记录总字符与是否触发裁剪（先可观测，再谈优化）
+    /// 10-22：关键保存失败的可观测状态（助手正文/引用/迁移）。UI 可据此提示「已生成但未持久化」。
+    @Published var persistenceWarning: String?
     private(set) var lastContextChars: Int = 0
     private(set) var contextTruncated: Bool = false
     var fileCacheLoaded = false
@@ -357,6 +359,16 @@ final class ChatViewModel: ObservableObject {
     /// 组装发送给模型的完整消息数组：
     /// 两条 system（稳定块+易变块，P0-2 缓存稳定化）→ 最近 40 条消息（含附件
     /// 注入与多模态图片）→ 尾部按 48K 字符预算裁剪。稳定块永不变化保证前缀缓存命中。
+    /// 统一的关键保存入口：失败不静默，写入 persistenceWarning 供 UI 展示。
+    /// 说明：这里不抛错（调用点多为收尾路径，抛错会打断流式收尾）；但失败一定可观测。
+    func saveOrWarn() {
+        do {
+            try modelContext.save()
+        } catch {
+            persistenceWarning = "内容已生成，但保存到本地失败（\(error.localizedDescription)）。请先复制重要内容，稍后重试。"
+        }
+    }
+
     func buildAPIMessages(conv: Conversation) -> [[String: Any]] {
         let span = PerformanceTrace.begin("ContextBuild")
         defer { PerformanceTrace.end("ContextBuild", span) }
