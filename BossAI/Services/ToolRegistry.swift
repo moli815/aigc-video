@@ -212,8 +212,15 @@ enum ToolRegistry {
 
     /// 可用性预过滤（对照 Hermes check_fn 语义）：不可用的能力直接从清单与 tools[] 中移除——
     /// 模型看不到就不会误调用，这是"调用顺畅且不易出错"的第一道防线。
-    static func availablePlugins() -> [CapabilityPlugin] {
-        plugins.filter { p in p.availability?() ?? true }
+    /// 10-22 修复：支持云端 overrides（enabled=false 关闭）。此前 availablePlugins() 不接收云端开关，
+    /// 导致「系统提示说不可用、tools[] 里却还有」的不一致。现在唯一入口统一应用「本地可用性 + 云端开关」。
+    static func availablePlugins(overrides: [String: Any]? = nil) -> [CapabilityPlugin] {
+        plugins.filter { p in
+            if let ov = overrides?[p.id] as? [String: Any], let enabled = ov["enabled"] as? Bool, enabled == false {
+                return false
+            }
+            return p.availability?() ?? true
+        }
     }
 
     /// ① 能力清单文本：注入系统提示——只包含【当前可用】的能力及其边界
@@ -221,7 +228,7 @@ enum ToolRegistry {
     /// - overrides：云端按 id 覆盖（enabled=false 关闭 / limits 追加边界）
     static func capabilityManifest(cloudExtra: String? = nil, overrides: [String: Any]? = nil) -> String {
         var lines: [String] = ["【当前对话的真实能力清单·最高优先级·必须严格遵守】"]
-        for p in availablePlugins() {
+        for p in availablePlugins(overrides: overrides) {
             var limits = p.limits
             if let ov = overrides?[p.id] as? [String: Any] {
                 if let enabled = ov["enabled"] as? Bool, enabled == false { continue }
