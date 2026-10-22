@@ -269,6 +269,31 @@ enum BudgetTracker {
         max(1, Int(ceil(Double(text.count) / 1.5)))
     }
 
+    /// 10-22 修复：按「消息结构」估算，而不是把整个字典 `String(describing:)` 成字符串。
+    /// 旧实现会把 image_url 里的 base64（一张 1.5MB 图 ≈ 200 万字符）算成约 133 万 token，
+    /// 供应商没返回 usage 时会用这个值记账，导致图片对话额度被严重多扣。
+    /// 现在：正文按 1.5 字符/token；图片按「张数 × 1200 token」保守估算（视觉 token 量级）。
+    static func estimateRequestTokens(_ messages: [[String: Any]]) -> Int {
+        var chars = 0
+        var imageCount = 0
+        for m in messages {
+            if let t = m["content"] as? String {
+                chars += t.count
+            } else if let parts = m["content"] as? [[String: Any]] {
+                for part in parts {
+                    if let t = part["text"] as? String { chars += t.count }
+                    if part["image_url"] != nil { imageCount += 1 }
+                }
+            }
+            if let calls = m["tool_calls"] as? [[String: Any]] {
+                for c in calls {
+                    if let f = c["function"] as? [String: Any], let args = f["arguments"] as? String { chars += args.count }
+                }
+            }
+        }
+        return max(1, Int(ceil(Double(chars) / 1.5)) + imageCount * 1200)
+    }
+
     /// 各家单价（元 / 百万 token，估算值，仅用于额度控制）
     private static func prices(providerId: String) -> (in: Double, out: Double) {
         switch providerId {
