@@ -472,7 +472,14 @@ final class HostedAccount: ObservableObject {
     /// 并广播凭据变更通知，让 ChatService 等持有旧 Key 的对象立即刷新。
     private func storeToken(_ value: String?) {
         if let value, !value.isEmpty {
-            KeychainHelper.save(value, service: AppConfig.keychainService, account: Self.tokenAccount)
+            // 10-22 可靠性：Keychain 写入失败时必须显式失败，否则会出现"显示已登录、重启后掉登录"
+            let saved = KeychainHelper.save(value, service: AppConfig.keychainService, account: Self.tokenAccount)
+            if !saved {
+                token = nil
+                UserDefaults.standard.set(false, forKey: Self.loggedInKey)
+                lastErrorMessage = "登录凭证保存失败（系统钥匙串不可写），请重启 App 后重试"
+                return
+            }
         } else {
             KeychainHelper.delete(service: AppConfig.keychainService, account: Self.tokenAccount)
         }
@@ -602,10 +609,9 @@ final class HostedAccount: ObservableObject {
     }
 
     private func forceLogout() async {
-        storeToken(nil)
-        chatBand = .normal
-        imageBand = .normal
-        persistInfo()
+        // 10-22 修复：此前只清 token/band，displayName、tier、额度缓存全部残留——
+        // 强制登出后侧栏仍显示上一个账号的信息。现统一复用 logout() 的完整清理。
+        logout()
     }
 
     // MARK: - 状态刷新
