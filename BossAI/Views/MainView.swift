@@ -315,7 +315,7 @@ struct SidebarView: View {
                         withAnimation(.easeInOut(duration: 0.2)) { expertExpanded.toggle() }
                     } label: {
                         HStack {
-                            Label(ExpertCatalog.ui.title, systemImage: ExpertCatalog.ui.icon)
+                            Label("您的专属军师", systemImage: ExpertCatalog.ui.icon)
                             Spacer()
                             Text("\(ExpertCatalog.all.count)")
                                 .font(.caption)
@@ -569,12 +569,9 @@ struct QuotaSidebarWidget: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            HStack(spacing: 6) {
-                // P0-57 额度展示精简：只保留「本月」额度环（用户明确要求取消周/日显示）
-                QuotaSidebarRing(pct: HostedAccount.cachedMonthRemainingPct,
-                                 tint: .cyan, label: "本月",
-                                 resetAt: HostedAccount.cachedMonthResetAt)
-            }
+            // 10-22 用户要求：底部不再显示额度金额/百分比，改为「会员到期时间」
+            MembershipExpiryRing(daysLeft: HostedAccount.cachedDaysLeft,
+                                 until: HostedAccount.cachedMemberUntil)
             HStack(spacing: 8) {
                 Button { showIdentity = true } label: {
                     Label("身份设置", systemImage: "gearshape")
@@ -607,6 +604,52 @@ struct QuotaSidebarWidget: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
         .padding(.horizontal, 12)
         .padding(.top, 12)
+    }
+}
+
+/// 会员有效期环：环心显示剩余天数，环按「剩余/30」比例收缩，下方标注到期日期。
+/// 10-22 用户要求用「会员到期」替代原额度金额展示。
+struct MembershipExpiryRing: View {
+    @Environment(\.appTheme) private var theme
+    let daysLeft: Int?
+    let until: Date?
+
+    private var days: Int { max(0, daysLeft ?? 0) }
+    private var progress: CGFloat {
+        // 以 30 天为一个周期估算环进度（到期时间不由本地计算，仅作视觉参考）
+        min(1, max(0.02, CGFloat(days) / 30.0))
+    }
+    private var expired: Bool { (daysLeft ?? 0) <= 0 }
+    private var expiryText: String {
+        guard let until else { return expired ? "已到期" : "—" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: until) + " 到期"
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.08), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(expired ? Color.red.opacity(0.8) : theme.accent,
+                            style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                VStack(spacing: 0) {
+                    Text(expired ? "0" : "\(days)")
+                        .font(.system(size: 15, weight: .heavy, design: .rounded).monospacedDigit())
+                    Text("天").font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 64, height: 64)
+            Text("会员有效期").font(.caption2).foregroundStyle(.secondary)
+            Text(expiryText)
+                .font(.system(size: 8.5)).foregroundStyle(.tertiary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(expired ? "会员已到期" : "会员剩余 \(days) 天，\(expiryText)")
     }
 }
 
@@ -704,22 +747,11 @@ struct ExpertRow: View {
             // P0-47 简笔风图标（方案 A 实装）：SF Symbol 线性描边（去 .fill 变体）+ 低饱和底，
             // 替代卡通 emoji——与设计预览一致；symbol 缺失时才回退 emoji/首字徽章。
             // 固定 frame + 居中 = 任何图标形态下都绝对对齐（P0-23 结论保留）。
-            ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Self.tint(for: expert.id).opacity(0.15))
-                if !expert.symbol.isEmpty {
-                    Image(systemName: Self.lineSymbol(for: expert))
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Self.tint(for: expert.id))
-                } else if let emoji = expert.emoji, !emoji.isEmpty {
-                    Text(emoji).font(.system(size: 15))
-                } else {
-                    Text(String(expert.name.prefix(1)))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(width: 26, height: 26)
+            // 10-22 用户要求：取消每位专家的独立图标，统一为品牌图标的黑白简笔画（线性描边、无底色）
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)
@@ -980,7 +1012,8 @@ struct NewChatSheet: View {
                             Text("继续最近的对话")
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            ForEach(conversations.prefix(6), id: \.id) { conv in
+                            // 10-22 P1 隔离修复：此前直接 prefix(6) 取全量，切账号后会显示上一账号的会话标题
+                            ForEach(conversations.filter { $0.ownerKey == HostedAccount.scopeKey }.prefix(6), id: \.id) { conv in
                                 Button {
                                     dismiss()
                                     onOpenConversation(conv)
