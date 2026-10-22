@@ -159,10 +159,8 @@ struct MainView: View {
                 let scopedConv = uuid.flatMap { id in
                     conversations.first(where: { $0.id == id && $0.ownerKey == HostedAccount.scopeKey })
                 }
-                let anyConv = uuid.flatMap { id in
-                    conversations.first(where: { $0.id == id })
-                }
-                if let conv = scopedConv ?? anyConv {
+                // 10-22 P1 隔离修复：删掉 anyConv 兜底——它会打开另一个账号的会话（跨账号数据泄露）。
+                if let conv = scopedConv {
                     ChatContainerView(conversation: conv, expert: conv.expert)
                         .id(key)
                 } else {
