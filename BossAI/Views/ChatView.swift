@@ -454,7 +454,9 @@ struct ChatView: View {
                 guard followOutput else { return }
                 scrollClock.pending?.cancel()
                 scrollClock.pending = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    // 10-22 性能：120ms → 60ms。长回答时 120ms 的静默窗口让滚动明显滞后，
+                    // 60ms 仍能合并高频 token，但跟随感好很多。
+                    try? await Task.sleep(nanoseconds: 60_000_000)
                     guard !Task.isCancelled, followOutput else { return }
                     requestScrollToBottom()
                 }
@@ -673,7 +675,9 @@ private struct StreamingMessageRow: View {
             while !Task.isCancelled, shownCount < targetCount {
                 let pending = targetCount - shownCount
                 shownCount = min(targetCount, shownCount + max(2, pending / 15))
-                try? await Task.sleep(nanoseconds: 18_000_000)
+                // 10-22 性能：18ms（≈55fps）→ 24ms（≈42fps）。每帧都在重排整段 Markdown，
+                // 降到 42fps 视觉几乎无差，但重排次数减少约 25%。
+                try? await Task.sleep(nanoseconds: 24_000_000)
             }
             pump = nil
         }
