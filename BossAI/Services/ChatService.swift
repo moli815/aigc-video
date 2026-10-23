@@ -438,9 +438,22 @@ final class ChatService {
             tools.append(["type": "function", "function": document])
         }
         if policy.availableToolIDs.contains("expert_skill") { tools.append(["type": "function", "function": Self.expertSkillFunction(capability)]) }
-        if policy.availableToolIDs.contains("search_library") { tools.append(["type": "function", "function": ["name": "search_library",
-            "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
-            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]) }
+        if policy.availableToolIDs.contains("search_library") {
+            tools.append([
+                "type": "function",
+                "function": [
+                    "name": "search_library",
+                    "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "query": ["type": "string"]
+                        ],
+                        "required": ["query"]
+                    ]
+                ]
+            ])
+        }
         body["tools"] = tools
     }
 
