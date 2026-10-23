@@ -119,6 +119,9 @@ enum ToolRegistry {
             retryOnTransient: true, producesArtifact: true,
             failureAdvice: "请确认要编辑的图片是否存在，或改用 image_generate 生成新图"
         ),
+        // 10-23 P1：image_decompose 当前执行链没有把源图片传进去，ImageService 返回契约也不支持
+        // 多图层产物。在完整实现「source → 参考图 → 多图层结果 → 图层元数据 → 资料库落库」之前，
+        // 按审计建议关闭该工具，避免模型调用后进入不可预期的执行分支。
         CapabilityPlugin(
             id: "image_decompose", toolset: "media", displayName: "图层拆分", executor: .local,
             abilities: ["把一张图拆成「底图 + 最多 16 个透明 PNG 图层」，返回每个图层的名称/位置/层级"],
@@ -128,7 +131,7 @@ enum ToolRegistry {
                 "拆分出的图层是透明 PNG，底图格式跟随 output_format",
             ],
             requiresEnv: ["生图 API Key"],
-            availability: { true },
+            availability: { false },
             maxResultChars: 4000, executionTimeout: 180,
             retryOnTransient: false, producesArtifact: false,
             failureAdvice: "如实告知用户该能力暂未开放"
