@@ -14,25 +14,40 @@ extension ChatViewModel {
     func attach(urls: [URL]) {
         guard !urls.isEmpty, !isImporting else { return }
         isImporting = true
+        // 10-23 P1 修复：任务启动时捕获账号/会话身份，写库前再次校验，
+        // 防止导入过程中切换账号或会话导致附件归属错误。
+        let capturedOwnerKey = HostedAccount.scopeKey
+        let capturedGeneration = HostedAccount.shared.sessionGeneration
+        let capturedConversationID = conversation?.id.uuidString ?? ""
         Task {
             var added: [StoredFile] = []
+            defer { isImporting = false }
             for url in urls {
                 let (data, text) = await FileImportService.load(url: url)
                 guard !data.isEmpty else { errorMessage = FriendlyError.fileProblem(url.lastPathComponent, reason: "没能读取（可能超过 32MB 或格式不受支持）"); continue }
+                guard HostedAccount.scopeKey == capturedOwnerKey,
+                      HostedAccount.shared.sessionGeneration == capturedGeneration else {
+                    errorMessage = "账号或会话已切换，未完成的附件导入已中止。"
+                    break
+                }
                 let name = url.lastPathComponent
                 do {
-                let record = try await FileStore.storeAsync(data: data,
-                                                     filename: name,
-                                                     kind: .uploaded,
-                                                     sourceConversationId: conversation?.id.uuidString ?? "",
-                                                     textContent: text,
-                                                     context: modelContext)
+                    let record = try await FileStore.storeAsync(data: data,
+                                                         filename: name,
+                                                         kind: .uploaded,
+                                                         sourceConversationId: capturedConversationID,
+                                                         textContent: text,
+                                                         context: modelContext)
+                    // 再次锚定归属：storeAsync 内部用初始化时的 scopeKey，
+                    // 这里用启动时捕获的值覆盖，确保跨账号/会话切换下也不串号。
+                    record.ownerKey = capturedOwnerKey
+                    record.sourceConversationId = capturedConversationID
+                    try? modelContext.save()
                     added.append(record)
                 } catch { errorMessage = FriendlyError.message(for: error, scene: .upload) }
             }
             pendingAttachments.append(contentsOf: added)
             invalidateFileCache()
-            isImporting = false
         }
     }
 
@@ -40,25 +55,37 @@ extension ChatViewModel {
     func attach(images: [UIImage]) {
         guard !images.isEmpty, !isImporting else { return }
         isImporting = true
+        // 10-23 P1 修复：任务启动时捕获账号/会话身份，写库前再次校验。
+        let capturedOwnerKey = HostedAccount.scopeKey
+        let capturedGeneration = HostedAccount.shared.sessionGeneration
+        let capturedConversationID = conversation?.id.uuidString ?? ""
         Task {
             var added: [StoredFile] = []
+            defer { isImporting = false }
             for (index, image) in images.enumerated() {
                 guard let data = image.ocrFriendlyJPEG() else { continue }
+                guard HostedAccount.scopeKey == capturedOwnerKey,
+                      HostedAccount.shared.sessionGeneration == capturedGeneration else {
+                    errorMessage = "账号或会话已切换，未完成的图片导入已中止。"
+                    break
+                }
                 let name = "照片_\(Self.timestamp())_\(index + 1).jpg"
                 let text = await FileImportService.ocr(imageData: data)
                 do {
-                let record = try await FileStore.storeAsync(data: data,
-                                                     filename: name,
-                                                     kind: .uploaded,
-                                                     sourceConversationId: conversation?.id.uuidString ?? "",
-                                                     textContent: text,
-                                                     context: modelContext)
+                    let record = try await FileStore.storeAsync(data: data,
+                                                         filename: name,
+                                                         kind: .uploaded,
+                                                         sourceConversationId: capturedConversationID,
+                                                         textContent: text,
+                                                         context: modelContext)
+                    record.ownerKey = capturedOwnerKey
+                    record.sourceConversationId = capturedConversationID
+                    try? modelContext.save()
                     added.append(record)
                 } catch { errorMessage = FriendlyError.message(for: error, scene: .upload) }
             }
             pendingAttachments.append(contentsOf: added)
             invalidateFileCache()
-            isImporting = false
         }
     }
 

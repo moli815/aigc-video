@@ -79,12 +79,18 @@ struct MessageRow: View {
                     AssistantAvatar(isReasoning: streamingText != nil && isReasoning)
                         .offset(y: startsWithText ? -2 : 0)
                     VStack(alignment: .leading, spacing: 8) {
-                        // 10-23 P3：列表渲染用缩略图，全屏/保存/分享必须用原图，避免用户存下 400px 小图
-                        if let original = message.imageData ?? message.thumbnailData {
+                        // 10-23 P3：列表渲染用缩略图，全屏/保存/分享必须用原图，避免用户存下 400px 小图。
+                        // 只有原图存在时才显示图片；原图缺失时显示"未下载原图"占位，不拿缩略图冒充原图。
+                        if let original = message.imageData {
                             MessageImageView(thumbnailData: message.thumbnailData,
                                              originalData: original,
                                              canRegenerate: onRegenerate != nil,
                                              onRegenerate: onRegenerate).equatable()
+                        } else if message.thumbnailData != nil {
+                            Text("原图未下载，无法放大/保存。")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 8)
                         }
                         ForEach(files, id: \.id) { file in
                             FileCardView(file: file) { onPreview(file) }

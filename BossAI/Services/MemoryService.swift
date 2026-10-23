@@ -131,13 +131,13 @@ final class MemoryService {
                 guard HostedAccount.scopeKey == ownerAtStart else { return }
                 context.insert(MemoryItem(content: text, source: source))
             case "update":
+                // 10-23 P1 修复：update 既有记录前也必须校验账号归属，防止切账号后修改旧账号记忆。
+                guard HostedAccount.scopeKey == ownerAtStart else { return }
                 if let index = op["index"] as? Int, existing.indices.contains(index) {
                     existing[index].content = text
                     if !source.isEmpty { existing[index].source = source }
                 } else {
                     // 模型给出的 index 越界（幻觉）：退化为新增，不丢内容
-                    // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
-                    guard HostedAccount.scopeKey == ownerAtStart else { return }
                     context.insert(MemoryItem(content: text, source: source))
                 }
             default:
@@ -145,7 +145,9 @@ final class MemoryService {
             }
         }
         // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
-        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
+        do { try context.save() } catch {
+            PerformanceTrace.event("MemorySaveFailed")
+        }
     }
 
     // MARK: - P0-46 会员模式：服务端抽取（Mem0 式合并决策）
@@ -182,23 +184,27 @@ final class MemoryService {
                 guard HostedAccount.scopeKey == ownerAtStart else { return }
                 context.insert(MemoryItem(content: content, source: source))
             case "update":
+                // 10-23 P1 修复：update 既有记录前也必须校验账号归属。
+                guard HostedAccount.scopeKey == ownerAtStart else { return }
                 if let index, existing.indices.contains(index), !content.isEmpty {
                     existing[index].content = content
                     if !source.isEmpty { existing[index].source = source }
                 } else if !content.isEmpty, !known.contains(content) {
                     // index 越界（幻觉）：退化为新增，不丢内容
                     known.insert(content)
-                    // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
-                    guard HostedAccount.scopeKey == ownerAtStart else { return }
                     context.insert(MemoryItem(content: content, source: source))
                 }
             case "delete":
+                // 10-23 P1 修复：delete 前也必须校验账号归属，防止跨账号删除记忆。
+                guard HostedAccount.scopeKey == ownerAtStart else { return }
                 if let index, existing.indices.contains(index) { context.delete(existing[index]) }
             default:
                 continue
             }
         }
         // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
-        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
+        do { try context.save() } catch {
+            PerformanceTrace.event("MemorySaveFailed")
+        }
     }
 }

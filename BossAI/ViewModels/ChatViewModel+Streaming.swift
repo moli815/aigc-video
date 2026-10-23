@@ -154,6 +154,21 @@ extension ChatViewModel {
                     }
                 }
 
+                // 10-23 修复：首 token 硬性超时保护。模型/网关偶发不响应时，
+                // 不能无限停在"正在分析任务…"；45 秒无首包则视为失败，给出明确错误并允许重试。
+                let firstTokenTimeout = HostedAccount.isHostedActive ? HostedAccount.cachedChatFirstTokenTimeout : 45
+                var didTimeout = false
+                let timeoutTask = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(firstTokenTimeout * 1_000_000_000))
+                    guard let self, !Task.isCancelled, !firstTokenFlag.isSet else { return }
+                    didTimeout = true
+                    self.errorMessage = "模型首包响应超时（\(firstTokenTimeout)秒），请检查网络后重试。"
+                    self.failedUserMessageID = self.sortedMessages.last(where: { $0.role == "user" })?.id
+                    self.failedAssistantMessageID = assistantMessage.id
+                    self.streamTask?.cancel()
+                }
+                defer { timeoutTask.cancel() }
+
                 for try await event in chatService.stream(messages: apiMessages, enableTools: iteration < roundLimit, expertID: expert.id, allowSearch: researchMode != .local, useNativeSearch: nativeSearch && !nativeEvidenceFallbackUsed && !nativeSearchRejected, tier: researchMode == .online ? "pro" : "flash", fastMode: false, expertTools: expert.skill.tools, chatMode: HostedAccount.isHostedActive ? chatMode : nil) {
                     // P0-38 档位仅会员模式生效：自备 Key 模式直连上游，注入 chatMode 会被上游判为未知参数；
                     // 同时自备模式没有服务端路由，档位本就无意义（与 line 234 的成本保护同思路）。
@@ -162,6 +177,10 @@ extension ChatViewModel {
                     case .textDelta(let delta):
                         firstTokenFlag.set()
                         deepHintTask = nil
+                        // 10-23 修复：文本开始流式时给出更明确的状态，避免用户长期看到"正在分析任务…"
+                        if statusText == "正在分析任务…" || statusText == "正在核对证据并组织答案…" {
+                            statusText = "正在生成回答…"
+                        }
                         assistantText += delta
                         if isReasoning { isReasoning = false }   // P0-68 正文开始，结束思考提示
                         // 合并发布内存缓冲，不逐delta写库；实际视图重算范围需Instruments确认。
@@ -186,6 +205,12 @@ extension ChatViewModel {
                     case .finished:
                         break
                     }
+                }
+
+                if didTimeout {
+                    // 超时任务已经设置 errorMessage 并取消 streamTask；本轮直接退出，
+                    // 由 retry 机制或用户手动重试处理。
+                    break loop
                 }
 
                 if pendingToolCalls.isEmpty { fullText = assistantText }
@@ -292,14 +317,14 @@ extension ChatViewModel {
                         do {
                             let args = try JSONSerialization.jsonObject(with: Data(call.arguments.utf8)) as? [String: Any]
                             let result = try ExpertKnowledgeService.toolResult(args?["query"] as? String ?? userText, context: modelContext)
-                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": ToolPipeline.boundResult(result, pluginID: "search_library")])
                         } catch { apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": ToolPipeline.failureNote(pluginID: "search_library", reason: error.localizedDescription)]) }
                     case "expert_skill":
                         do {
                             let span = PerformanceTrace.begin("ExpertSkill")
                             defer { PerformanceTrace.end("ExpertSkill", span) }
                             let result = try ExpertSkillRuntime.execute(arguments: call.arguments, expertID: expert.id)
-                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": ToolPipeline.boundResult(result, pluginID: "expert_skill")])
                         } catch {
                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                 "content": ToolPipeline.failureNote(pluginID: "expert_skill", reason: error.localizedDescription)])
@@ -490,7 +515,7 @@ extension ChatViewModel {
                                 content = "相同查询已检索，复用本轮此前证据。来源编号：" + ids.map(String.init).joined(separator: "、") + "。没有新的抓取或日期核验。"
                             }
                         } else { content = "本批并行或总证据预算已达上限。缺失对象请明确标未核实，必要时下批补查；不要重复已查主题。" }
-                        apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": content])
+                        apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": ToolPipeline.boundResult(content, pluginID: "web_search")])
                         researchSummary = "本轮检索 \(researchBudget.searches) 个主题 · \(citations.sources.count) 条候选来源"
 
                     case "render_chart":
@@ -578,8 +603,10 @@ extension ChatViewModel {
         }
 
         // 用户主动停止：无论走 break 还是抛 CancellationError，统一在这里收尾
+        // 10-23 修复：首 token 超时也会触发 Task.isCancelled，但此时 errorMessage 已设置，
+        // 需要保留空的 assistantMessage 以便 retryReply 能正常工作；只有用户主动停止且无错误时才删除。
         if Task.isCancelled {
-            if assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
+            if errorMessage == nil, assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
                 modelContext.delete(assistantMessage)
             } else if !assistantMessage.text.isEmpty {
                 assistantMessage.text += "\n\n*（已停止生成）*"

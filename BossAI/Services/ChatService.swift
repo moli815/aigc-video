@@ -551,7 +551,7 @@ final class ChatService {
     /// 10-21 新增 structured：把需求拆成 7 个视觉字段，服务端按模板拼装成专业 prompt（信息更可控、文字更准）
     static let imageGenerateFunction: [String: Any] = [
         "name": "image_generate",
-        "description": "纯文生图：根据文字描述从零生成一张新图片（海报、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。数据统计图请改用 Markdown 数据表。**优先用 structured 传结构化字段**（信息更可控、画面文字更准确）；只有确实无法拆分时才用 prompt。",
+        "description": "纯文生图：根据文字描述从零生成一张全新图片（海报、名片、封面、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。当用户说「根据这张图/这些图片的内容帮我做一张新的海报/名片/封面」时，属于根据描述做全新图，必须使用本工具；不要误用 image_edit。数据统计图请改用 Markdown 数据表。**优先用 structured 传结构化字段**（信息更可控、画面文字更准确）；只有确实无法拆分时才用 prompt。",
         "parameters": [
             "type": "object",
             "properties": [
@@ -578,7 +578,7 @@ final class ChatService {
     /// ② 图生图编辑：source 必须明确指定底图（enum 强制，不再靠两个 boolean 猜）
     static let imageEditFunction: [String: Any] = [
         "name": "image_edit",
-        "description": "编辑已有图片（改风格/加元素/去元素/换背景）。**source 必填**：last=最近生成的图、attached=用户本轮上传的图、both=双图融合（底图+上传素材）。用户说「这张图/这张照片」且刚上传过图 → attached；说「刚才那张/你生成的」→ last；要把 Logo/人物加到生成图上 → both。",
+        "description": "编辑已有图片（改风格/加元素/去元素/换背景）。**仅当用户明确要求修改/编辑/改某张已有图片时才调用**。**source 必填**：last=最近生成的图、attached=用户上传的图、both=双图融合（底图+上传素材）。用户说「这张图/这张照片」且刚上传过图 → attached；说「刚才那张/你生成的」→ last；要把 Logo/人物加到生成图上 → both。如果用户说「根据这张图做一张新的/全新的海报/名片/封面」，那是生成新图，必须使用 image_generate，禁止用 image_edit。",
         "parameters": [
             "type": "object",
             "properties": [

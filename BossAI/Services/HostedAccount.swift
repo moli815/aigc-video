@@ -287,6 +287,8 @@ final class HostedAccount: ObservableObject {
     nonisolated static var cachedChatTimeout: TimeInterval { behaviorDouble("chatTimeout", default: 120) }
     /// 生图请求超时（秒）；云端可调，默认 180
     nonisolated static var cachedImageTimeout: TimeInterval { behaviorDouble("imageTimeout", default: 180) }
+    /// 首 token 超时（秒）：流式开始后多久没收到首个 token 视为失败；云端可调，默认 45
+    nonisolated static var cachedChatFirstTokenTimeout: TimeInterval { behaviorDouble("chatFirstTokenTimeout", default: 45) }
     /// 流式中断自动重试次数（0=关闭）；云端可调，默认 1
     nonisolated static var cachedStreamRetry: Int { behaviorInt("streamRetry", default: 1) }
     /// 生图失败重试次数（0=关闭）；云端可调，默认 1

@@ -260,14 +260,20 @@ final class ChatViewModel: ObservableObject {
         return f.string(from: Date())
     }
 
-    /// P0-57 取本轮用户上传的第一张图片数据（作为生图参考图）——此前生图只支持编辑 AI 生成的图，
-    /// 用户上传的图片（如 Logo、底图）无法作为编辑底图，导致"把 Logo 放到图二上"静默失败。
+    /// P0-57 取用户上传的图片数据作为生图参考图。
+    /// 10-23 修复：此前只查"最后一条用户消息"，当前消息是文字时找不到附件；
+    /// 现在回查最近 3 条带图片附件的用户消息，让"先传图识别、再发文字做新海报"这类
+    /// 多轮流程仍能把原图传进 image_edit / 多模态上下文。
     func attachedImageData(in conv: Conversation) -> Data? {
         let imgExts = ["png", "jpg", "jpeg", "webp", "heic"]
-        let userMsgs = conv.messages.filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
-        guard let lastUser = userMsgs.last else { return nil }
-        for file in files(for: lastUser) where imgExts.contains(file.ext.lowercased()) {
-            if let data = try? Data(contentsOf: FileStore.url(for: file)) { return data }
+        let recentUserMsgs = conv.messages
+            .filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
+            .sorted { $0.createdAt < $1.createdAt }
+            .suffix(3)
+        for userMsg in recentUserMsgs.reversed() {
+            for file in files(for: userMsg) where imgExts.contains(file.ext.lowercased()) {
+                if let data = try? Data(contentsOf: FileStore.url(for: file)) { return data }
+            }
         }
         return nil
     }
@@ -420,6 +426,25 @@ final class ChatViewModel: ObservableObject {
         ]
         var injectedBudget = 30000
 
+        // 10-23 修复：先识别最新用户消息是否为"纯文本但涉及生图/改图"。
+        // 如果是，且近 2 轮存在用户上传的图片，就把最近一张用户图缓存成 image_url，
+        // 在循环处理最新消息时一并塞进 content。这样"先传图识别、再发文字做新海报"
+        // 时模型仍能看到原图，避免误判为只改文字或选错工具。
+        let latestUserMessage = sortedMessages.last(where: { $0.role == "user" })
+        var carriedImageURL: String?
+        if let latestUser = latestUserMessage,
+           latestUser.attachmentIdList.isEmpty,
+           Self.mentionsImageGenerationOrEdit(latestUser.text) {
+            let recentImageFile = sortedMessages
+                .filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
+                .suffix(2)
+                .flatMap { files(for: $0) }
+                .last(where: { $0.isImage })
+            if let file = recentImageFile {
+                carriedImageURL = await Self.imageDataURL(for: file)
+            }
+        }
+
         for m in sortedMessages.suffix(40) {
             if m.imageData != nil {
                 messages.append(["role": "assistant", "content": "[已向用户展示生成的图片]"])
@@ -428,8 +453,15 @@ final class ChatViewModel: ObservableObject {
 
             let messageText = m.role == "assistant" ? CitationPresentation.historyContext(text: m.text, json: m.sourcesJSON) : m.text
             let attached = files(for: m)
+            // 10-23 修复：最新用户消息本身是纯文本，但我们判断需要携带近轮图片时，
+            // 把它变成多模态 content（文字 + 图片），让模型继续看到原图。
             if attached.isEmpty {
-                if !m.text.isEmpty {
+                if m.id == latestUserMessage?.id, let imageURL = carriedImageURL, !messageText.isEmpty {
+                    messages.append(["role": m.role, "content": [
+                        ["type": "text", "text": messageText],
+                        ["type": "image_url", "image_url": ["url": imageURL]],
+                    ]])
+                } else if !messageText.isEmpty {
                     messages.append(["role": m.role, "content": messageText])
                 }
                 continue
@@ -543,6 +575,20 @@ final class ChatViewModel: ObservableObject {
     /// 10-23 P3：账号切换或资料库文件变化时清空图片缓存，避免跨账号/过期数据混入。
     static func invalidateImageURLCache() {
         Task { await ImageDataURLCache.shared.removeAll() }
+    }
+
+    /// 判断用户文本是否涉及"基于图片生成/编辑新图"。
+    /// 当最新消息是纯文本、但近轮存在用户上传的图片时，用这些关键词决定是否把
+    /// 最近一张用户图重新作为 image_url 加入当前请求，避免"先识别再做新海报"时
+    /// 模型看不到原图而卡住或选错工具。
+    private static func mentionsImageGenerationOrEdit(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        let keywords = [
+            "海报", "名片", "封面", "配图", "插图", "插画", "生成", "做一张", "做一个",
+            "画一张", "设计一张", "重绘", "改图", "改一下", "编辑", "修图", "换背景",
+            "加元素", "去元素", "融合", "叠加", "放到图上", "加 logo", "加文字",
+        ]
+        return keywords.contains { lowered.contains($0) }
     }
 
     // MARK: - 编辑重发（P0-4）

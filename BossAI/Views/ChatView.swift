@@ -459,14 +459,15 @@ struct ChatView: View {
                 if followOutput { requestScrollToBottom() }
             }
             .onReceive(viewModel.replyBuffer.$text) { _ in
-                // 流式输出：trailing debounce —— 高频 token 只在 0.12s 静默后滚动一次
+                // 10-23 修复：把 trailing debounce 改成节流/合并（coalescing）。
+                // 高频 token 不再等"静默窗口"，而是每 60ms 最多滚一次——长回答期间持续贴底，
+                // 同时避免每个 token 都触发 scrollTo 造成布局抖动。
                 guard followOutput else { return }
-                scrollClock.pending?.cancel()
+                guard scrollClock.pending == nil else { return }
                 scrollClock.pending = Task { @MainActor in
-                    // 10-22 性能：120ms → 60ms。长回答时 120ms 的静默窗口让滚动明显滞后，
-                    // 60ms 仍能合并高频 token，但跟随感好很多。
                     try? await Task.sleep(nanoseconds: 60_000_000)
-                    guard !Task.isCancelled, followOutput else { return }
+                    scrollClock.pending = nil
+                    guard followOutput else { return }
                     requestScrollToBottom()
                 }
             }
