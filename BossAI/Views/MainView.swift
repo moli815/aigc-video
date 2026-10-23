@@ -201,6 +201,71 @@ struct MainView: View {
         columnVisibility = .detailOnly
     }
 
+    // MARK: - 侧栏自绘组件（10-23 List → ScrollView 重构配套）
+
+    private func sidebarNavRow(_ title: String, _ icon: String, active: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label { Text(title) } icon: { Image(systemName: icon) }
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(active ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sidebarSectionHeader(_ title: String, count: Int, chevron: Bool?,
+                                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                if let chevron {
+                    Image(systemName: chevron ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sidebarSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            TextField("搜索对话", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.footnote)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
+    }
+
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
         if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
@@ -277,143 +342,80 @@ struct SidebarView: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            List(selection: $selectedConversationId) {
-                // P0-47 方案 A：一级入口三件套（线性简笔图标，与专家列表视觉语言统一）
-                Section {
-                    Button {
-                        // 身份页内含定时任务卡（Pro 3 / Ultra 10），侧栏自己的 sheet 直接打开
-                        showIdentitySheet = true
-                    } label: {
-                        Label { Text("定时任务") } icon: { Image(systemName: "clock") }
-                            .foregroundStyle(Color.primary)
+            // 10-23 完整重构：List → ScrollView + VStack，自绘卡片式行与选中态。
+            // 保留全部交互：导航三件套、专家折叠、搜索、重命名/删除、新建。
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // 一级入口
+                    VStack(spacing: 2) {
+                        sidebarNavRow("定时任务", "clock") { showIdentitySheet = true }
+                        sidebarNavRow("深度研究", "magnifyingglass") { onOpenResearch() }
+                        sidebarNavRow("资料库", "folder", active: showLibrary) { onOpenLibrary() }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("entry-tasks")
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
 
-                    Button {
-                        onOpenResearch()
-                    } label: {
-                        Label { Text("深度研究") } icon: { Image(systemName: "magnifyingglass") }
-                            .foregroundStyle(Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("entry-research")
-
-                    Button {
-                        onOpenLibrary()
-                    } label: {
-                        Label { Text("资料库") } icon: { Image(systemName: "folder") }
-                            .foregroundStyle(showLibrary ? Color.accentColor : Color.primary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("entry-library")
-                }
-
-                // 可折叠的专家团
-                Section {
-                    Button {
+                    // 专家团（可折叠）
+                    sidebarSectionHeader("您的专属军师", count: ExpertCatalog.all.count,
+                                         chevron: expertExpanded) {
                         withAnimation(.easeInOut(duration: 0.2)) { expertExpanded.toggle() }
-                    } label: {
-                        HStack {
-                            Label("您的专属军师", systemImage: ExpertCatalog.ui.icon)
-                            Spacer()
-                            Text("\(ExpertCatalog.all.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: expertExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                     }
-                    .buttonStyle(.plain)
-
                     if expertExpanded {
-                        // P0-11 专家顾问区：独立滚动框 + 行分隔线 + 统一内边距（此前布局散乱）
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(ExpertCatalog.all.enumerated()), id: \.element.id) { index, expert in
-                                    Button {
-                                        onOpenExpert(expert)
-                                    } label: {
-                                        ExpertRow(expert: expert)
-                                            .padding(.vertical, 7)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    if index < ExpertCatalog.all.count - 1 {
-                                        Rectangle()
-                                            .fill(theme.border.opacity(0.45))
-                                            .frame(height: 0.5)
-                                            .padding(.leading, 52)
-                                    }
+                        VStack(spacing: 1) {
+                            ForEach(ExpertCatalog.all) { expert in
+                                Button { onOpenExpert(expert) } label: {
+                                    ExpertRow(expert: expert)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 8)
                         }
-                        .scrollIndicators(.hidden)
-                        .frame(maxHeight: 380)
-                        .background(theme.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.border.opacity(0.6), lineWidth: 0.5))
-                        .padding(.horizontal, 4)
-                    }
-                }
-
-                Section {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        TextField("搜索对话", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .font(.footnote)
-                        if !searchText.isEmpty {
-                            Button {
-                                searchText = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
+                        .padding(.horizontal, 10)
                     }
 
+                    // 对话
+                    sidebarSectionHeader("对话", count: filtered.count, chevron: nil) {}
+                    sidebarSearchField
                     if filtered.isEmpty {
                         Text(searchText.isEmpty ? "还没有对话，点左下角新建" : "没有匹配的对话")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 16)
                     } else {
-                        ForEach(filtered, id: \.id) { conv in
-                            ConversationRow(conversation: conv)
-                                .tag(Optional(conv.id))
+                        VStack(spacing: 1) {
+                            ForEach(filtered, id: \.id) { conv in
+                                Button { selectedConversationId = conv.id } label: {
+                                    ConversationRow(conversation: conv)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .background(
+                                            selectedConversationId == conv.id ? theme.accent.opacity(0.16) : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
                                 .contextMenu {
                                     Button {
                                         renaming = conv
                                         renameText = conv.title
-                                    } label: {
-                                        Label("重命名", systemImage: "pencil")
-                                    }
+                                    } label: { Label("重命名", systemImage: "pencil") }
                                     Button(role: .destructive) {
                                         onDeleteConversation(conv)
-                                    } label: {
-                                        Label("删除对话", systemImage: "trash")
-                                    }
+                                    } label: { Label("删除对话", systemImage: "trash") }
                                 }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        onDeleteConversation(conv)
-                                    } label: {
-                                        Label("删除", systemImage: "trash")
-                                    }
-                                }
+                            }
                         }
+                        .padding(.horizontal, 10)
                     }
-                } header: {
-                    Text("对话")
+
+                    Spacer(minLength: 10)
                 }
             }
-            .listStyle(.sidebar)
+            .background(.ultraThinMaterial)
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     QuotaSidebarWidget()
