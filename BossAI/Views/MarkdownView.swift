@@ -7,7 +7,7 @@
 //    （标题 / 列表 / 引用 / 代码块 / 表格 / 分隔线 / 段落），支持长答案折叠。
 //  - 渲染管线：init 时先查 NSCache 拿到上次解析结果（无则空数组先渲染纯文本兜底），
 //    然后 .task(id: text) 把解析丢给单例 actor Worker 在后台执行，
-//    解析完成后再切回主线程更新 blocks。流式期间每来一段新文本都会触发重解析。
+//    解析完成后再切回主线程更新 blocks。
 //  - 关键设计决策：
 //    1) 解析必须离开主线程：超长答案逐字符解析会卡 UI，故用 actor 串行化、限制并发峰值内存。
 //    2) 双层缓存：块级结果按全文缓存；行内（InlineMarkdown）按片段缓存——
@@ -15,10 +15,11 @@
 //    3) 流式前缀不写入块级缓存：每次追加都是新字符串，全部缓存会把内存打爆，
 //       只缓存 collapseDisabled == false 的"最终完整答案"。
 //    4) 默认展开完整答案；只有用户显式点击才允许折叠（防呆：不让系统替用户隐藏内容）。
-//    5) Equatable 比较只看 text 与 collapseDisabled：text 未变就跳过整块 diff，
-//       流式刷新历史消息时零成本。
+//    5) Equatable 比较只看 text 与 collapseDisabled：text 未变就跳过重渲染（流式刷新历史消息时的关键优化）。
 //    6) 表格用采样估算列宽 + 共享宽度，配合固定 VStack 而非嵌套 Lazy 容器，
 //       避免高度估算跳变造成的滚动抖动。
+//    7) 10-23 增量解析：流式期间只解析"未闭合尾部"，已完成块保持稳定，
+//       避免整段 Markdown 每 18ms 重解析一次造成的布局抖动与滚动跳变。
 //
 
 import SwiftUI
@@ -34,6 +35,8 @@ struct MarkdownView: View, Equatable {
     @State private var collapsed = false
     /// 解析后的块级结构；init 先从缓存取近似值，正式值由后台解析后覆盖
     @State private var blocks: [Block]
+    /// 10-23 增量解析器：流式输出时只重解析末尾未闭合块，已完成块保持稳定
+    @State private var incrementalParser = IncrementalParser()
     init(_ text: String, collapseDisabled: Bool = false) {
         self.text = text; self.collapseDisabled = collapseDisabled
         // init 阶段同步查缓存：命中则首帧就能渲染解析结果，避免"纯文本→Markdown"的闪烁
@@ -49,6 +52,11 @@ struct MarkdownView: View, Equatable {
         case code(language: String, String)
         case paragraph(String)
         case table([[String]]), divider
+    }
+    /// 带原始文本范围的 Block，用于增量解析时精确截断"未闭合尾部"。
+    struct LocatedBlock: Equatable, Sendable {
+        let block: Block
+        let range: Range<String.Index>
     }
     /// NSCache 的值包装（NSCache 要求 NSObject 类型；Sendable 块数组包在不可变盒子里）
     private final class ParsedBox: NSObject {
@@ -80,6 +88,59 @@ struct MarkdownView: View, Equatable {
         }
     }
     private static let worker = Worker()
+
+    /// 10-23 增量 Markdown 解析器：流式输出时只重解析"未闭合尾部"，已完成块保持稳定。
+    /// 如果文本不是简单追加（如编辑、切换历史消息），自动回退到整段解析。
+    private actor IncrementalParser {
+        /// 已确定闭合、不会再变的 blocks
+        private var closedBlocks: [Block] = []
+        /// 当前未闭合尾部的原始文本
+        private var openBuffer: String = ""
+        /// 已被转换为 closedBlocks + openBuffer 的文本前缀
+        private var processedPrefix: String = ""
+
+        /// 更新到新文本，返回应渲染的完整 blocks
+        func update(to newText: String) -> [Block] {
+            // 非追加式变化（编辑、切历史消息等）：重置后整段解析
+            guard !processedPrefix.isEmpty, newText.hasPrefix(processedPrefix) else {
+                reset(with: newText)
+                return closedBlocks + MarkdownView.parse(openBuffer)
+            }
+
+            let delta = String(newText.dropFirst(processedPrefix.count))
+            openBuffer += delta
+            processedPrefix = newText
+            advanceClosedBlocks()
+            return closedBlocks + MarkdownView.parse(openBuffer)
+        }
+
+        /// 强制重置（外部切换消息/折叠时）
+        func reset(with text: String) {
+            closedBlocks = []
+            openBuffer = text
+            processedPrefix = text
+            advanceClosedBlocks()
+        }
+
+        private func advanceClosedBlocks() {
+            let located = MarkdownView.parseWithRanges(openBuffer)
+            guard !located.isEmpty else { return }
+
+            // 只有最后一个 block 可能未闭合；前面所有 block 都视为已闭合。
+            // 保守策略：段落也暂不提前闭合，因为流式中同一段落可能继续追加。
+            // 因此这里简单地把 dropLast() 作为已闭合块累积。
+            let closed = located.dropLast()
+            closedBlocks.append(contentsOf: closed.map(\.block))
+
+            // openBuffer 截断到最后一个 block 的起始位置，下次只重解析尾部
+            if let lastRange = located.last?.range {
+                openBuffer = String(openBuffer[lastRange.lowerBound...])
+            } else {
+                openBuffer = ""
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if blocks.isEmpty && !text.isEmpty {
@@ -106,9 +167,17 @@ struct MarkdownView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
         .task(id: text) {
-            // 渲染管线入口：文本每变化一次（流式增量）就调度一次后台解析
+            // 10-23 渲染管线入口：
+            // - 流式中（collapseDisabled=true）走增量解析，已完成块保持稳定，只重解析尾部
+            // - 完整答案（collapseDisabled=false）走整段解析并写入缓存
             do {
-                let result = try await Self.worker.parse(text, cacheResult: !collapseDisabled)
+                let result: [Block]
+                if collapseDisabled {
+                    result = await incrementalParser.update(to: text)
+                } else {
+                    result = try await Self.worker.parse(text, cacheResult: true)
+                    await incrementalParser.reset(with: text)
+                }
                 try Task.checkCancellation()
                 blocks = result
             } catch { /* A newer text or a dismissed view cancels obsolete work. */ }
@@ -166,89 +235,134 @@ struct MarkdownView: View, Equatable {
     /// 手写的轻量 Markdown 解析器：只覆盖 AI 回答中实际出现的语法子集，
     /// 换取确定性的性能与流式友好的增量行为（不依赖第三方库）。
     static func parse(_ text: String) -> [Block] {
-        var blocks: [Block] = []
+        parseWithRanges(text).map(\.block)
+    }
+
+    /// 解析并返回每个 Block 在原文中的范围，供增量解析器精确截断"未闭合尾部"。
+    static func parseWithRanges(_ text: String) -> [LocatedBlock] {
+        var result: [LocatedBlock] = []
         var codeBuf: [String] = []
+        var codeRanges: [Range<String.Index>] = []
         var codeLanguage = ""
         var inCode = false
         var paragraph: [String] = []
+        var paragraphRanges: [Range<String.Index>] = []
 
-        func flushParagraph() {
-            if !paragraph.isEmpty {
-                blocks.append(.paragraph(paragraph.joined(separator: "\n")))
-                paragraph = []
-            }
+        // 预计算每行在原文中的范围（不含换行符）
+        var lineRanges: [Range<String.Index>] = []
+        text.enumerateSubstrings(in: text.startIndex..., options: .byLines) { _, _, range, _ in
+            lineRanges.append(range)
+            return true
+        }
+
+        func flushParagraph(endLine: Int) {
+            guard !paragraph.isEmpty else { return }
+            let content = paragraph.joined(separator: "\n")
+            let startRange = paragraphRanges[0]
+            let endRange = paragraphRanges[paragraphRanges.count - 1]
+            let range = startRange.lowerBound..<endRange.upperBound
+            result.append(LocatedBlock(block: .paragraph(content), range: range))
+            paragraph = []
+            paragraphRanges = []
         }
 
         let lines = text.components(separatedBy: .newlines)
         var index = 0
         while index < lines.count {
             let raw = lines[index]
+            let currentRange = lineRanges[index]
             index += 1
             let line = raw.trimmingCharacters(in: .whitespaces)
             // 代码围栏开/闭：``` 行本身不进内容；未闭合时把余下内容整块当代码输出（容错）
             if line.hasPrefix("```") {
                 if inCode {
-                    blocks.append(.code(language: codeLanguage, codeBuf.joined(separator: "\n")))
+                    let startRange = codeRanges[0]
+                    let range = startRange.lowerBound..<currentRange.upperBound
+                    result.append(LocatedBlock(block: .code(language: codeLanguage, codeBuf.joined(separator: "\n")), range: range))
                     codeBuf = []
+                    codeRanges = []
                     inCode = false
                 } else {
-                    flushParagraph()
+                    flushParagraph(endLine: index - 1)
                     inCode = true
                     codeLanguage = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    codeRanges.append(currentRange)
                 }
                 continue
             }
             if inCode {
                 codeBuf.append(raw)
+                codeRanges.append(currentRange)
                 continue
             }
             // 表格识别：当前行含 "|"，且下一行是对齐分隔行、本行至少 2 列，才判定为表格头——
-        // 三个条件同时满足防止单元格里的孤立 "|" 误判成表格
+            // 三个条件同时满足防止单元格里的孤立 "|" 误判成表格
             if line.contains("|"), index < lines.count, MarkdownTableCore.isSeparator(lines[index]), MarkdownTableCore.cells(line).count >= 2 {
-                flushParagraph()
-                let columns = MarkdownTableCore.cells(line).count
+                flushParagraph(endLine: index - 1)
+                let headerRange = currentRange
                 var rows = [MarkdownTableCore.cells(line)]
+                var rowRanges = [currentRange]
                 index += 1
                 while index < lines.count, lines[index].contains("|"), !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                    let cellRange = lineRanges[index]
+                    rowRanges.append(cellRange)
                     let cells = MarkdownTableCore.cells(lines[index])
                     // 短行右侧补空字符串，把所有行补齐到同一列数，方便表格视图按列取值
-                    rows.append(cells + Array(repeating: "", count: max(0, columns - cells.count)))
+                    rows.append(cells + Array(repeating: "", count: max(0, rows[0].count - cells.count)))
                     index += 1
                 }
-                let width = rows.map(\.count).max() ?? columns
+                let range = headerRange.lowerBound..<(rowRanges.last?.upperBound ?? headerRange.upperBound)
+                let width = rows.map(\.count).max() ?? rows[0].count
                 rows = rows.map { $0 + Array(repeating: "", count: width - $0.count) }
-                blocks.append(.table(rows)); continue
-            }
-            if line.isEmpty {
-                flushParagraph()
+                result.append(LocatedBlock(block: .table(rows), range: range))
                 continue
             }
-            if ["---", "***", "___"].contains(line) { flushParagraph(); blocks.append(.divider) }
-            else if line.hasPrefix("#### ") { flushParagraph(); blocks.append(.heading(4, String(line.dropFirst(5)))) }
-            else if line.hasPrefix("### ") { flushParagraph(); blocks.append(.heading(3, String(line.dropFirst(4)))) }
-            else if line.hasPrefix("## ") { flushParagraph(); blocks.append(.heading(2, String(line.dropFirst(3)))) }
-            else if line.hasPrefix("# ") { flushParagraph(); blocks.append(.heading(1, String(line.dropFirst(2)))) }
-            else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
-                flushParagraph(); blocks.append(.bullet(String(line.dropFirst(2))))
+            if line.isEmpty {
+                flushParagraph(endLine: index - 1)
+                continue
+            }
+            if ["---", "***", "___"].contains(line) {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .divider, range: currentRange))
+            } else if line.hasPrefix("#### ") {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .heading(4, String(line.dropFirst(5))), range: currentRange))
+            } else if line.hasPrefix("### ") {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .heading(3, String(line.dropFirst(4))), range: currentRange))
+            } else if line.hasPrefix("## ") {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .heading(2, String(line.dropFirst(3))), range: currentRange))
+            } else if line.hasPrefix("# ") {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .heading(1, String(line.dropFirst(2))), range: currentRange))
+            } else if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ") {
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .bullet(String(line.dropFirst(2))), range: currentRange))
             } else if let r = line.range(of: #"^\d{1,3}[.、]\s*"#, options: .regularExpression) {
                 // 有序列表：保留编号渲染，编号被剥掉会让「来源 N」失去指向
-                flushParagraph()
+                flushParagraph(endLine: index - 1)
                 let digits = line.prefix { $0.isASCII && $0.isNumber }
                 let rest = line[line.index(line.startIndex, offsetBy: digits.count)...]
                     .drop { $0 == "." || $0 == "、" || $0 == " " }
-                blocks.append(.ordered(Int(String(digits)) ?? 0, String(rest)))
+                result.append(LocatedBlock(block: .ordered(Int(String(digits)) ?? 0, String(rest)), range: currentRange))
             } else if line.hasPrefix("> ") {
-                flushParagraph(); blocks.append(.quote(String(line.dropFirst(2))))
+                flushParagraph(endLine: index - 1)
+                result.append(LocatedBlock(block: .quote(String(line.dropFirst(2))), range: currentRange))
             } else {
                 paragraph.append(line)
+                paragraphRanges.append(currentRange)
             }
         }
         // 收尾：清掉残余段落；未闭合的代码围栏也整体输出，避免流式期间内容"消失"
-        flushParagraph()
+        flushParagraph(endLine: lines.count)
         if inCode && !codeBuf.isEmpty {
-            blocks.append(.code(language: codeLanguage, codeBuf.joined(separator: "\n")))
+            let startRange = codeRanges[0]
+            let endRange = codeRanges.last ?? startRange
+            let range = startRange.lowerBound..<endRange.upperBound
+            result.append(LocatedBlock(block: .code(language: codeLanguage, codeBuf.joined(separator: "\n")), range: range))
         }
-        return blocks
+        return result
     }
 }
 
