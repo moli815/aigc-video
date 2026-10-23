@@ -1,9 +1,12 @@
 name: Build Unsigned IPA
 
 # ─────────────────────────────────────────────────────────────
-# 发布门禁（三层 CI 架构中的 Release Build）：
-#   swift-core（SPM 单测） → ios-tests（App 单测）
-#   → build（前两者都成功才产出正式 IPA）
+# 三层 CI 架构中的 Release Build：
+#   swift-core ─┬─→ ios-tests ─┐
+#               └─→ build（候选）─┴─→ publish（发布门禁）→ 正式 IPA
+#
+# 并行出「候选包」、测试全过才由 publish 发布正式 Artifact：
+# 既不牺牲速度（build 不必等 ios-tests），也不允许测试失败还发正式包。
 #
 # 10-23 CI 优化：
 #  - 删除遗留 overlay 下载（仓库已自包含，原步骤只在浪费第三方请求）
@@ -138,9 +141,9 @@ jobs:
             /tmp/ios-tests.log
           retention-days: 7
 
-  # 第三道：正式 IPA。needs 两道门禁 —— 任何必需测试失败都不会产出正式包。
+  # 第三道：候选 IPA。与 ios-tests 并行，缩短总等待；此时还不算正式产物。
   build:
-    needs: [swift-core, ios-tests]
+    needs: [swift-core]
     runs-on: macos-15
     timeout-minutes: 40
     steps:
@@ -182,12 +185,12 @@ jobs:
           cp -r "build/Build/Products/Release-iphoneos/BossAI.app" Payload/
           zip -r BossAI-unsigned.ipa Payload
 
-      - name: Upload IPA artifact
+      - name: Upload candidate IPA
         uses: actions/upload-artifact@v4
         with:
-          name: BossAI-unsigned-ipa
+          name: BossAI-ipa-candidate
           path: BossAI-unsigned.ipa
-          retention-days: 30
+          retention-days: 7
 
       - name: Upload build log on failure
         if: failure()
@@ -196,3 +199,29 @@ jobs:
           name: ios-build-log
           path: build.log
           retention-days: 7
+
+  # 第四道：发布门禁。只有候选包与 iOS 单测都成功，才发布正式可下载的 IPA。
+  # 放在 ubuntu runner 上：只做产物搬运，不需要 macOS，几秒钟完成。
+  publish:
+    needs: [build, ios-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download candidate IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: BossAI-ipa-candidate
+          path: candidate
+
+      - name: Verify candidate
+        run: |
+          ls -lh candidate
+          test -s candidate/BossAI-unsigned.ipa || { echo "::error::候选 IPA 缺失或为空"; exit 1; }
+          unzip -t candidate/BossAI-unsigned.ipa > /dev/null || { echo "::error::IPA 包损坏"; exit 1; }
+
+      - name: Publish official IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BossAI-unsigned-ipa
+          path: candidate/BossAI-unsigned.ipa
+          retention-days: 30
