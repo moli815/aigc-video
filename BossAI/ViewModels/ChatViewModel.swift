@@ -208,7 +208,8 @@ final class ChatViewModel: ObservableObject {
 
     private static var didBackfillScope = false
 
-    /// 首次运行把「无归属」的历史对话与文件归属到当前账号（幂等、一次/进程）
+    /// 首次运行把「无归属」的历史对话、文件与记忆归属到当前账号（幂等、一次/进程）
+    /// 10-23 P0：补齐 MemoryItem 归属回填，避免旧记忆因 ownerKey 为空被当前账号过滤掉
     private static func backfillOwnerScopeIfNeeded(_ context: ModelContext) {
         guard !didBackfillScope else { return }
         didBackfillScope = true
@@ -222,6 +223,11 @@ final class ChatViewModel: ObservableObject {
         if let files = try? context.fetch(FetchDescriptor<StoredFile>(predicate: #Predicate { $0.ownerKey == "" })),
            !files.isEmpty {
             for f in files { f.ownerKey = key }
+            try? context.save()
+        }
+        if let memories = try? context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.ownerKey == "" })),
+           !memories.isEmpty {
+            for m in memories { m.ownerKey = key }
             try? context.save()
         }
         // P0-46 conversationID 冗余字段回填（老数据；@Query 派生视图依赖）
