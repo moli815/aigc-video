@@ -40,6 +40,10 @@ struct MessageRow: View {
     var onRegenerate: (() -> Void)? = nil
     /// P0-68 深度思考中（最高档推理模型首字延迟 ~11s）：流式且无正文时显示"深度思考中…"
     var isReasoning: Bool = false
+    /// 10-23 P0：这条消息是否仍处于"活跃流式"回合。
+    /// 只有活跃流才允许画闪烁光标；已完成/失败/部分成功的历史空消息必须保持静止，
+    /// 否则超时报错后仍会看到一个永不停的光标。
+    var isLive: Bool = false
 
     /// 按角色分流：user 右对齐气泡；AI 左侧头像 + 平铺内容
     /// 该消息是否"以文字开头"——决定头像是否需要光学微调
@@ -103,11 +107,14 @@ struct MessageRow: View {
                                                 isLastAssistant: isLastAssistant,
                                                 onRegenerate: onRegenerate).equatable()
                         } else if message.imageData == nil && files.isEmpty {
-                            // 既无文本也无图片/文件：流式刚开始——P0-68 推理中显示"深度思考中…"（消除空等感）
-                            if streamingText != nil && isReasoning {
-                                ReasoningIndicator()
-                            } else {
-                                BlinkingCursor()
+                            // 既无文本也无图片/文件：仅"活跃流式"才显示等待态。
+                            // 10-23 P0：失败/完成后残留的空消息不再画光标（此前会一直闪）。
+                            if isLive {
+                                if isReasoning {
+                                    ReasoningIndicator()
+                                } else {
+                                    BlinkingCursor()
+                                }
                             }
                         }
                     }
@@ -369,7 +376,11 @@ private struct MessageImageView: View, Equatable {
     var body: some View {
         Group {
             if let thumbnail {
-                Image(uiImage: thumbnail).resizable().scaledToFit().frame(maxWidth: 420)
+                // 10-23：去掉固定 420pt 上限。iPad 横向时 420 只占消息区一半，观感像"图片缩在角落"。
+                // 改为吃满父容器宽度（父层已有 theme.messageWidth 限制）+ scaledToFit 保比例，
+                // 不用 scaledToFill——否则会裁掉名片文字、Logo 或海报边缘。
+                Image(uiImage: thumbnail).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onTapGesture { fullscreen = true }
                     .contextMenu {

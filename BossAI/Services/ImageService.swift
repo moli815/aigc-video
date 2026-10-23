@@ -123,7 +123,7 @@ final class ImageService {
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil) async throws -> Data {
         // 10-23 关键修复：hosted 模式必须用「会员 token」鉴权——服务端 bf-image 校验的是账号 token，
         // 供应商 Key 只在服务端。旧实现第一行就 guard apiKey（hosted 下为空）→ 直接抛 missingKey，
         // 模型收到工具失败后转述成"当前专家配置禁止使用 image_generate"（用户看到的错误结论）。
@@ -171,9 +171,19 @@ final class ImageService {
         if layerDecomposition {
             body["layer_decomposition"] = true
         }
+        // 10-23 出图意图契约：flat_artwork=可印刷平面稿（禁白底/样机）｜mockup=展示稿
+        if let renderIntent, !renderIntent.isEmpty {
+            body["render_intent"] = renderIntent
+        }
+        if let aspectRatio, !aspectRatio.isEmpty {
+            body["aspect_ratio"] = aspectRatio
+        }
         switch profile.style {
         case .volc:
-            body["size"] = "2K"
+            // 10-23：会员模式**不传 size**——尺寸由 bf-image 按云端 IMAGE_SIZE（默认 1.5K）决定。
+            // 此前客户端写死 2K，既与云端配置打架，又让每张图按最高价档计费。
+            // 自带 Key 直连上游、没有服务端配置可读，保持 2K 规格不变。
+            if !HostedAccount.isHostedActive { body["size"] = "2K" }
             body["response_format"] = "b64_json"
             body["watermark"] = false
             if !references.isEmpty {

@@ -66,6 +66,9 @@ extension ChatViewModel {
 
         var fullText = ""
         var assistantText = ""
+        /// 10-23 P0：本轮是否已有产物真正落库（图片/文档）。
+        /// 线程安全旗标，供超时任务与 catch 分支读取——有产物时后续说明失败只能降级为"部分成功"。
+        let artifactFlag = FirstTokenFlag()
         var currentTextCommitted = true
         do {
             if capability.allowSearch, researchMode != .local, !nativeSearch, needsFreshEvidence {
@@ -160,13 +163,23 @@ extension ChatViewModel {
                 let firstTokenTimeout = firstTokenTimeoutOverride
                     ?? (HostedAccount.isHostedActive ? HostedAccount.cachedChatFirstTokenTimeout : 45)
                 let timeoutFlag = FirstTokenFlag()
+                // 10-23 P0：watchdog 只允许覆盖"模型流读取"这一段。
+                // 用独立 do 作用域把 timer 与 for-await 绑在一起：流一结束（正常/异常/超时）
+                // defer 立即 cancel，绝不拖到工具执行阶段——否则慢生图（50-70s）会被 45s watchdog 误杀，
+                // 出现"图片已生成并落库，界面还弹首包超时"的错乱状态。
+                do {
                 let timeoutTask = Task { [weak self] in
                     try? await Task.sleep(nanoseconds: UInt64(firstTokenTimeout * 1_000_000_000))
                     guard let self, !Task.isCancelled, !firstTokenFlag.isSet else { return }
                     timeoutFlag.set()
-                    self.errorMessage = "模型首包响应超时（\(firstTokenTimeout)秒），请检查网络后重试。"
-                    self.failedUserMessageID = self.sortedMessages.last(where: { $0.role == "user" })?.id
-                    self.failedAssistantMessageID = assistantMessage.id
+                    if artifactFlag.isSet {
+                        // 产物已落库：只补一句"说明未完成"，不把整轮判失败、不弹红色超时。
+                        self.partialSuccessMessage = "内容已生成并保存；最终说明未完成，可点「让 AI 补充说明」继续。"
+                    } else {
+                        self.errorMessage = "模型首包响应超时（\(firstTokenTimeout)秒），请检查网络后重试。"
+                        self.failedUserMessageID = self.sortedMessages.last(where: { $0.role == "user" })?.id
+                        self.failedAssistantMessageID = assistantMessage.id
+                    }
                     self.streamTask?.cancel()
                 }
                 defer { timeoutTask.cancel() }
@@ -176,6 +189,11 @@ extension ChatViewModel {
                     // 同时自备模式没有服务端路由，档位本就无意义（与 line 234 的成本保护同思路）。
                     if Task.isCancelled { break }
                     switch event {
+                    case .activity:
+                        // 10-23 P0：上游已响应（首个合法 SSE 帧）。哪怕只有工具调用、只有思考链、
+                        // 甚至空 delta，都必须解除首包 watchdog——"没有正文"不等于"没有响应"。
+                        firstTokenFlag.set()
+                        deepHintTask = nil
                     case .textDelta(let delta):
                         firstTokenFlag.set()
                         deepHintTask = nil
@@ -208,6 +226,7 @@ extension ChatViewModel {
                         break
                     }
                 }
+                }   // end do：模型流阶段结束，watchdog 随 defer 立即取消，工具执行不再被它监控
 
                 if timeoutFlag.isSet {
                     // 超时任务已经设置 errorMessage 并取消 streamTask；本轮直接退出，
@@ -391,7 +410,10 @@ extension ChatViewModel {
                             }
                             // 10-21 结构化字段（有则优先，服务端按模板拼装）
                             let structuredArgs = args?["structured"] as? [String: Any]
-                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose")
+                            // 10-23 出图意图：flat_artwork 直接出可印刷平面稿，避免名片/海报被画成"白底展示稿"
+                            let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
+                            let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
+                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: aspectRatio)
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
                             // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
@@ -401,7 +423,7 @@ extension ChatViewModel {
                                    let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
                                    !check.ok {
                                     let fixPrompt = prompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
-                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs) {
+                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: aspectRatio) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
                                     }
@@ -411,6 +433,7 @@ extension ChatViewModel {
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
                             do {
                                 try ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
+                                artifactFlag.set()   // 10-23 P0：产物已落库，后续说明失败降级为部分成功
                             } catch {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                     "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: "图片已生成但保存到本地失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试，不要说已成功。")])
@@ -482,6 +505,7 @@ extension ChatViewModel {
                             // P0-59 统一管道落库（含 save）
                             do {
                                 try ToolPipeline.persistArtifact(conversation: conv, attachmentIDs: record.id.uuidString, context: modelContext)
+                                artifactFlag.set()   // 10-23 P0：文档已落库，同上
                             } catch {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                     "content": ToolPipeline.failureNote(pluginID: "create_document", reason: "文件已生成但存入资料库失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试。")])
@@ -574,7 +598,11 @@ extension ChatViewModel {
             assistantMessage.text = fullText + (currentTextCommitted ? "" : assistantText)
             let isCancel = error is CancellationError
                 || (error as? URLError)?.code == .cancelled
-            if !isCancel {
+            if !isCancel, artifactFlag.isSet {
+                // 10-23 P0：产物已落库（图片/文档），后续"最终说明"失败只做部分成功提示。
+                // 不设置 failedUserMessageID —— 避免"重新生成"再次触发生图、重复扣费。
+                partialSuccessMessage = "内容已生成并保存；最终说明未完成，可点「让 AI 补充说明」继续。"
+            } else if !isCancel {
                 failedUserMessageID = sortedMessages.last(where: { $0.role == "user" })?.id
                 failedAssistantMessageID = assistantMessage.id
                 let received = !assistantMessage.text.isEmpty || assistantMessage.imageData != nil

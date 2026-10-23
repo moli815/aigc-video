@@ -56,6 +56,10 @@ final class ChatService {
         case usage(promptTokens: Int, completionTokens: Int)   // 服务端返回的真实 token 数
         /// 流正常结束
         case finished
+        /// 模型侧"有活动"信号（10-23 P0）：收到首个合法 SSE 帧即发一次。
+        /// 用于首包 watchdog 判定——只出工具调用、只出思考链、只下发空 delta 的响应，
+        /// 也证明上游已经响应，不能因为"没有正文"就被误判成超时。
+        case activity
     }
 
     /// 对话请求错误，均带用户可读的中文描述
@@ -197,6 +201,7 @@ final class ChatService {
                     var searchNotified = false
                     var sse = SSEByteDecoder()
                     var sawDone = false
+                    var sawFirstActivity = false
                     var finishReason: String?
 
                     /// 处理一条 SSE payload：解析 JSON 增量、累积工具调用、捕获 usage。
@@ -219,6 +224,12 @@ final class ChatService {
 
                         guard let choices = json["choices"] as? [[String: Any]],
                               let choice = choices.first else { return false }
+                        // 10-23 P0：任何合法 chunk（哪怕 delta 为空、只有 role 或只有工具分片）
+                        // 都说明模型已经响应；先发一次活动信号，再看具体增量。
+                        if !sawFirstActivity {
+                            sawFirstActivity = true
+                            continuation.yield(.activity)
+                        }
                         if let reason = choice["finish_reason"] as? String { finishReason = reason }
 
                         if let delta = choice["delta"] as? [String: Any] {
@@ -556,6 +567,16 @@ final class ChatService {
             "type": "object",
             "properties": [
                 "prompt": ["type": "string", "description": "（可选，structured 的兜底）详细的图像描述（中文）：主体、场景、构图、光影、材质、文字"],
+                // 10-23 出图形态契约：不写死"好看就行"——名片/海报要平面成稿，不要白底样机
+                "render_intent": [
+                    "type": "string",
+                    "enum": ["flat_artwork", "mockup"],
+                    "description": "输出形态。flat_artwork=可直接交付/印刷的平面成稿：内容填满画布、无白底外衬、无桌面/相框/手持等展示场景——名片、海报、封面、传单、证书默认选它；mockup=带真实场景的展示效果图，仅当用户明确说“看效果/场景图/放在桌上什么样”时才用。",
+                ],
+                "aspect_ratio": [
+                    "type": "string",
+                    "description": "画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1（横版名片）。用户没指定可不填。",
+                ],
                 "structured": [
                     "type": "object",
                     "description": "结构化视觉字段（推荐）：每字段用完整短句描述，每段独立成句。内容必须来自用户需求，禁止套用示例的具体主体/场景，禁止编造用户未给的店名/地址/电话/价格。",
@@ -583,6 +604,16 @@ final class ChatService {
             "type": "object",
             "properties": [
                 "prompt": ["type": "string", "description": "编辑指令：具体改什么、在哪里、保持什么不变（会由服务端叠加一致性/阴影/保持/排除约束）"],
+                // 10-23：编辑同样要区分"改展示稿"还是"导出平面成稿"——否则会把白底大画布一起保留
+                "render_intent": [
+                    "type": "string",
+                    "enum": ["flat_artwork", "mockup"],
+                    "description": "编辑目标形态。flat_artwork=把作品从原图场景中取出来做成可直接交付的平面稿（去掉外部白底/桌面/投影，按比例重新排布）；mockup=保留原图场景与摆放，只改用户指定部分。用户说“导出成能印刷的/去掉白边/只要名片本身”用 flat_artwork。",
+                ],
+                "aspect_ratio": [
+                    "type": "string",
+                    "description": "目标画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1。不填则沿用原图比例。",
+                ],
                 "source": [
                     "type": "string",
                     "enum": ["last", "attached", "both"],

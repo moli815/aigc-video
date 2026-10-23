@@ -37,6 +37,7 @@ extension ChatViewModel {
         guard (!text.isEmpty || !attachments.isEmpty), !isStreaming, !isImporting else { return }
 
         errorMessage = nil
+        partialSuccessMessage = nil
         failedUserMessageID = nil
         failedAssistantMessageID = nil
         autoRetryCount = 0   // P0-60/P0-64 新一轮消息重置自动重试计数

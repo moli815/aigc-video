@@ -51,6 +51,10 @@ final class ChatViewModel: ObservableObject {
     @Published var isStreaming = false
     @Published var statusText: String?
     @Published var errorMessage: String?
+    /// 10-23 P0：部分成功提示。产物（图片/文档）已保存，但后续"最终说明"没生成完。
+    /// 与 errorMessage 分开：不显示红色失败、不提供"重新生成"（避免重复生图扣费），
+    /// 只给一个"让 AI 补充说明"的轻量入口。
+    @Published var partialSuccessMessage: String?
     @Published var failedUserMessageID: UUID?
     var failedAssistantMessageID: UUID?
     var canRetryReply: Bool { failedUserMessageID != nil && !isStreaming && !isImporting }
@@ -309,7 +313,7 @@ final class ChatViewModel: ObservableObject {
     /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
     /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
-    nonisolated static func generateImageWithRetry(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false) async throws -> Data {
+    nonisolated static func generateImageWithRetry(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil) async throws -> Data {
         // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
         let idemKey = UUID().uuidString
         // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
@@ -317,7 +321,7 @@ final class ChatViewModel: ObservableObject {
         var attempt = 0
         while true {
             do {
-                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition)
+                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio)
             } catch {
                 let retryable = (error as? URLError) != nil
                     || ((error as? ImageService.ImageError)?.isRetryable ?? false)

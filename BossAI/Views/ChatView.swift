@@ -533,6 +533,27 @@ struct ChatView: View {
                     .padding(.bottom, 4)
             }
 
+            if let note = viewModel.partialSuccessMessage {
+                // 10-23 P0：产物已保存但说明未完成——橙色提示，不显示红错、不提供"重新生成"，
+                // 只给一个"补充说明"入口，避免用户重跑整轮再花一次生图费用。
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .textSelection(.enabled)
+                    Button {
+                        viewModel.sendFollowUp("请只补充说明刚才生成的图片，不要重新生成图片。")
+                    } label: {
+                        Label("让 AI 补充说明", systemImage: "text.bubble")
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("retry-summary")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
+            }
+
             if viewModel.canRetryReply {
                 Button { viewModel.retryReply() } label: {
                     Label("重新生成本次回复", systemImage: "arrow.clockwise")
@@ -657,7 +678,7 @@ private struct StreamingMessageRow: View {
     var isReasoning: Bool = false
 
     var body: some View {
-        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview, isReasoning: isReasoning)   // P0-68
+        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview, isReasoning: isReasoning, isLive: true)   // P0-68 / 10-23 P0
     }
 }
 
