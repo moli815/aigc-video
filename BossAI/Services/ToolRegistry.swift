@@ -118,10 +118,14 @@ enum ToolRegistry {
         ),
         CapabilityPlugin(
             id: "image_decompose", toolset: "media", displayName: "图层拆分", executor: .local,
-            abilities: [],
-            limits: ["当前版本暂不支持（需模型图层能力与图层编辑 UI）"],
-            requiresEnv: [],
-            availability: { false },
+            abilities: ["把一张图拆成「底图 + 最多 16 个透明 PNG 图层」，返回每个图层的名称/位置/层级"],
+            limits: [
+                "只能传 1 张待拆分图（多张会报错）",
+                "任一图层生成失败则整体失败，不存在部分成功",
+                "拆分出的图层是透明 PNG，底图格式跟随 output_format",
+            ],
+            requiresEnv: ["生图 API Key"],
+            availability: { true },
             maxResultChars: 4000, executionTimeout: 180,
             retryOnTransient: false, producesArtifact: false,
             failureAdvice: "如实告知用户该能力暂未开放"
@@ -129,7 +133,9 @@ enum ToolRegistry {
         CapabilityPlugin(
             id: "image_series", toolset: "media", displayName: "组图生成", executor: .local,
             abilities: [],
-            limits: ["当前版本暂不支持（需 Seedream Lite 模型开通）"],
+            // 10-23 官方核实：Seedream 5.0 pro 的「文生组图 / 单多图生组图」均标注暂不支持，
+            // 传 sequential_image_generation=auto 会直接报错；组图需 5.0 lite / 4.5 / 4.0 模型。
+            limits: ["当前使用的 Seedream 5.0 Pro 不支持组图（官方能力表标注「暂不支持」）；如需组图需切换到 5.0 Lite 模型，但 Lite 不支持交互编辑与图层拆分"],
             requiresEnv: [],
             availability: { false },
             maxResultChars: 4000, executionTimeout: 180,
