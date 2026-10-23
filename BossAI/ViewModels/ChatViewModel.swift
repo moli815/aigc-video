@@ -665,12 +665,20 @@ actor ImageDataURLCache {
             return entry.url
         }
         let url = FileStore.url(for: file)
-        guard let raw = try? await Task.detached(priority: .userInitiated) {
-            try Data(contentsOf: url)
-        }.value, !raw.isEmpty else { return nil }
-        guard let payload = await Task.detached(priority: .userInitiated) {
+        // 10-23 P3 修复：把 `try? await Task.detached {}.value` 拆成 do/catch，
+        // 避免旧 Swift 编译器在 guard 条件里解析 `await` 表达式时出错。
+        let raw: Data
+        do {
+            raw = try await Task.detached(priority: .userInitiated) {
+                try Data(contentsOf: url)
+            }.value
+        } catch { return nil }
+        guard !raw.isEmpty else { return nil }
+
+        let payload = await Task.detached(priority: .userInitiated) {
             ImageCompressor.compressedData(from: raw)
-        }.value, !payload.isEmpty else { return nil }
+        }.value
+        guard let payload, !payload.isEmpty else { return nil }
         let dataURL = "data:image/jpeg;base64," + payload.base64EncodedString()
         insert(id: file.id, url: dataURL, cost: payload.count)
         return dataURL
