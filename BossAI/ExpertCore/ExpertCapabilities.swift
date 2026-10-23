@@ -121,7 +121,13 @@ enum ExpertSkillRuntime {
     /// ② 权限来源与 `ChatService.resolveToolPermissions` 不一致：那边云端 `expertTools` 优先，
     ///    这里却只用本地档案，于是"云端开了生图、本地档案没开"时运行时仍拒绝。
     /// 现在两处统一：`expertTools`（云端下发）优先，本地 `profile` 只做兜底。
-    static func permits(_ name: String, profile: ExpertCapability, allowedTools: [String]? = nil) -> Bool {
+    /// - disabledTools：云端显式关闭的工具 ID 集合。**隐藏 ≠ 禁止执行**——
+    ///   工具从 tools[] 移除只是让模型看不见；若模型残留/伪造调用，执行器必须在这里拒绝。
+    static func permits(_ name: String, profile: ExpertCapability,
+                        allowedTools: [String]? = nil,
+                        disabledTools: Set<String> = []) -> Bool {
+        if disabledTools.contains(name) { return false }
+
         // 注意：本文件属于 BossAIExpertCore（SPM target），看不到 App 层的 ExpertTool 枚举，
         // 因此这里用工具名字符串（与 ChatService 传给 tools[] 的 name 同源）。
         let canSearch = allowedTools.map { $0.contains("search") } ?? profile.allowSearch
