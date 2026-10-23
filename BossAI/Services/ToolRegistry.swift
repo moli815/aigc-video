@@ -88,7 +88,10 @@ enum ToolRegistry {
         // ── 10-19 拆 4 工具（Harness 插件契约）：每个工具独立能力/边界/可用性/失败建议 ──
         CapabilityPlugin(
             id: "image_generate", toolset: "media", displayName: "文生图", executor: .local,
-            abilities: ["纯文生图（海报/插画/封面/示意图），无任何参考图入参"],
+            abilities: [
+                "纯文生图（海报/插画/封面/示意图），无任何参考图入参",
+                "【使用时机】用户说「做图/设计/海报/名片/封面/配图/插画」→ 立即调用本工具，禁止用文字方案或文档代替",
+            ],
             limits: ["改图/加元素/换背景必须用 image_edit——禁止用本工具处理已有图片"],
             requiresEnv: ["生图 API Key"],
             // 10-23 修复：此前用「额度剩余百分比」决定工具是否出现——
