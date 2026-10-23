@@ -418,7 +418,9 @@ final class ChatService {
         if canSearch && allowSearch && !nativeSearch && availableIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
         // 旧 generate_image 不再注册（执行分支仍兼容旧名，防旧模型残留调用）
-        if canImage && availableIDs.contains("generate_image") {
+        // 10-23：外层不再用旧 ID "generate_image" 判断——内层已按每个插件的真实 ID 过滤。
+        // 旧写法在旧 ID 不可用时会把 4 个新工具一起挡掉（"配置禁用图片生成"的另一条来源）。
+        if canImage {
             // 10-22 修复：逐个按插件 ID 过滤。此前只检查旧 ID "generate_image" 就整批注册，
             // 导致 availability=false 的 image_decompose / image_series 仍出现在 tools[] 里——
             // 模型看得见就会尝试调用，执行器再拒绝，白白消耗一轮。
