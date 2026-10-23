@@ -389,12 +389,13 @@ final class ChatService {
 
     /// P0-40 工具挂载以「专家的实际工具列表」为准（云端下发），本地能力档案只作兜底——
     /// 此前用本地 ExpertSkills.json 的 allowImages 判定，导致"云端已开放生图、App 仍不挂工具、模型如实拒绝"的不一致。
+    /// 10-23：统一使用 EffectiveToolPolicy 作为单一事实源，避免注册表、能力清单、执行器权限不一致。
     private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool, expertTools: [ExpertTool]? = nil) throws {
         let capability = try ExpertCapabilityCatalog.profile(expertID)
-        let perms = try Self.resolveToolPermissions(expertID: expertID, expertTools: expertTools)
-        let canSearch = perms.canSearch
-        let canImage = perms.canImage
-        let nativeSearch = canSearch && allowSearch && useNativeSearch
+        let policy = try EffectiveToolPolicy.forExpertID(expertID, expertTools: expertTools)
+        let canSearch = policy.canSearch && allowSearch
+        let canImage = policy.canImage
+        let nativeSearch = canSearch && useNativeSearch
         if nativeSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
@@ -412,37 +413,34 @@ final class ChatService {
 
         // P0-59 可用性预过滤（对照 Hermes check_fn 语义）：不可用的能力不进 tools[]——
         // 模型看不到就不会误调用/不会谎报能做到（"调用顺畅且不易出错"的第一道防线）
-        // 10-22：统一应用「本地可用性 + 云端开关」——云端关掉的工具绝不出现在 tools[] 里
-        let availableIDs = Set(ToolRegistry.availablePlugins(overrides: HostedAccount.cachedCapabilityOverrides).map { $0.id })
+        // 10-23：policy.availableToolIDs 已经统一应用「本地可用性 + 云端开关」
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if canSearch && allowSearch && !nativeSearch && availableIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        if canSearch && !nativeSearch && policy.availableToolIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
         // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
         // 旧 generate_image 不再注册（执行分支仍兼容旧名，防旧模型残留调用）
-        // 10-23：外层不再用旧 ID "generate_image" 判断——内层已按每个插件的真实 ID 过滤。
-        // 旧写法在旧 ID 不可用时会把 4 个新工具一起挡掉（"配置禁用图片生成"的另一条来源）。
         if canImage {
             // 10-22 修复：逐个按插件 ID 过滤。此前只检查旧 ID "generate_image" 就整批注册，
             // 导致 availability=false 的 image_decompose / image_series 仍出现在 tools[] 里——
             // 模型看得见就会尝试调用，执行器再拒绝，白白消耗一轮。
-            for plugin in Self.imageToolPlugins where availableIDs.contains(plugin.name) {
+            for plugin in Self.imageToolPlugins where policy.availableToolIDs.contains(plugin.name) {
                 tools.append(["type": "function", "function": plugin.definition])
             }
         }
-        if availableIDs.contains("render_chart") { tools.append(["type": "function", "function": Self.renderChartFunction]) }
-        // 文档导出工具：可导出格式由权限解析统一给出（云端工具优先，本地档案兜底）
-        if !perms.docFormats.isEmpty && availableIDs.contains("create_document") {
+        if policy.availableToolIDs.contains("render_chart") { tools.append(["type": "function", "function": Self.renderChartFunction]) }
+        // 文档导出工具：可导出格式由 EffectiveToolPolicy 统一给出（云端工具优先，本地档案兜底）
+        if !policy.docFormats.isEmpty && policy.availableToolIDs.contains("create_document") {
             var document = Self.createDocumentFunction
             var parameters = document["parameters"] as? [String: Any] ?? [:]
             var properties = parameters["properties"] as? [String: Any] ?? [:]
-            properties["format"] = ["type": "string", "enum": perms.docFormats]
+            properties["format"] = ["type": "string", "enum": policy.docFormats]
             parameters["properties"] = properties
             document["parameters"] = parameters
             tools.append(["type": "function", "function": document])
         }
-        if availableIDs.contains("expert_skill") { tools.append(["type": "function", "function": Self.expertSkillFunction(capability)]) }
-        if availableIDs.contains("search_library") { tools.append(["type": "function", "function": ["name": "search_library",
+        if policy.availableToolIDs.contains("expert_skill") { tools.append(["type": "function", "function": Self.expertSkillFunction(capability)]) }
+        if policy.availableToolIDs.contains("search_library") { tools.append(["type": "function", "function": ["name": "search_library",
             "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
-            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]]) }
+            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]) }
         body["tools"] = tools
     }
 
