@@ -18,7 +18,7 @@
 
 ## 原生开发与验收
 
-macOS、Xcode 16.4、XcodeGen：
+macOS、Xcode 26.3（与 CI 一致；原生 Liquid Glass 需要 Xcode 26 SDK）、XcodeGen：
 
 ```bash
 bash scripts/run-quality.sh

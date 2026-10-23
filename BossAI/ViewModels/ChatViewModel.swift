@@ -44,6 +44,14 @@ final class ChatViewModel: ObservableObject {
     @Published var inputText = ""
     @Published var researchMode: ResearchMode = .automatic
     @Published var answerStyle: AnswerStyle = .concise
+    /// 详略偏好的持久化键（10-23 C 阶段：语气与详略分工后，详略需要跨会话保持）
+    static let answerStyleKey = "bossai.answerStyle"
+
+    /// 切换详略并持久化：下次进入任意会话沿用，不再每次回到"简答"。
+    func setAnswerStyle(_ style: AnswerStyle) {
+        answerStyle = style
+        UserDefaults.standard.set(style.rawValue, forKey: Self.answerStyleKey)
+    }
     /// P0-38 配置面板档位（standard / high / ultra）。按产品要求默认「标准」且不持久化——
     /// 每次启动/新会话回到默认，避免客户在不知情的情况下长期停在低/高档位。
     @Published var chatMode: String = "standard"
@@ -127,6 +135,13 @@ final class ChatViewModel: ObservableObject {
          researchService: any ResearchSearching = DefaultResearchSearch(),
          searchPlanner: (@Sendable (String, String) async -> SearchPlan?)? = nil) {
         self.conversation = conversation
+        // 10-23 C 阶段：语气与详略分工后，老用户第一次升级时若长期偏好「详细展开」，
+        // 详略默认跟随为 detailed，避免突然变短；之后以用户在对话里的显式选择为准（已持久化）。
+        if let saved = UserDefaults.standard.string(forKey: Self.answerStyleKey).flatMap(AnswerStyle.init(rawValue:)) {
+            self.answerStyle = saved
+        } else if UserIdentity.load().replyStyle == .detailed {
+            self.answerStyle = .detailed
+        }
         // P0-68 注入服务端官方搜索实现（WebSearchService 不依赖 App 层类型——含本文件亦是，
         // 由这里提供闭包实现；服务端未配置/失败时返回 nil，搜索自动降级本地多引擎）
         WebSearchService.hostedSearchProvider = { query, count in
@@ -417,7 +432,10 @@ final class ChatViewModel: ObservableObject {
         // P0-2 缓存稳定化：拆成两条 system 消息——
         // ① 稳定块（专家提示词+身份+回复风格）永不变化，保证方舟前缀缓存始终命中；
         // ② 易变块（前情摘要+记忆+任务模式+交付格式）紧随其后，变化时只牺牲短前缀。
-        let stableSystem = expert.systemPrompt + identity.promptFragment + identity.replyStyle.prompt
+        // 10-23 C 阶段：语气与详略合并成一个策略块，避免两条互相矛盾的指令同时进 prompt。
+        // 冲突仲裁写在块内（详略优先），用户选「简明扼要 + 详细分析」时结果可预期。
+        let stableSystem = expert.systemPrompt + identity.promptFragment
+            + ResponsePolicy.prompt(reply: identity.replyStyle, answer: answerStyle)
             + Self.capabilityPrompt()
         var volatileSystem = ""
         if !conv.rollingSummary.isEmpty {
@@ -425,7 +443,7 @@ final class ChatViewModel: ObservableObject {
         }
         volatileSystem += memories
             + "\n【时效铁律】凡涉及价格、新品、型号、配置、汇率、政策法规、版本号、榜单等易变事实：必须先调用 web_search 获取最新信息并在回答中标注信息日期，禁止仅凭训练记忆作答；检索不可用时明确声明信息可能过时。"
-            + "\n【本任务模式】" + researchMode.prompt + "\n【交付格式】" + answerStyle.prompt
+            + "\n【本任务模式】" + researchMode.prompt
             + "\n【当前实际模型配置】" + chatService.configurationLabel
 
         var messages: [[String: Any]] = [
@@ -624,9 +642,30 @@ final class ChatViewModel: ObservableObject {
         defer { isExporting = false }
         let title = (conversation?.title.isEmpty ?? true) ? expert.name : (conversation?.title ?? expert.name)
         var lines: [String] = []
+        // 10-23 导出嵌图：把消息里的图片收集成 ExportImage，正文用占位标记定位，
+        // Word/PDF 渲染时替换成真实图片（此前只写"[此消息包含图片]"占位，图片全丢）。
+        var exportImages: [ExportImage] = []
+        let stampFormatter = DateFormatter()
+        stampFormatter.dateFormat = "yyyy-MM-dd HH:mm"
+        func appendImage(_ data: Data, captionPrefix: String) {
+            guard exportImages.count < 30 else { return }   // 上限防超大文档
+            let index = exportImages.count
+            exportImages.append(ExportImage(data: data,
+                                            caption: "附图 \(index + 1) · \(stampFormatter.string(from: Date())) · \(captionPrefix)"))
+            lines.append(DocumentBuilder.imageMarker(index))
+        }
         for message in sortedMessages {
-            if message.imageData != nil { lines.append("[此消息包含图片，文字导出未嵌入图片]") }
-            for file in files(for: message) { lines.append("附件：" + file.name) }
+            if let data = message.imageData {
+                appendImage(data, captionPrefix: "AI 生成")
+            }
+            for file in files(for: message) {
+                if file.category == .image,
+                   let data = try? Data(contentsOf: FileStore.url(for: file)) {
+                    appendImage(data, captionPrefix: "\(file.name)（上传）")
+                } else {
+                    lines.append("附件：" + file.name)
+                }
+            }
             guard !message.text.isEmpty else { continue }
             let projection = CitationPresentation.projection(text: message.text, json: message.sourcesJSON)
             lines.append(message.role == "user" ? "**我：**\(message.text)" : projection.body)
@@ -637,7 +676,7 @@ final class ChatViewModel: ObservableObject {
         guard !lines.isEmpty else { return "当前对话没有可导出的内容" }
         let markdown = "# \(title)\n\n" + lines.joined(separator: "\n")
         do {
-            let data = try await DocumentBuilder.buildAsync(format: format, title: title, content: markdown)
+            let data = try await DocumentBuilder.buildAsync(format: format, title: title, content: markdown, images: exportImages)
             let name = DocumentBuilder.safeFilename(title, fallback: "对话导出")
             let file = "\(name)-\(Self.timestamp()).\(format.ext)"
             // 双重防谎报：FileStore 内部已做写盘校验，这里再确认记录对应的文件真实存在，

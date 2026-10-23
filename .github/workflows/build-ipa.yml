@@ -1,60 +1,71 @@
 name: Build Unsigned IPA
 
 # ─────────────────────────────────────────────────────────────
-#  每次要出新包时，只需改下面这两行（把新 overlay 的地址与校验值贴进来）
+# 发布门禁（三层 CI 架构中的 Release Build）：
+#   swift-core（SPM 单测） → ios-tests（App 单测）
+#   → build（前两者都成功才产出正式 IPA）
+#
+# 10-23 CI 优化：
+#  - 删除遗留 overlay 下载（仓库已自包含，原步骤只在浪费第三方请求）
+#  - 删除阻塞式 catbox 镜像上传（IPA 只走 GitHub Artifact，不让第三方网盘决定 CI 何时结束）
+#  - 补 saas_fix 触发分支 + paths 过滤（只改文档不再触发打包）
+#  - SwiftPM 依赖缓存，减少重复下载
+#  - 权限降为 contents: read（原 write 只为提交镜像链接）
 # ─────────────────────────────────────────────────────────────
-env:
-  OVERLAY_URL: "https://litter.catbox.moe/ypg9dt.tgz"
-  OVERLAY_MD5: "e1b120473e454c00534ff43e62e46ad6"
 
 on:
   push:
-    branches: [main, chatgpt-style-ui]
+    branches: [saas_fix, main]
+    paths:
+      - 'BossAI/**'
+      - 'Tests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - 'project.yml'
+      - 'scripts/**'
+      - '.github/workflows/build-ipa.yml'
   workflow_dispatch:
 
-# 同一分支只保留最新一次编译：新 run 触发时自动取消所有排队中的旧 run
+# 同一分支只保留最新一次编译：新 run 触发时自动取消排队中的旧 run
 concurrency:
   group: build-ipa-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # 先跑 SPM 单测（检索质量回归 + ExpertCore 回归），不过则不出包
-  test:
+  # 第一道：SPM 单测（检索质量 + ExpertCore 回归），不过则不出包
+  swift-core:
     runs-on: macos-15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 历史遗留：早期图标二进制走外部镜像下发。现仓库已自包含（baseline 快照含全部资源），
-      # 镜像链接过期（catbox 72h）不再阻塞构建——下载失败仅告警跳过。
-      - name: Apply work overlay (optional, legacy)
-        run: |
-          if curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz; then
-            ACTUAL=$(md5 -q /tmp/overlay.tgz)
-            echo "overlay md5: $ACTUAL"
-            if [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ]; then
-              tar -xzf /tmp/overlay.tgz -C .
-            else
-              echo "::warning::overlay md5 mismatch, skipped"
-            fi
-          else
-            echo "::warning::overlay unavailable (likely expired), skipped - repo is self-contained"
-          fi
-
       - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          # 10-23: GitHub macos-15 image 已预装 Xcode 26.3；原生 Liquid Glass 需要 Xcode 26 SDK
+          # GitHub macos-15 镜像已预装 Xcode 26.3；原生 Liquid Glass 需要 Xcode 26 SDK
           xcode-version: "26.3"
 
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/org.swift.swiftpm/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: macos-15-xcode-26.3-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            macos-15-xcode-26.3-spm-
+
       - name: Run Swift package tests
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee swift-core-tests.log
 
       # P0-46 架构门禁：单文件 >900 行告警（God File 检测），仅告警不阻断。
-      # 作为重构推进度的客观标尺：拆分后此列表应逐步缩短。
       - name: Architecture gate (oversized files)
         run: |
           LONG=$(find BossAI -name "*.swift" -exec wc -l {} + | awk '$1 > 900 {printf "%5d  %s\n", $1, $2}' | sort -rn)
@@ -65,12 +76,19 @@ jobs:
             echo "✅ 无超大文件（全部 ≤900 行）"
           fi
 
-  # P0-43 iOS 单测：编译 App + BossAITests（单测 target）并执行。
-  # 覆盖：配置面板档位解析 / 工具权限（云端优先）/ 图片压缩 / 远程目录映射等回归锚点。
-  # 只跑单测（-only-testing:BossAITests），不跑 UI 测试（慢且易碎，另行手动执行）。
+      - name: Upload swift log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-core-test-log
+          path: swift-core-tests.log
+          retention-days: 7
+
+  # 第二道：iOS 单测（BossAITests）
   ios-tests:
-    needs: test
+    needs: swift-core
     runs-on: macos-15
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -80,29 +98,32 @@ jobs:
         with:
           xcode-version: "26.3"
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen if needed
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          else
+            xcodegen --version
+          fi
 
       - name: Generate Xcode project
         run: xcodegen generate
 
       - name: Run iOS unit tests (BossAITests)
         run: |
-          # P0-47 模拟器 fallback：GitHub runner 池偶发缺少 iPhone 16（实测多次 flaky，
-          # 报 "Unable to find a device matching the provided destination specifier"）。
-          # 这里动态解析可用设备，保证测试不因 runner 环境差异而失败。
+          # 模拟器 fallback：GitHub runner 池偶发缺少 iPhone 16。
           DEST_NAME="iPhone 16"
           if ! xcrun simctl list devices available | grep -q "iPhone 16"; then
             DEST_NAME=$(xcrun simctl list devices available | grep -oE "iPhone [0-9][0-9A-Za-z ]*" | head -1 | xargs)
             echo "⚠️ iPhone 16 不可用，自动切换: ${DEST_NAME:-（无可用 iPhone）}"
           fi
-          # pipefail：管道中 xcodebuild 的失败必须向上传播（此前用 | tail 吞掉了退出码）
           set -o pipefail
           xcodebuild test -project BossAI.xcodeproj \
             -scheme BossAI \
             -destination "platform=iOS Simulator,name=${DEST_NAME}" \
             -derivedDataPath build \
             -only-testing:BossAITests \
+            -showBuildTimingSummary \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             -resultBundlePath TestResults.xcresult 2>&1 | tee /tmp/ios-tests.log | tail -120
@@ -112,52 +133,48 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-test-results
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            /tmp/ios-tests.log
           retention-days: 7
 
+  # 第三道：正式 IPA。needs 两道门禁 —— 任何必需测试失败都不会产出正式包。
   build:
-    needs: test
+    needs: [swift-core, ios-tests]
     runs-on: macos-15
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # 历史遗留：仓库已自包含（baseline 快照含全部资源），镜像过期不再阻塞
-      - name: Apply work overlay (optional, legacy)
-        run: |
-          if curl -fsSL "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz; then
-            ACTUAL=$(md5 -q /tmp/overlay.tgz)
-            echo "overlay md5: $ACTUAL"
-            if [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ]; then
-              tar -xzf /tmp/overlay.tgz -C .
-            else
-              echo "::warning::overlay md5 mismatch, skipped"
-            fi
-          else
-            echo "::warning::overlay unavailable (likely expired), skipped - repo is self-contained"
-          fi
 
       - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "26.3"
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen if needed
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          else
+            xcodegen --version
+          fi
 
       - name: Generate Xcode project
         run: xcodegen generate
 
       - name: Build unsigned app
         run: |
+          set -o pipefail
           xcodebuild -project BossAI.xcodeproj \
             -scheme BossAI \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
+            -showBuildTimingSummary \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build
+            build 2>&1 | tee build.log | tail -120
 
       - name: Package IPA
         run: |
@@ -172,33 +189,10 @@ jobs:
           path: BossAI-unsigned.ipa
           retention-days: 30
 
-      # 免登录取包：IPA 传临时镜像，并把直链提交回仓库（[skip ci] 防止循环构建）。
-      # 容错：镜像服务（litterbox）为第三方免费服务，偶发 404/限流——失败不阻塞构建，
-      # GitHub Artifact 始终可用（30 天），重跑工作流即可刷新镜像链接。
-      - name: Upload IPA to file mirror
-        id: mirror
-        continue-on-error: true
-        run: |
-          for attempt in 1 2 3; do
-            URL=$(curl -fsS --max-time 300 \
-              -F "reqtype=fileupload" -F "time=72h" \
-              -F "fileToUpload=@BossAI-unsigned.ipa" \
-              https://litterbox.catbox.moe/resources/internals/api.php) && break
-            echo "attempt $attempt failed, retrying..."; sleep 15
-          done
-          if [ -n "$URL" ]; then
-            echo "IPA mirror: $URL"
-            echo "https://litter.catbox.moe IPA: $URL" > mirror-url.txt
-          else
-            echo "::warning::file mirror unavailable after 3 attempts - use GitHub artifact instead"
-            exit 0
-          fi
-
-      - name: Publish mirror URL to repo
-        continue-on-error: true
-        run: |
-          if [ ! -f mirror-url.txt ]; then echo "no mirror url, skip"; exit 0; fi
-          git config user.name "ci-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add mirror-url.txt
-          if git diff --cached --quiet; then echo "no change"; else git commit -m "chore: ipa mirror url [skip ci]" && git push; fi
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-log
+          path: build.log
+          retention-days: 7

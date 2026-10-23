@@ -803,7 +803,7 @@ private struct TaskOptionsSheet: View {
                     Section {
                         ForEach(AnswerStyle.allCases) { style in
                             Button {
-                                viewModel.answerStyle = style
+                                viewModel.setAnswerStyle(style)
                                 dismiss()
                             } label: {
                                 row(style.label, selected: viewModel.answerStyle == style)

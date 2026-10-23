@@ -1,8 +1,14 @@
 name: Expert correctness and performance
+
+# 10-23 CI 分层：本工作流属于第三层「Nightly / Manual Full Regression」。
+# 此前它跟着每次 push 跑一遍完整 iPad 测试，与 build-ipa 的 swift test / BossAITests 大量重复，
+# 而且长期使用 Xcode 16.4（与出包用的 26.3 不一致，结果不可比）。
+# 现在只在每晚定时与手动触发；Xcode 统一到 26.3。
 on:
   workflow_dispatch:
-  push:
-    paths: ['BossAI/**', 'Tests/**', 'Package.swift', 'project.yml', '.github/workflows/expert-quality.yml']
+  schedule:
+    # 每天 18:00 UTC = 次日 02:00 北京时间
+    - cron: '0 18 * * *'
 
 # 同一分支只保留最新一次：新 run 触发时自动取消排队中的旧 run
 concurrency:
@@ -16,25 +22,39 @@ permissions:
 jobs:
   swift-core:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
-        with: {xcode-version: '16.4'}
+        with: {xcode-version: '26.3'}
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/org.swift.swiftpm/repositories
+            ~/Library/Caches/org.swift.swiftpm
+          key: macos-15-xcode-26.3-spm-release-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          restore-keys: |
+            macos-15-xcode-26.3-spm-
       - name: Actual Swift tests and core benchmarks (macOS, not iPad)
         run: |
           set -o pipefail
           swift test -c release 2>&1 | tee swift-core-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: expert-swift-test-log, path: swift-core-tests.log}
+        with: {name: expert-swift-test-log, path: swift-core-tests.log, retention-days: 7}
+
   ios-tests:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
-        with: {xcode-version: '16.4'}
-      - run: brew install xcodegen
+        with: {xcode-version: '26.3'}
+      - name: Install XcodeGen if needed
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then brew install xcodegen; else xcodegen --version; fi
       - run: xcodegen generate
       - name: Select an available iPad simulator
         run: |
@@ -52,6 +72,7 @@ jobs:
             -destination "platform=iOS Simulator,id=$IPAD_SIM" \
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 240 \
+            -showBuildTimingSummary \
             -resultBundlePath BossAITestResults.xcresult CODE_SIGNING_ALLOWED=NO test 2>&1 | tee ios-tests.log
       - name: Export native test summary and screenshots
         if: always()
@@ -91,3 +112,4 @@ jobs:
             BossAITestResults.xcresult
             ios-test-summary.json
             ios-test-attachments
+          retention-days: 7

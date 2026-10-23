@@ -248,8 +248,10 @@ enum ReplyStyle: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .auto: return ""
         case .formal: return "\n【回复风格】语气正式、专业、克制，多用书面语，结论严谨，适合对外材料。"
-        case .concise: return "\n【回复风格】极度简洁，先给结论，多用要点，能一句话讲清的不写两句。"
-        case .detailed: return "\n【回复风格】详尽展开，给出背景、依据、步骤与示例，宁可多不要缺。"
+        // 10-23 C 阶段：语气只管措辞，不再规定长短——长度统一由 AnswerStyle（详略）决定，
+        // 否则用户同时选「简明扼要 + 详细分析」时会收到两条互相打架的指令。
+        case .concise: return "\n【回复风格】语气干脆利落，不绕弯子，不用客套与铺垫。"
+        case .detailed: return "\n【回复风格】语气耐心、讲解到位，愿意交代依据与步骤。"
         case .friendly: return "\n【回复风格】语气亲切、有温度，多用口语化表达，先共情再给建议。"
         }
     }

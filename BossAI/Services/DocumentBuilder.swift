@@ -266,6 +266,14 @@ struct DocTheme: Sendable {
     }
 }
 
+/// 导出时随正文附带的图片（聊天记录里的 AI 成图/用户上传图）。
+/// 10-23：此前导出只写"[此消息包含图片]"占位，导致 Word/PDF 里图片全丢。
+struct ExportImage {
+    let data: Data
+    /// 说明文字（如"附图 1 · 2026-10-23 22:10 · AI 生成"）
+    let caption: String
+}
+
 enum DocumentBuilder {
     enum BuildError: Error, LocalizedError {
         case emptyContent
@@ -280,34 +288,70 @@ enum DocumentBuilder {
 
     /// Heavy CPU work runs on a serialized actor, never the MainActor caller.
     private actor BuildWorker {
-        func build(format: DocumentFormat, title: String, content: String, theme: DocTheme) throws -> Data {
+        func build(format: DocumentFormat, title: String, content: String, theme: DocTheme, images: [ExportImage]) throws -> Data {
             try Task.checkCancellation()
             let span = PerformanceTrace.begin("DocumentBuildBackground")
             defer { PerformanceTrace.end("DocumentBuildBackground", span) }
-            let result = try autoreleasepool { try DocumentBuilder.build(format: format, title: title, content: content, theme: theme) }
+            let result = try autoreleasepool { try DocumentBuilder.build(format: format, title: title, content: content, theme: theme, images: images) }
             try Task.checkCancellation()
             return result
         }
     }
     private static let worker = BuildWorker()
-    static func buildAsync(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business) async throws -> Data {
-        try await worker.build(format: format, title: title, content: content, theme: theme)
+
+    // MARK: - 图片占位与预处理（10-23 导出嵌图）
+
+    /// 正文中的图片占位标记。导出时由 exportConversation 写入，渲染时按格式替换。
+    static func imageMarker(_ index: Int) -> String { "[[IMG:\(index)]]" }
+
+    /// 解析占位标记；不是标记返回 nil。
+    static func imageIndex(in text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("[[IMG:"), trimmed.hasSuffix("]]") else { return nil }
+        let body = trimmed.dropFirst("[[IMG:".count).dropLast(2)
+        return Int(body)
     }
 
-    static func build(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business) throws -> Data {
+    /// 统一转成 PNG 并限制长边，避免 2K 原图把 docx/pptx 撑到几十 MB。
+    /// 失败（无 UIKit/损坏图）返回 nil，调用方降级为文字说明。
+    static func normalizedPNG(_ data: Data, maxEdge: CGFloat = 1400) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, maxEdge / longest)
+        let target = CGSize(width: max(1, image.size.width * scale), height: max(1, image.size.height * scale))
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+        return resized.pngData()
+    }
+
+    /// PPT/Excel 不支持内联图片时的降级：把标记替换成"（见附图 n）"，避免把 [[IMG:n]] 原样写进文档。
+    static func replacingImageMarkers(_ markdown: String, images: [ExportImage]) -> String {
+        var result = markdown
+        for index in images.indices {
+            result = result.replacingOccurrences(of: imageMarker(index), with: "（见附图 \(index + 1)）")
+        }
+        return result
+    }
+
+    static func buildAsync(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business, images: [ExportImage] = []) async throws -> Data {
+        try await worker.build(format: format, title: title, content: content, theme: theme, images: images)
+    }
+
+    static func build(format: DocumentFormat, title: String, content: String, theme: DocTheme = .business, images: [ExportImage] = []) throws -> Data {
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { throw BuildError.emptyContent }
         switch format {
-        case .word: return docx(title: title, markdown: body, theme: theme)
-        case .ppt: return pptx(title: title, markdown: body, theme: theme)
-        case .excel: return xlsx(title: title, markdown: body, theme: theme)
-        case .pdf: return try pdf(title: title, markdown: body, theme: theme)
+        case .word: return docx(title: title, markdown: body, theme: theme, images: images)
+        case .ppt: return pptx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme)
+        case .excel: return xlsx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme)
+        case .pdf: return try pdf(title: title, markdown: body, theme: theme, images: images)
         }
     }
 
     // MARK: - Word (.docx)
 
-    static func docx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
+    static func docx(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) -> Data {
         var body = ""
 
         func runProps(size: Int, bold: Bool) -> String {
@@ -335,6 +379,31 @@ enum DocumentBuilder {
         body += paragraph(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none),
                           size: 18, bold: false, spacingAfter: 360, color: "\(theme.muted)")
 
+        // ── 10-23 导出嵌图：把占位标记渲染成真正的内联图片 ──
+        // 只编码一次，正文里按 index 复用；编码失败的图降级为文字说明，不让整个导出失败。
+        var media: [(index: Int, png: Data)] = []
+        for (index, item) in images.enumerated() {
+            if let png = normalizedPNG(item.data) { media.append((index, png)) }
+        }
+        let mediaMap = Dictionary(uniqueKeysWithValues: media.map { ($0.index, $0.png) })
+
+        func imageParagraph(index: Int, caption: String) -> String {
+            guard let png = mediaMap[index], let image = UIImage(data: png) else {
+                return paragraph("（附图 \(index + 1) 无法嵌入：图片数据损坏）", size: 18, bold: false, spacingAfter: 120)
+            }
+            // 版心宽约 5.6 英寸；高度按比例，最高 7.2 英寸（EMU：1 英寸 = 914400）
+            let maxW: CGFloat = 5.6 * 914_400
+            let maxH: CGFloat = 7.2 * 914_400
+            let ratio = image.size.height / max(image.size.width, 1)
+            var cx = maxW
+            var cy = cx * ratio
+            if cy > maxH { cy = maxH; cx = cy / max(ratio, 0.01) }
+            let drawing = """
+            <w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="60"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="\(Int(cx))" cy="\(Int(cy))"/><wp:docPr id="\(index + 100)" name="Picture \(index + 1)"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="\(index + 100)" name="image\(index).png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg\(index)"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="\(Int(cx))" cy="\(Int(cy))"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
+            """
+            return drawing + paragraph(caption, size: 16, bold: false, spacingAfter: 200, color: "888888")
+        }
+
         // F03 修复：旧版把 Markdown 表格行当普通段落，`|` 符号残留、表格结构丢失。
         // 现在按「文本段 / 表格段」切分，表格段单独渲染成 <w:tbl>。
         for section in MarkdownParser.splitTables(from: markdown) {
@@ -343,6 +412,11 @@ enum DocumentBuilder {
                 continue
             }
             for block in MarkdownParser.blocks(from: section.markdown) {
+                // 图片占位：替换成真实图片 + 图注
+                if let index = imageIndex(in: block.text), index >= 0, index < images.count {
+                    body += imageParagraph(index: index, caption: images[index].caption)
+                    continue
+                }
                 switch block.kind {
                 case .title, .heading1:
                     body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "\(theme.primary)")
@@ -369,10 +443,15 @@ enum DocumentBuilder {
         <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>\(body)<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1418" w:bottom="1440" w:left="1418" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr></w:body></w:document>
         """
 
+        var imageRels = ""
+        for item in media {
+            imageRels += "<Relationship Id=\"rIdImg\(item.index)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image\(item.index).png\"/>"
+        }
+
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>
         """)
         zip.add("_rels/.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -380,13 +459,17 @@ enum DocumentBuilder {
         """)
         zip.add("word/_rels/document.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>\(imageRels)</Relationships>
         """)
         zip.add("word/footer1.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:rPr><w:sz w:val="16"/><w:color w:val="888888"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p></w:ftr>
         """)
         zip.add("word/document.xml", document)
+        // 媒体条目最后加入：index 必须与 document.xml 里的 rIdImgN 对应
+        for item in media {
+            zip.add("word/media/image\(item.index).png", item.png)
+        }
         return zip.finalize()
     }
 
@@ -743,7 +826,7 @@ enum DocumentBuilder {
 
     // MARK: - PDF
 
-    static func pdf(title: String, markdown: String, theme: DocTheme = .business) throws -> Data {
+    static func pdf(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
         var sections: [NSAttributedString] = []
@@ -763,6 +846,11 @@ enum DocumentBuilder {
         append(title, size: 28, weight: .bold, color: accent)
         append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
         for block in MarkdownParser.blocks(from: markdown) {
+            // 图片占位：正文里只标注"见附图页"，真实图片在文末统一出页
+            if let index = imageIndex(in: block.text), index >= 0, index < images.count {
+                append("（附图 \(index + 1)：\(images[index].caption)）", size: 10.5, color: .gray, indent: 16)
+                continue
+            }
             switch block.kind {
             case .title, .heading1: append(block.text, size: 19, weight: .bold, color: accent)
             case .heading2: append(block.text, size: 16, weight: .semibold)
@@ -807,7 +895,35 @@ enum DocumentBuilder {
                     position += advanced
                 }
             }
-            if sections.isEmpty { rendererContext.beginPage() }
+            // 10-23 导出嵌图：附图页（每张一页，等比缩放 + 图注），图片不会因为正文分页而丢失
+            for item in images {
+                guard let png = normalizedPNG(item.data), let image = UIImage(data: png) else { continue }
+                rendererContext.beginPage()
+                let contentRect = CGRect(x: margin, y: margin,
+                                         width: pageSize.width - margin * 2,
+                                         height: pageSize.height - margin * 2)
+                let captionHeight: CGFloat = 26
+                let maxHeight = contentRect.height - captionHeight
+                let ratio = image.size.height / max(image.size.width, 1)
+                var drawWidth = contentRect.width
+                var drawHeight = drawWidth * ratio
+                if drawHeight > maxHeight {
+                    drawHeight = maxHeight
+                    drawWidth = drawHeight / max(ratio, 0.01)
+                }
+                let origin = CGPoint(x: contentRect.midX - drawWidth / 2,
+                                     y: contentRect.minY + captionHeight + (maxHeight - drawHeight) / 2)
+                image.draw(in: CGRect(origin: origin, size: CGSize(width: drawWidth, height: drawHeight)))
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 10),
+                    .foregroundColor: UIColor.gray,
+                ]
+                (item.caption as NSString).draw(
+                    in: CGRect(x: contentRect.minX, y: contentRect.minY, width: contentRect.width, height: captionHeight),
+                    withAttributes: attributes
+                )
+            }
+            if sections.isEmpty && images.isEmpty { rendererContext.beginPage() }
         }
         if let layoutError { throw layoutError }
         return result

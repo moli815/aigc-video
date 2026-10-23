@@ -1,42 +1,40 @@
 name: UI Keypath Tests
 
 # P0：关键路径 UI 自动化（键盘/滚动/来源折叠）。离线 fixture 驱动，不消耗 API。
-env:
-  OVERLAY_URL: "https://litter.catbox.moe/pay1iq.tgz"
-  OVERLAY_MD5: "b7cd81bf78ad4c6357c8a9c64de6fca7"
-
+# 10-23：删除遗留 overlay 下载（仓库已自包含），Xcode 统一到 26.3。
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   ui-tests:
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Apply work overlay (shipped out-of-band)
-        run: |
-          curl -fsSL --retry 6 --retry-delay 10 --retry-all-errors \
-            "${{ env.OVERLAY_URL }}" -o /tmp/overlay.tgz
-          ACTUAL=$(md5 -q /tmp/overlay.tgz)
-          echo "overlay md5: $ACTUAL"
-          [ "$ACTUAL" = "${{ env.OVERLAY_MD5 }}" ] || { echo "overlay md5 mismatch"; exit 1; }
-          tar -xzf /tmp/overlay.tgz -C .
-
-      - name: Select Xcode 16
+      - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          xcode-version: "26.3"
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install XcodeGen if needed
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          else
+            xcodegen --version
+          fi
 
       - name: Generate Xcode project
         run: xcodegen generate
 
       - name: Run UI key-path tests
         run: |
+          set -o pipefail
           # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad（单行管道，避免破坏 YAML 块）
           UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];print(next(x["udid"] for k in sorted(d,reverse=True) for x in d[k] if x.get("isAvailable") and "iPad" in x.get("name","")))')
           echo "使用 iPad 模拟器: $UDID"
@@ -46,13 +44,25 @@ jobs:
             -destination "id=$UDID" \
             -only-testing:BossAIUITests \
             -derivedDataPath build \
+            -showBuildTimingSummary \
+            -resultBundlePath UITestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO
+            CODE_SIGNING_REQUIRED=NO 2>&1 | tee ui-tests.log | tail -80
 
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ui-test-results
-          path: build/Logs/Test
+          path: |
+            UITestResults.xcresult
+            ui-tests.log
           retention-days: 7
+
+      - name: Upload test results always
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-test-log
+          path: ui-tests.log
+          retention-days: 3
