@@ -154,7 +154,19 @@ enum CitationPresentation {
     }
     /// 把消息的正文与来源拆开：新数据从 sourcesJSON 解码；旧数据只有尾部来源
     /// 列表时用 legacyMarker 投影拆出。返回 (正文, 来源列表)。
+    /// P0-63 剥离 XML 形式工具调用文本（完整块 / 未闭合残片 / 孤立标签行）
+    static func stripToolCallXML(_ s: String) -> String {
+        var out = s
+        out = out.replacingOccurrences(of: #"(?s)<tool_call>.*?</tool_call>"#, with: "", options: .regularExpression)
+        out = out.replacingOccurrences(of: #"(?s)<tool_call>.*$"#, with: "", options: .regularExpression)
+        out = out.replacingOccurrences(of: #"(?m)^\s*</?(tool_call|function|parameter|tool_sep)[^>]*>\s*$"#, with: "", options: .regularExpression)
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     static func projection(text: String, json: String) -> (body: String, sources: [CitationSource]) {
+        // P0-63 防护：先剥离模型误输出的 XML 形式工具调用文本，保证用户永远看不到内部调用格式
+        // （实机自测发现：原生搜索不可用时，模型会把 <tool_call> 内部格式当正文输出）
+        let text = stripToolCallXML(text)
         if let data = json.data(using: .utf8), let sources = try? JSONDecoder().decode([CitationSource].self, from: data) {
             return (text, sources)
         }

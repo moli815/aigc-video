@@ -97,6 +97,11 @@ final class HostedAccount: ObservableObject {
     @Published private(set) var daysLeft: Int?
     /// P0-19 档位功能开关（服务端单一数据源下发，App 不写死）
     @Published private(set) var features: [String: Any]?
+    /// P0-59 云端能力声明（管理台可改）：补充说明 + 按 id 覆盖（enabled/limits）——能力声明云端化
+    private(set) var capabilityExtra: String?
+    private(set) var capabilityOverridesRaw: String?
+    /// P0-64 App 远程行为配置（超时/重试次数，云端可调）
+    private(set) var appBehavior: [String: Any]?
     /// P0-19 白标品牌名（Ultra 专属；默认"中防AI"）
     @Published private(set) var appName: String = "中防AI"
     // P0-16 数据隔离键所用的登录名（登录时确定，不随显示名变化）
@@ -121,6 +126,9 @@ final class HostedAccount: ObservableObject {
     /// 单设备登录：账号在别处登录时，这里存放给用户看的提示（弹窗后清空）
     @Published var sessionReplacedNotice: String?
     @Published private(set) var refreshing = false
+    /// 10-23 P0：会话代次。登录/登出/切换账号时递增；异步请求返回后若代次已变，
+    /// 说明账号已切换，必须丢弃旧响应，不能修改当前账号状态或把当前账号登出。
+    @Published private(set) var sessionGeneration: Int = 0
 
     /// 最近一次请求失败的原因（展示用）
     @Published var lastErrorMessage: String?
@@ -232,6 +240,72 @@ final class HostedAccount: ObservableObject {
     nonisolated static var cachedAppName: String {
         if !isHostedActive { return "中防AI" }
         return (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["appName"] as? String) ?? "中防AI"
+    }
+
+    /// P0-59 云端能力补充说明（可空）：管理台可改、30 秒生效——能力声明云端化（Hermes 式插件目录的第一步）。
+    /// 追加进系统提示的能力清单（ToolRegistry.capabilityManifest 的 cloudExtra）。
+    nonisolated static var cachedCapabilityExtra: String? {
+        guard isHostedActive else { return nil }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["capabilityExtra"] as? String
+        return (v?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? v : nil
+    }
+
+    /// P0-59 云端能力开关（JSON 字符串，可空）：形如 {"generate_image":{"enabled":false,"limits":["..."]}}
+    /// App 端按 id 覆盖本地 ToolRegistry 声明的限界/开关，新能力调整无需出包。
+    nonisolated static var cachedCapabilityOverrides: [String: Any]? {
+        guard isHostedActive else { return nil }
+        guard let raw = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["capabilityOverrides"] as? String,
+              let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj
+    }
+
+    // MARK: P0-64 App 远程行为配置（在线可修复）——服务端 /me 下发，管理台改数即生效、不用出包
+
+    // P0-77 通用行为配置读取（预留通道）：服务端 appBehavior 里的任意 key 都能读——
+    // 以后新增云端参数（超时/开关/文案）只需服务端配置 + 调用 behaviorX，无需改解析代码。
+    nonisolated static func behaviorValue(_ key: String) -> Any? {
+        guard isHostedActive else { return nil }
+        return UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key]
+    }
+    nonisolated static func behaviorDouble(_ key: String, default def: Double) -> Double {
+        if let v = behaviorValue(key) as? NSNumber, v.doubleValue > 0 { return v.doubleValue }
+        if let s = behaviorValue(key) as? String, let d = Double(s), d > 0 { return d }
+        return def
+    }
+    nonisolated static func behaviorInt(_ key: String, default def: Int) -> Int {
+        if let v = behaviorValue(key) as? NSNumber, v.intValue >= 0 { return v.intValue }
+        if let s = behaviorValue(key) as? String, let i = Int(s), i >= 0 { return i }
+        return def
+    }
+    nonisolated static func behaviorBool(_ key: String, default def: Bool) -> Bool {
+        if let v = behaviorValue(key) as? Bool { return v }
+        if let s = behaviorValue(key) as? String { return !["0", "false", "no"].contains(s.lowercased()) }
+        return def
+    }
+    /// 对话请求超时（秒）；云端可调，默认 120
+    nonisolated static var cachedChatTimeout: TimeInterval { behaviorDouble("chatTimeout", default: 120) }
+    /// 生图请求超时（秒）；云端可调，默认 180
+    nonisolated static var cachedImageTimeout: TimeInterval { behaviorDouble("imageTimeout", default: 180) }
+    /// 流式中断自动重试次数（0=关闭）；云端可调，默认 1
+    nonisolated static var cachedStreamRetry: Int { behaviorInt("streamRetry", default: 1) }
+    /// 生图失败重试次数（0=关闭）；云端可调，默认 1
+    nonisolated static var cachedImageRetry: Int { behaviorInt("imageRetry", default: 1) }
+
+    nonisolated static func behaviorString(_ key: String, default def: String) -> String {
+        guard let v = behaviorValue(key) as? String, !v.isEmpty else { return def }
+        return v
+    }
+    // P0-70 生图动效文案（云端可配）：管理台改文案，30 秒生效、不出包
+    nonisolated static var cachedImgStage1: String { behaviorString("imgStage1", default: "正在绘制中...") }
+    nonisolated static var cachedImgStage2: String { behaviorString("imgStage2", default: "正在绘制中...") }
+    nonisolated static var cachedImgStage3: String { behaviorString("imgStage3", default: "正在绘制中...") }
+    nonisolated static var cachedImgEta: String { behaviorString("imgEta", default: "AI 生成约需 1 分钟") }
+    /// P0-74 生图后视觉验证（不符自动重试一次）；云端可关
+    nonisolated static var cachedImageVerify: Bool {
+        guard isHostedActive else { return false }
+        let v = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["imageVerify"] as? Bool
+        return v ?? true
     }
 
     nonisolated static var cachedDeepResearchEnabled: Bool {
@@ -355,6 +429,20 @@ final class HostedAccount: ObservableObject {
             "deepResearch": features?["deepResearch"] as? Bool ?? false,
             "appName": appName,
             "customExpert": features?["customExpert"] as? Bool ?? false,
+            "capabilityExtra": capabilityExtra ?? "",
+            "capabilityOverrides": capabilityOverridesRaw ?? "",
+            "chatTimeout": (appBehavior?["chatTimeout"] as? NSNumber)?.doubleValue ?? 120,
+            "imageTimeout": (appBehavior?["imageTimeout"] as? NSNumber)?.doubleValue ?? 180,
+            "streamRetry": (appBehavior?["streamRetry"] as? NSNumber)?.doubleValue ?? 1,
+            "imageRetry": (appBehavior?["imageRetry"] as? NSNumber)?.doubleValue ?? 1,
+            "imgStage1": (appBehavior?["imgStage1"] as? String) ?? "",
+            "imgStage2": (appBehavior?["imgStage2"] as? String) ?? "",
+            "imgStage3": (appBehavior?["imgStage3"] as? String) ?? "",
+            "imgEta": (appBehavior?["imgEta"] as? String) ?? "",
+            "imageVerify": (appBehavior?["imageVerify"] as? Bool) ?? true,
+            // P0-77 通用行为通道：appBehavior 全量平铺写入（服务端加任何 APP_* 参数自动生效）
+            // 注意：放在固定字段之后——固定字段优先，通用通道只补缺
+        
             "chatBand": chatBand.rawValue,
             "imageBand": imageBand.rawValue,
             "poolUsedCny": poolUsedCny,
@@ -369,6 +457,10 @@ final class HostedAccount: ObservableObject {
             "weekRemainingPct": weekRemainingPct,
             "monthRemainingPct": monthRemainingPct,
         ]
+        // P0-77 通用行为通道：appBehavior 全量平铺（任意新 key 自动写入，无需改代码）
+        if let ab = appBehavior {
+            for (k, v) in ab where dict[k] == nil { dict[k] = v }
+        }
         let iso = ISO8601DateFormatter()
         if let d = dayResetAt { dict["dayResetAt"] = iso.string(from: d) }
         if let w = weekResetAt { dict["weekResetAt"] = iso.string(from: w) }
@@ -381,9 +473,18 @@ final class HostedAccount: ObservableObject {
 
     /// 统一的 token 写入/清除入口：Keychain 为真源，UserDefaults 只做镜像标志，
     /// 并广播凭据变更通知，让 ChatService 等持有旧 Key 的对象立即刷新。
-    private func storeToken(_ value: String?) {
+    /// - Returns: 是否成功写入/清除；写入失败时返回 false，调用方必须中止登录流程。
+    @discardableResult
+    private func storeToken(_ value: String?) -> Bool {
         if let value, !value.isEmpty {
-            KeychainHelper.save(value, service: AppConfig.keychainService, account: Self.tokenAccount)
+            // 10-22/10-23 可靠性：Keychain 写入失败时必须显式失败，否则会出现"显示已登录、重启后掉登录"
+            let saved = KeychainHelper.save(value, service: AppConfig.keychainService, account: Self.tokenAccount)
+            if !saved {
+                token = nil
+                UserDefaults.standard.set(false, forKey: Self.loggedInKey)
+                lastErrorMessage = "登录凭证保存失败（系统钥匙串不可写），请重启 App 后重试"
+                return false
+            }
         } else {
             KeychainHelper.delete(service: AppConfig.keychainService, account: Self.tokenAccount)
         }
@@ -392,6 +493,7 @@ final class HostedAccount: ObservableObject {
         token = value
         // 通知凭据层重新读取（ChatService 的 apiKeyProvider 依赖它）
         NotificationCenter.default.post(name: .bossAIKeysChanged, object: nil)
+        return true
     }
 
     // MARK: - 网络
@@ -402,14 +504,18 @@ final class HostedAccount: ObservableObject {
     /// 然后无条件强制登出（防止拿到过期 token 继续发请求）。
     private func request(_ path: String, method: String = "GET",
                          body: [String: Any]? = nil, authorized: Bool = true) async throws -> [String: Any] {
+        // 10-23 P0：捕获发起请求时的会话代次与 token。await 期间若用户切换账号，
+        // 返回后必须校验代次，防止旧账号的 401 把新账号登出，或旧 /me 覆盖新账号状态。
+        let startGeneration = sessionGeneration
+        let capturedToken = token
         guard let url = URL(string: AppConfig.hostedAPIBase + path) else {
             throw HostedError.network("服务地址无效")
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if authorized, let token, !token.isEmpty {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if authorized, let capturedToken, !capturedToken.isEmpty {
+            req.setValue("Bearer \(capturedToken)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -430,7 +536,8 @@ final class HostedAccount: ObservableObject {
             let code = json["error"] as? String ?? "HTTP \(http.statusCode)"
             let message = json["message"] as? String
             // 会员 token 失效：直接清空登录态，UI 会回到登录页
-            if http.statusCode == 401, authorized {
+            // 但仅在发起请求的账号仍当前账号时才执行登出，避免旧请求登出新账号
+            if http.statusCode == 401, authorized, startGeneration == sessionGeneration {
                 // P0-15 单设备：区分"被其他设备顶下线"与普通过期，给出明确提示
                 if code == "SESSION_REPLACED" {
                     sessionReplacedNotice = message ?? "账号已在其他设备登录，当前设备已退出"
@@ -470,7 +577,12 @@ final class HostedAccount: ObservableObject {
         guard let newToken = json["token"] as? String, !newToken.isEmpty else {
             throw HostedError.server(code: "NO_TOKEN", status: 200, message: "服务未返回登录凭证")
         }
-        storeToken(newToken)
+        // 10-23 P0：Keychain 写入失败必须阻断登录流程，不能继续更新账号元数据
+        guard storeToken(newToken) else {
+            throw HostedError.input("登录凭证保存失败（系统钥匙串不可写），请重启 App 后重试")
+        }
+        // 登录成功：递增会话代次，使此前账号的未决旧响应失效
+        sessionGeneration &+= 1
         accountName = trimmed
         displayName = json["displayName"] as? String ?? trimmed
         if let s = json["memberUntil"] as? String {
@@ -483,6 +595,8 @@ final class HostedAccount: ObservableObject {
     /// 登出：清空 token、资料与所有额度/档位缓存，并删除本地快照，
     /// 防止下一个账号登录后看到上一个账号的残留数据（隐私与数据隔离防呆）。
     func logout() {
+        // 10-23 P0：登出/切换账号时递增会话代次，让未决旧请求返回后不再修改当前状态
+        sessionGeneration &+= 1
         storeToken(nil)
         displayName = ""
         memberUntil = nil
@@ -499,9 +613,23 @@ final class HostedAccount: ObservableObject {
         monthResetAt = nil
         poolUsedCny = 0
         poolCapCny = 0
+        poolBand = .normal
+        usedFlashCny = 0
+        usedProCny = 0
+        usedImageCny = 0
         sessionReplacedNotice = nil
         daysLeft = nil
         accountName = ""
+        // 10-23 P0：清理账号级远程配置，防止下一账号继承旧账号的 features/overrides/chatModes 等
+        features = nil
+        capabilityExtra = nil
+        capabilityOverridesRaw = nil
+        appBehavior = nil
+        uiConfig = [:]
+        appUpdate = [:]
+        chatModes = ChatModeOption.fallback
+        defaultChatMode = "standard"
+        appName = "中防AI"
         UserDefaults.standard.removeObject(forKey: infoKey)
     }
 
@@ -513,10 +641,9 @@ final class HostedAccount: ObservableObject {
     }
 
     private func forceLogout() async {
-        storeToken(nil)
-        chatBand = .normal
-        imageBand = .normal
-        persistInfo()
+        // 10-22 修复：此前只清 token/band，displayName、tier、额度缓存全部残留——
+        // 强制登出后侧栏仍显示上一个账号的信息。现统一复用 logout() 的完整清理。
+        logout()
     }
 
     // MARK: - 状态刷新
@@ -528,8 +655,11 @@ final class HostedAccount: ObservableObject {
         guard isLoggedIn, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
+        let startGeneration = sessionGeneration
         do {
             let json = try await request("/me")
+            // 10-23 P0：await 期间若账号已切换，丢弃旧 /me 响应，不覆盖新账号状态
+            guard startGeneration == sessionGeneration else { return }
             displayName = json["displayName"] as? String ?? displayName
             if let s = json["memberUntil"] as? String {
                 memberUntil = ISO8601DateFormatter().date(from: s)
@@ -561,6 +691,15 @@ final class HostedAccount: ObservableObject {
                 )
             }
             if let au = json["appUpdate"] as? [String: Any] { appUpdate = au }
+            // P0-59 能力声明云端化：补充说明与覆盖（新能力/边界调整云端配置即生效，无 App 出包）
+            capabilityExtra = (json["capabilityExtra"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // P0-64 App 远程行为配置（在线可修复）：超时/重试次数由云端下发
+            if let ab = json["appBehavior"] as? [String: Any] { appBehavior = ab }
+            if let ovObj = json["capabilityOverrides"],
+               let ovData = try? JSONSerialization.data(withJSONObject: ovObj),
+               let ovStr = String(data: ovData, encoding: .utf8) {
+                capabilityOverridesRaw = ovStr
+            }
             if let feats = json["features"] as? [String: Any] {
                 features = feats
             }

@@ -9,6 +9,19 @@ import BackgroundTasks
 // 关键设计决策见下方类注释（LWW / 墓碑 / 增量拉取 / 静默失败）。
 // ============================================================================
 
+/// 同步过程可观测错误：结构异常 / 单条数据异常，不纯静默跳过。
+enum SyncError: LocalizedError {
+    case invalidResponse(String)
+    case invalidPayload(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse(let detail): return "同步响应异常：\(detail)"
+        case .invalidPayload(let detail): return "同步数据异常：\(detail)"
+        }
+    }
+}
+
 /// P0-18 云端同步（按账号隔离）
 /// ------------------------------------------------------------
 /// 设计要点（沿用业界成熟做法，避免自造轮子）：
@@ -23,7 +36,9 @@ final class SyncService {
     static let shared = SyncService()
     static let bgTaskIdentifier = "com.bossai.sync.daily"
 
-    private let lastSyncKey = "bossai.sync.lastSyncAt"
+    // 10-22 P1 隔离修复：游标此前是全局键，A 同步到较晚时间后切 B 会跳过 B 的旧数据。
+    // 改为按当前账号 scopeKey 命名；切换账号即切换游标，首次同步走完整拉取。
+    private var lastSyncKey: String { "bossai.sync.lastSyncAt.\(HostedAccount.scopeKey)" }
     private let autoSyncKey = "bossai.sync.autoEnabled"
     private var running = false
     // P0-46 错误可见性：同步失败不再是纯静默——记录最近错误与连续失败次数
@@ -49,9 +64,16 @@ final class SyncService {
         guard !running, HostedAccount.isHostedActive, HostedAccount.shared.isLoggedIn else { return false }
         running = true
         defer { running = false }
+        // 10-22 账号切换保护：同步跨账号时不能把结果算到新账号头上
+        let ownerAtStart = HostedAccount.scopeKey
         do {
             try await push(context: context)
             try await pull(context: context)
+            guard HostedAccount.scopeKey == ownerAtStart else {
+                // 中途切了账号：不推进游标，下次按新账号完整拉取
+                running = false
+                return false
+            }
             lastSyncAt = Date()
             // P0-46 成功即清零失败计数与错误记录
             consecutiveFailures = 0
@@ -97,8 +119,12 @@ final class SyncService {
         let key = HostedAccount.scopeKey
         var items: [[String: Any]] = []
 
-        if let convs = try? context.fetch(FetchDescriptor<Conversation>()) {
-            for c in convs where c.ownerKey == key {
+        // 10-22 P1：fetch 失败不能当成「没有数据」继续同步（会把空推送上去并推进游标）
+        let convsToPush = try context.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.ownerKey == key }
+        ))
+        if !convsToPush.isEmpty {
+            for c in convsToPush {
                 items.append([
                     "kind": "conversation",
                     "refId": c.id.uuidString,
@@ -107,8 +133,11 @@ final class SyncService {
                 ])
             }
         }
-        if let memories = try? context.fetch(FetchDescriptor<MemoryItem>()) {
-            for m in memories where m.ownerKey == key {
+        let memoriesToPush = try context.fetch(FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == key }
+        ))
+        if !memoriesToPush.isEmpty {
+            for m in memoriesToPush {
                 items.append([
                     "kind": "memory",
                     "refId": m.id.uuidString,
@@ -135,7 +164,11 @@ final class SyncService {
         let key = HostedAccount.scopeKey
         let since = Int((lastSyncAt?.timeIntervalSince1970 ?? 0) * 1000)
         let json = try await HostedAccount.shared.syncPull(since: since)
-        let list = (json["items"] as? [[String: Any]]) ?? []
+        // 10-23 P1：结构错误（items 缺失或类型不对）必须抛错，不能当空列表处理——
+        // 否则 syncNow 会推进游标，这批数据永远不会再被拉取。
+        guard let list = json["items"] as? [[String: Any]] else {
+            throw SyncError.invalidResponse("缺少或格式错误的 items 数组")
+        }
         guard !list.isEmpty else { return }
 
         for item in list {
@@ -148,10 +181,13 @@ final class SyncService {
             case "memory":
                 try mergeMemory(payload: payload, deleted: deleted, key: key, context: context)
             default:
-                break
+                // 10-23 P1：未知 kind 不能静默跳过，否则服务端格式升级时客户端会丢数据
+                throw SyncError.invalidPayload("未知同步条目类型：\(kind)")
             }
         }
-        try? context.save()
+        // 10-22 P1：保存失败必须抛出——否则 syncNow 会把 lastSyncAt 推进，
+        // 这批没落库的数据永远不会再被拉取（用户看不到消息却以为"已同步"）。
+        try context.save()
     }
 
     /// 合并一条云端对话：墓碑→删除；已存在→LWW（远端更新才覆盖，本地为主）；
@@ -159,20 +195,53 @@ final class SyncService {
     private func mergeConversation(payload: String, deleted: Bool, key: String, context: ModelContext) throws {
         guard let data = payload.data(using: .utf8),
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else { return }
+              let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else {
+            throw SyncError.invalidPayload("conversation 条目缺少有效 id 或 JSON 损坏")
+        }
 
-        let existing = try context.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == uuid })).first
+        // 10-22 P1：谓词补 ownerKey（此前只按 id 找，可能命中另一账号的同 id 记录）
+        let existing = try context.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.id == uuid && $0.ownerKey == key }
+        )).first
         if deleted {
             if let existing { context.delete(existing) }
             return
         }
+        // 10-22 同步墓碑：远端标记删除 → 本地也软删除（保留记录以便再次同步，避免被拉回）。
+        // 注意：此处不能用 remoteUpdated（它在下面才定义），直接就地解析时间。
+        if (dict["isDeleted"] as? Bool) == true {
+            if let existing {
+                existing.isDeleted = true
+                existing.updatedAt = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
+            }
+            return
+        }
         let remoteUpdated = Self.date(fromMilliseconds: dict["updatedAt"]) ?? Date()
         if let existing {
-            // LWW：本机更新就不覆盖（本地为主，云端只补）
-            guard remoteUpdated > existing.updatedAt else { return }
-            existing.title = dict["title"] as? String ?? existing.title
-            existing.rollingSummary = dict["rollingSummary"] as? String ?? existing.rollingSummary
-            existing.updatedAt = remoteUpdated
+            // 10-22 P1 数据丢失修复：此前「已有会话」只更新元数据就 return，
+            // 另一台设备后来新增的消息永远拉不下来（用户以为"同步了"，其实消息少了一半）。
+            // 现在先按消息 id 做增量合并（去重），再对标题/摘要走 LWW。
+            // 10-23 P1：插入成功后立即加入集合，防止同一 payload 内重复消息 ID 被插入两次。
+            var existingIDs = Set(existing.messages.map { $0.id })
+            for raw in (dict["messages"] as? [[String: Any]]) ?? [] {
+                guard let mid = raw["id"] as? String,
+                      let muuid = UUID(uuidString: mid),
+                      !existingIDs.contains(muuid) else { continue }
+                let msg = Message(role: raw["role"] as? String ?? "user", text: raw["text"] as? String ?? "")
+                msg.id = muuid
+                msg.sourcesJSON = raw["sourcesJSON"] as? String ?? ""
+                msg.attachmentIds = raw["attachmentIds"] as? String ?? ""
+                msg.createdAt = Self.date(fromMilliseconds: raw["createdAt"]) ?? remoteUpdated
+                msg.conversation = existing
+                msg.conversationID = existing.id
+                context.insert(msg)
+                existingIDs.insert(muuid)
+            }
+            if remoteUpdated > existing.updatedAt {
+                existing.title = dict["title"] as? String ?? existing.title
+                existing.rollingSummary = dict["rollingSummary"] as? String ?? existing.rollingSummary
+                existing.updatedAt = remoteUpdated
+            }
             return
         }
         // 本机没有 → 新建（含消息）
@@ -184,13 +253,20 @@ final class SyncService {
         conv.updatedAt = remoteUpdated
         conv.createdAt = Self.date(fromMilliseconds: dict["createdAt"]) ?? remoteUpdated
         context.insert(conv)
+        // 10-23 P1：新建会话同样对同一 payload 内的重复消息 ID 去重
+        var insertedMessageIDs = Set<UUID>()
         for raw in (dict["messages"] as? [[String: Any]]) ?? [] {
             let msg = Message(role: raw["role"] as? String ?? "user", text: raw["text"] as? String ?? "")
-            if let mid = raw["id"] as? String, let muuid = UUID(uuidString: mid) { msg.id = muuid }
+            msg.conversation = conv
+            msg.conversationID = conv.id
+            if let mid = raw["id"] as? String, let muuid = UUID(uuidString: mid) {
+                guard !insertedMessageIDs.contains(muuid) else { continue }
+                msg.id = muuid
+                insertedMessageIDs.insert(muuid)
+            }
             msg.sourcesJSON = raw["sourcesJSON"] as? String ?? ""
             msg.attachmentIds = raw["attachmentIds"] as? String ?? ""
             msg.createdAt = Self.date(fromMilliseconds: raw["createdAt"]) ?? remoteUpdated
-            msg.conversation = conv
             context.insert(msg)
         }
     }
@@ -200,8 +276,11 @@ final class SyncService {
     private func mergeMemory(payload: String, deleted: Bool, key: String, context: ModelContext) throws {
         guard let data = payload.data(using: .utf8),
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else { return }
-        let existing = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.id == uuid })).first
+              let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else {
+            throw SyncError.invalidPayload("memory 条目缺少有效 id 或 JSON 损坏")
+        }
+        // 10-23 P0：记忆合并必须同时匹配 ownerKey，防止不同账号 UUID 碰撞导致跨账号覆盖/误删
+        let existing = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.id == uuid && $0.ownerKey == key })).first
         if deleted { if let existing { context.delete(existing) }; return }
         guard existing == nil else { return }
         let item = MemoryItem(content: dict["content"] as? String ?? "")
@@ -236,6 +315,7 @@ final class SyncService {
             "rollingSummary": String(c.rollingSummary.prefix(20_000)),
             "createdAt": Int(c.createdAt.timeIntervalSince1970 * 1000),
             "updatedAt": Int(c.updatedAt.timeIntervalSince1970 * 1000),
+            "isDeleted": c.isDeleted,
             "messages": messages,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()

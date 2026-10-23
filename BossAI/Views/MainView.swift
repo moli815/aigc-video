@@ -38,6 +38,8 @@ struct MainView: View {
     @State private var showLibrary = false
     @State private var draftPrompt = ""
     @State private var draftConversationID: UUID?
+    /// P0-47 方案 A：草稿态预置研究模式（侧栏「深度研究」入口用）
+    @State private var draftResearchMode: ResearchMode?
     @State private var providerTask: Task<Void, Never>?
     @State private var showNewChat = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
@@ -69,7 +71,11 @@ struct MainView: View {
                 containerKey = nil
                 showLibrary = true
             },
-            onHiddenSettings: { showPinEntry = true })
+            onHiddenSettings: { showPinEntry = true },
+            onOpenResearch: {
+                // P0-47 方案 A「深度研究」入口：新开草稿并预置联网研究模式
+                startNewDraft(ExpertCatalog.find("general"), researchMode: .online)
+            })
         } detail: {
             detailContent
         }
@@ -141,7 +147,8 @@ struct MainView: View {
                                       // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
                                       selectedConversationId = created.id
                                       draftConversationID = created.id
-                                  }, initialText: draftPrompt)
+                                  }, initialText: draftPrompt,
+                                  initialResearchMode: draftResearchMode)
                     .id(key)
             } else {
                 let raw = String(key.dropFirst("conv-".count))
@@ -152,10 +159,8 @@ struct MainView: View {
                 let scopedConv = uuid.flatMap { id in
                     conversations.first(where: { $0.id == id && $0.ownerKey == HostedAccount.scopeKey })
                 }
-                let anyConv = uuid.flatMap { id in
-                    conversations.first(where: { $0.id == id })
-                }
-                if let conv = scopedConv ?? anyConv {
+                // 10-22 P1 隔离修复：删掉 anyConv 兜底——它会打开另一个账号的会话（跨账号数据泄露）。
+                if let conv = scopedConv {
                     ChatContainerView(conversation: conv, expert: conv.expert)
                         .id(key)
                 } else {
@@ -171,8 +176,9 @@ struct MainView: View {
         }
     }
 
-    private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false) {
+    private func startNewDraft(_ expert: Expert, keepPrompt: Bool = false, researchMode: ResearchMode? = nil) {
         if !keepPrompt { draftPrompt = "" }
+        draftResearchMode = researchMode
         showLibrary = false
         selectedConversationId = nil
         // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
@@ -198,7 +204,9 @@ struct MainView: View {
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
         if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
-        modelContext.delete(conv)
+        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
+        conv.isDeleted = true
+        conv.updatedAt = Date()
         try? modelContext.save()
     }
 
@@ -239,12 +247,16 @@ struct SidebarView: View {
     var onDeleteConversation: (Conversation) -> Void = { _ in }
     var onOpenLibrary: () -> Void = {}
     var onHiddenSettings: () -> Void = {}
+    // P0-47 方案 A 实装：顶部「深度研究」入口回调（定时任务走侧栏内部身份页 sheet）
+    var onOpenResearch: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
 
     @State private var expertExpanded = true
     @State private var searchText = ""
+    /// P0-47 方案 A：定时任务入口 → 侧栏自己的身份页 sheet（内含定时任务卡）
+    @State private var showIdentitySheet = false
     @State private var renaming: Conversation?
     @State private var renameText = ""
     @State private var tapCount = 0
@@ -253,7 +265,7 @@ struct SidebarView: View {
     /// 过滤后的对话列表：先按账号隔离，再按关键词匹配标题/专家名/消息正文
     private var filtered: [Conversation] {
         // P0-16 数据隔离：只显示当前登录账号名下的对话（同设备换账号互不可见）
-        let scoped = conversations.filter { $0.ownerKey == HostedAccount.scopeKey }
+        let scoped = conversations.filter { $0.ownerKey == HostedAccount.scopeKey && !$0.isDeleted }
         let keyword = searchText.trimmingCharacters(in: .whitespaces)
         guard !keyword.isEmpty else { return scoped }
         return scoped.filter { conv in
@@ -265,130 +277,100 @@ struct SidebarView: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            List(selection: $selectedConversationId) {
-                Section {
-                    Button {
-                        onOpenLibrary()
-                    } label: {
-                        Label("资料库", systemImage: "folder.fill")
-                            .foregroundStyle(showLibrary ? Color.accentColor : Color.primary)
+            // 10-23 完整重构：List → ScrollView + VStack，自绘卡片式行与选中态。
+            // 保留全部交互：导航三件套、专家折叠、搜索、重命名/删除、新建。
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // 一级入口
+                    VStack(spacing: 2) {
+                        sidebarNavRow("定时任务", "clock") { showIdentitySheet = true }
+                        sidebarNavRow("深度研究", "magnifyingglass") { onOpenResearch() }
+                        sidebarNavRow("资料库", "folder", active: showLibrary) { onOpenLibrary() }
                     }
-                    .buttonStyle(.plain)
-                }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
 
-                // 可折叠的专家团
-                Section {
-                    Button {
+                    // 专家团（可折叠）
+                    sidebarSectionHeader("您的专属军师", count: ExpertCatalog.all.count,
+                                         chevron: expertExpanded) {
                         withAnimation(.easeInOut(duration: 0.2)) { expertExpanded.toggle() }
-                    } label: {
-                        HStack {
-                            Label(ExpertCatalog.ui.title, systemImage: ExpertCatalog.ui.icon)
-                            Spacer()
-                            Text("\(ExpertCatalog.all.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: expertExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                     }
-                    .buttonStyle(.plain)
-
                     if expertExpanded {
-                        // P0-11 专家顾问区：独立滚动框 + 行分隔线 + 统一内边距（此前布局散乱）
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(ExpertCatalog.all.enumerated()), id: \.element.id) { index, expert in
-                                    Button {
-                                        onOpenExpert(expert)
-                                    } label: {
-                                        ExpertRow(expert: expert)
-                                            .padding(.vertical, 7)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    if index < ExpertCatalog.all.count - 1 {
-                                        Rectangle()
-                                            .fill(theme.border.opacity(0.45))
-                                            .frame(height: 0.5)
-                                            .padding(.leading, 52)
-                                    }
+                        VStack(spacing: 1) {
+                            ForEach(ExpertCatalog.all) { expert in
+                                Button { onOpenExpert(expert) } label: {
+                                    ExpertRow(expert: expert)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 8)
                         }
-                        .scrollIndicators(.hidden)
-                        .frame(maxHeight: 380)
-                        .background(theme.surface.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.border.opacity(0.6), lineWidth: 0.5))
-                        .padding(.horizontal, 4)
-                    }
-                }
-
-                Section {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        TextField("搜索对话", text: $searchText)
-                            .textFieldStyle(.plain)
-                            .font(.footnote)
-                        if !searchText.isEmpty {
-                            Button {
-                                searchText = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                        }
+                        .padding(.horizontal, 10)
                     }
 
+                    // 对话
+                    sidebarSectionHeader("对话", count: filtered.count, chevron: nil) {}
+                    sidebarSearchField
                     if filtered.isEmpty {
                         Text(searchText.isEmpty ? "还没有对话，点左下角新建" : "没有匹配的对话")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 16)
                     } else {
-                        ForEach(filtered, id: \.id) { conv in
-                            ConversationRow(conversation: conv)
-                                .tag(Optional(conv.id))
+                        VStack(spacing: 1) {
+                            ForEach(filtered, id: \.id) { conv in
+                                Button { selectedConversationId = conv.id } label: {
+                                    ConversationRow(conversation: conv)
+                                        .padding(.vertical, 5)
+                                        .padding(.horizontal, 8)
+                                        .background(
+                                            selectedConversationId == conv.id ? theme.accent.opacity(0.16) : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
                                 .contextMenu {
                                     Button {
                                         renaming = conv
                                         renameText = conv.title
-                                    } label: {
-                                        Label("重命名", systemImage: "pencil")
-                                    }
+                                    } label: { Label("重命名", systemImage: "pencil") }
                                     Button(role: .destructive) {
                                         onDeleteConversation(conv)
-                                    } label: {
-                                        Label("删除对话", systemImage: "trash")
-                                    }
+                                    } label: { Label("删除对话", systemImage: "trash") }
                                 }
-                                .swipeActions(edge: .trailing) {
-                                    Button(role: .destructive) {
-                                        onDeleteConversation(conv)
-                                    } label: {
-                                        Label("删除", systemImage: "trash")
-                                    }
-                                }
+                            }
                         }
+                        .padding(.horizontal, 10)
                     }
-                } header: {
-                    Text("对话")
+
+                    Spacer(minLength: 10)
                 }
             }
-            .listStyle(.sidebar)
+            .background(.ultraThinMaterial)
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     QuotaSidebarWidget()
-                    Button(action: onNewChat) { Label("新任务", systemImage: "plus").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(theme.accentDeep)
-                        .padding([.horizontal, .bottom], 12)
-                        .accessibilityIdentifier("new-task")
+                    // P0-47 方案 A：底部"新对话"大胶囊按钮（预览同款渐变胶囊）
+                    Button(action: onNewChat) {
+                        Label("新对话", systemImage: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        LinearGradient(colors: [theme.accent, theme.accentDeep],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: theme.accent.opacity(0.35), radius: 10, y: 4)
+                    .padding([.horizontal, .bottom], 12)
+                    .accessibilityIdentifier("new-task")
                 }
                 // 底部区做成玻璃面板：额度环与新建按钮浮在毛玻璃上
                 .background(.ultraThinMaterial)
@@ -443,11 +425,80 @@ struct SidebarView: View {
                 renaming = nil
             }
         }
+        // P0-47 方案 A：「定时任务」入口打开身份页（含定时任务卡）
+        .sheet(isPresented: $showIdentitySheet) { IdentitySheet() }
+    }
+
+    // MARK: - 侧栏自绘组件（10-23 List → ScrollView 重构配套）
+
+    private func sidebarNavRow(_ title: String, _ icon: String, active: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label { Text(title) } icon: { Image(systemName: icon) }
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(active ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sidebarSectionHeader(_ title: String, count: Int, chevron: Bool?,
+                                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                if let chevron {
+                    Image(systemName: chevron ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sidebarSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            TextField("搜索对话", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.footnote)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
     }
 
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
-        modelContext.delete(conv)
+        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
+        conv.isDeleted = true
+        conv.updatedAt = Date()
         try? modelContext.save()
     }
 
@@ -522,17 +573,9 @@ struct QuotaSidebarWidget: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            HStack(spacing: 6) {
-                QuotaSidebarRing(pct: HostedAccount.cachedDayRemainingPct,
-                                 tint: theme.accent, label: "今日",
-                                 resetAt: HostedAccount.cachedDayResetAt)
-                QuotaSidebarRing(pct: HostedAccount.cachedWeekRemainingPct,
-                                 tint: theme.accentSecondary, label: "本周",
-                                 resetAt: HostedAccount.cachedWeekResetAt)
-                QuotaSidebarRing(pct: HostedAccount.cachedMonthRemainingPct,
-                                 tint: .cyan, label: "本月",
-                                 resetAt: HostedAccount.cachedMonthResetAt)
-            }
+            // 10-22 用户要求：底部不再显示额度金额/百分比，改为「会员到期时间」
+            MembershipExpiryRing(daysLeft: HostedAccount.cachedDaysLeft,
+                                 until: HostedAccount.cachedMemberUntil)
             HStack(spacing: 8) {
                 Button { showIdentity = true } label: {
                     Label("身份设置", systemImage: "gearshape")
@@ -565,6 +608,52 @@ struct QuotaSidebarWidget: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
         .padding(.horizontal, 12)
         .padding(.top, 12)
+    }
+}
+
+/// 会员有效期环：环心显示剩余天数，环按「剩余/30」比例收缩，下方标注到期日期。
+/// 10-22 用户要求用「会员到期」替代原额度金额展示。
+struct MembershipExpiryRing: View {
+    @Environment(\.appTheme) private var theme
+    let daysLeft: Int?
+    let until: Date?
+
+    private var days: Int { max(0, daysLeft ?? 0) }
+    private var progress: CGFloat {
+        // 以 30 天为一个周期估算环进度（到期时间不由本地计算，仅作视觉参考）
+        min(1, max(0.02, CGFloat(days) / 30.0))
+    }
+    private var expired: Bool { (daysLeft ?? 0) <= 0 }
+    private var expiryText: String {
+        guard let until else { return expired ? "已到期" : "—" }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: until) + " 到期"
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.08), lineWidth: 6)
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(expired ? Color.red.opacity(0.8) : theme.accent,
+                            style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                VStack(spacing: 0) {
+                    Text(expired ? "0" : "\(days)")
+                        .font(.system(size: 15, weight: .heavy, design: .rounded).monospacedDigit())
+                    Text("天").font(.system(size: 8)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 64, height: 64)
+            Text("会员有效期").font(.caption2).foregroundStyle(.secondary)
+            Text(expiryText)
+                .font(.system(size: 8.5)).foregroundStyle(.tertiary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityLabel(expired ? "会员已到期" : "会员剩余 \(days) 天，\(expiryText)")
     }
 }
 
@@ -659,20 +748,14 @@ struct ExpertRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // P0-26 图标 SaaS 化：云端下发 emoji 优先（在线可换、天然居中）；无 emoji 回退首字徽章。
+            // P0-47 简笔风图标（方案 A 实装）：SF Symbol 线性描边（去 .fill 变体）+ 低饱和底，
+            // 替代卡通 emoji——与设计预览一致；symbol 缺失时才回退 emoji/首字徽章。
             // 固定 frame + 居中 = 任何图标形态下都绝对对齐（P0-23 结论保留）。
-            ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Self.tint(for: expert.id))
-                if let emoji = expert.emoji, !emoji.isEmpty {
-                    Text(emoji).font(.system(size: 15))
-                } else {
-                    Text(String(expert.name.prefix(1)))
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(width: 26, height: 26)
+            // 10-22 用户要求：取消每位专家的独立图标，统一为品牌图标的黑白简笔画（线性描边、无底色）
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
                     .font(.subheadline)
@@ -682,6 +765,13 @@ struct ExpertRow: View {
                     .lineLimit(1)
             }
         }
+    }
+
+    /// 简笔线性图标：把 SF Symbol 的 .fill 变体转成描边风格（与方案 A 简笔预览一致）。
+    /// 云端 symbol 可随时调整——换图标不出包（专家目录云端下发）。
+    static func lineSymbol(for expert: Expert) -> String {
+        let base = expert.symbol.isEmpty ? "bubble.left.and.bubble.right.fill" : expert.symbol
+        return base.replacingOccurrences(of: ".fill", with: "")
     }
 
     /// 稳定配色：按专家 id 做字符和散列映射到固定色板（8 色循环），
@@ -926,7 +1016,8 @@ struct NewChatSheet: View {
                             Text("继续最近的对话")
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            ForEach(conversations.prefix(6), id: \.id) { conv in
+                            // 10-22 P1 隔离修复：此前直接 prefix(6) 取全量，切账号后会显示上一账号的会话标题
+                            ForEach(conversations.filter { $0.ownerKey == HostedAccount.scopeKey }.prefix(6), id: \.id) { conv in
                                 Button {
                                     dismiss()
                                     onOpenConversation(conv)

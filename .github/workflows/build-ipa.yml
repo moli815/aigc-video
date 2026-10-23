@@ -44,13 +44,26 @@ jobs:
             echo "::warning::overlay unavailable (likely expired), skipped - repo is self-contained"
           fi
 
-      - name: Select Xcode 16
+      - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          # 10-23: GitHub macos-15 image 已预装 Xcode 26.3；原生 Liquid Glass 需要 Xcode 26 SDK
+          xcode-version: "26.3"
 
       - name: Run Swift package tests
         run: swift test
+
+      # P0-46 架构门禁：单文件 >900 行告警（God File 检测），仅告警不阻断。
+      # 作为重构推进度的客观标尺：拆分后此列表应逐步缩短。
+      - name: Architecture gate (oversized files)
+        run: |
+          LONG=$(find BossAI -name "*.swift" -exec wc -l {} + | awk '$1 > 900 {printf "%5d  %s\n", $1, $2}' | sort -rn)
+          if [ -n "$LONG" ]; then
+            echo "::warning::超大文件（>900 行）清单："
+            echo "$LONG"
+          else
+            echo "✅ 无超大文件（全部 ≤900 行）"
+          fi
 
   # P0-43 iOS 单测：编译 App + BossAITests（单测 target）并执行。
   # 覆盖：配置面板档位解析 / 工具权限（云端优先）/ 图片压缩 / 远程目录映射等回归锚点。
@@ -62,10 +75,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16
+      - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          xcode-version: "26.3"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -75,11 +88,19 @@ jobs:
 
       - name: Run iOS unit tests (BossAITests)
         run: |
+          # P0-47 模拟器 fallback：GitHub runner 池偶发缺少 iPhone 16（实测多次 flaky，
+          # 报 "Unable to find a device matching the provided destination specifier"）。
+          # 这里动态解析可用设备，保证测试不因 runner 环境差异而失败。
+          DEST_NAME="iPhone 16"
+          if ! xcrun simctl list devices available | grep -q "iPhone 16"; then
+            DEST_NAME=$(xcrun simctl list devices available | grep -oE "iPhone [0-9][0-9A-Za-z ]*" | head -1 | xargs)
+            echo "⚠️ iPhone 16 不可用，自动切换: ${DEST_NAME:-（无可用 iPhone）}"
+          fi
           # pipefail：管道中 xcodebuild 的失败必须向上传播（此前用 | tail 吞掉了退出码）
           set -o pipefail
           xcodebuild test -project BossAI.xcodeproj \
             -scheme BossAI \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,name=${DEST_NAME}" \
             -derivedDataPath build \
             -only-testing:BossAITests \
             CODE_SIGNING_ALLOWED=NO \
@@ -116,10 +137,10 @@ jobs:
             echo "::warning::overlay unavailable (likely expired), skipped - repo is self-contained"
           fi
 
-      - name: Select Xcode 16
+      - name: Select Xcode 26
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: "16.4"
+          xcode-version: "26.3"
 
       - name: Install XcodeGen
         run: brew install xcodegen

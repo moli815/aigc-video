@@ -47,6 +47,27 @@ struct ChatContainerView: View {
     let expert: Expert
     var onConversationCreated: (Conversation) -> Void = { _ in }
     var initialText: String = ""
+    /// P0-47 方案 A：草稿态预置研究模式（侧栏「深度研究」入口 → 新对话默认联网研究）
+    var initialResearchMode: ResearchMode?
+
+    /// P0-46 @Query 派生视图：消息渲染改为 SwiftData 响应式数据源（数据变化自动刷新，
+    /// 根治"打开历史对话空白/同步回来不显示"类问题）。草稿态（conversation 为 nil）
+    /// 仍走 VM 的 sortedMessages（发送后才落库）。
+    @Query private var liveMessages: [Message]
+
+    init(conversation: Conversation?, expert: Expert,
+         onConversationCreated: @escaping (Conversation) -> Void = { _ in },
+         initialText: String = "",
+         initialResearchMode: ResearchMode? = nil) {
+        self.conversation = conversation
+        self.expert = expert
+        self.onConversationCreated = onConversationCreated
+        self.initialText = initialText
+        self.initialResearchMode = initialResearchMode
+        let cid = conversation?.id
+        _liveMessages = Query(filter: #Predicate<Message> { $0.conversationID == cid },
+                              sort: \Message.createdAt)
+    }
 
     /// VM 延迟持有器：body 首次求值时 VM 还未创建，用 Optional 包一层，
     /// 建好后触发 ChatView 挂载
@@ -57,7 +78,10 @@ struct ChatContainerView: View {
     var body: some View {
         Group {
             if let vm = viewModelHolder.vm {
-                ChatView(viewModel: vm, previewFile: $previewFile)
+                ChatView(viewModel: vm,
+                         liveMessages: liveMessages,
+                         useLiveMessages: conversation != nil,
+                         previewFile: $previewFile)
             } else {
                 Color.clear
             }
@@ -73,6 +97,8 @@ struct ChatContainerView: View {
                 imageKey: { credentials.imageKey }
             )
             vm.inputText = initialText
+            // P0-47 方案 A：预置研究模式（深度研究入口）
+            if let initialResearchMode { vm.researchMode = initialResearchMode }
             vm.onConversationCreated = { created in
                 onConversationCreated(created)
             }
@@ -201,6 +227,9 @@ struct ExpertBanner: View {
             Spacer()
             Button("技能与工具", systemImage: "slider.horizontal.3") { showSkills = true }
                 .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .liquidGlassCompat(Capsule(), elevated: false)
                 .accessibilityIdentifier("expert-skills")
         }
         .padding(.horizontal, 14)
@@ -232,21 +261,40 @@ struct ChatView: View {
     // P0-11 滚动层重写（参考 exyte/Chat 成熟实现，1885★）：
     // 废弃持久化 scrollPosition(id:) 绑定——它会在键盘等每次布局变化时用过期几何重新锚定，
     // 是"键盘顶空/抽动"的最后根源。改为「一次性滚动请求」：目标消费后立即清空，不再重复锚定。
-    @State private var pendingScrollTarget: UUID?
+    // 10-23：滚动目标改为 AnyHashable —— 支持"底部锚点"字符串，而不只是某条消息 ID
+    @State private var pendingScrollTarget: AnyHashable?
     @State private var pendingScrollAnimated = false
     @State private var scrollClock = ScrollClock()
     private final class ScrollClock { var lastTime: TimeInterval = 0; var pending: Task<Void, Never>? }
     @ObservedObject var viewModel: ChatViewModel
     @Binding var previewFile: StoredFile?
+    // P0-46 @Query 派生视图：已有会话时用 SwiftData 响应式消息源（自动刷新），
+    // 草稿态回退 VM 的 sortedMessages。
+    let liveMessages: [Message]
+    let useLiveMessages: Bool
     // P0-4 编辑重发
     @State private var editTarget: Message?
 
+    init(viewModel: ChatViewModel, liveMessages: [Message] = [], useLiveMessages: Bool = false,
+         previewFile: Binding<StoredFile?>) {
+        self.viewModel = viewModel
+        self.liveMessages = liveMessages
+        self.useLiveMessages = useLiveMessages
+        self._previewFile = previewFile
+    }
+
+    /// 渲染数据源：已有会话走 @Query（响应式），草稿态走 VM 缓存。
+    private var displayMessages: [Message] {
+        useLiveMessages ? liveMessages : viewModel.sortedMessages
+    }
+
     /// 一次性贴底请求：写入末条消息 id，由 ScrollViewReader 消费后立即清空（关键：不做持久锚定）。
     private func requestScrollToBottom(animated: Bool = false, delay: TimeInterval = 0) {
-        guard let lastID = viewModel.sortedMessages.last?.id else { return }
+        // 10-23 修复：滚到底部锚点，而不是"最后一条消息"——
+        // 消息之后还可能渲染生图占位、追问建议、状态提示，滚到最后一条并不等于滚到内容末尾。
         let fire = {
             pendingScrollAnimated = animated
-            pendingScrollTarget = lastID
+            pendingScrollTarget = AnyHashable("bottom-anchor")
         }
         if delay > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: fire)
@@ -307,17 +355,18 @@ struct ChatView: View {
         ScrollViewReader { proxy in
         ScrollView {
                 LazyVStack(spacing: 0) {
-                    if viewModel.sortedMessages.isEmpty {
+                    if displayMessages.isEmpty {
                         EmptyStateView(expert: viewModel.expert)
                     }
-                    ForEach(viewModel.sortedMessages, id: \.id) { message in
+                    ForEach(displayMessages, id: \.id) { message in
                         Group {
                             if message.id == viewModel.streamingMessageId {
                                 StreamingMessageRow(message: message, buffer: viewModel.replyBuffer,
-                                                    files: viewModel.files(for: message), onPreview: { previewFile = $0 })
+                                                    files: viewModel.files(for: message), onPreview: { previewFile = $0 },
+                                                    isReasoning: viewModel.isReasoning)
                             } else {
                                 MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 },
-                                           isLastAssistant: message.role == "assistant" && message.id == viewModel.sortedMessages.last?.id,
+                                           isLastAssistant: message.role == "assistant" && message.id == displayMessages.last?.id,
                                            onRegenerate: viewModel.canRegenerateLast ? { viewModel.regenerateLastReply() } : nil)
                             }
                         }
@@ -330,6 +379,10 @@ struct ChatView: View {
                                 }
                             }
                         }
+                    }
+                    // P0-50 ChatGPT 式生图加载：工具执行期间在消息流里显示 shimmer 占位行
+                    if let job = viewModel.pendingImage {
+                        ImageGeneratingRow(title: job)
                     }
                     if !viewModel.isStreaming, viewModel.streamingMessageId == nil,
                        !viewModel.suggestedFollowUps.isEmpty {
@@ -366,6 +419,10 @@ struct ChatView: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                     }
+
+                    // 10-23 底部锚点：所有贴底滚动都滚到这里——它保证"滚到内容真正末尾"，
+                    // 而不是停在最后一条消息（其后还有生图占位、追问建议、状态条）
+                    Color.clear.frame(height: 1).id("bottom-anchor")
                 }
                 .padding(.vertical, 12)
                 .scrollTargetLayout()
@@ -392,7 +449,7 @@ struct ChatView: View {
             .simultaneousGesture(DragGesture(minimumDistance: 5).onChanged { value in
                 if abs(value.translation.height) > abs(value.translation.width), value.translation.height > 5 { followOutput = false }
             })
-            .onChange(of: viewModel.sortedMessages.count) { _, _ in
+            .onChange(of: displayMessages.count) { _, _ in
                 guard followOutput else { return }
                 requestScrollToBottom()
             }
@@ -406,7 +463,9 @@ struct ChatView: View {
                 guard followOutput else { return }
                 scrollClock.pending?.cancel()
                 scrollClock.pending = Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 120_000_000)
+                    // 10-22 性能：120ms → 60ms。长回答时 120ms 的静默窗口让滚动明显滞后，
+                    // 60ms 仍能合并高频 token，但跟随感好很多。
+                    try? await Task.sleep(nanoseconds: 60_000_000)
                     guard !Task.isCancelled, followOutput else { return }
                     requestScrollToBottom()
                 }
@@ -424,7 +483,7 @@ struct ChatView: View {
                             .foregroundStyle(theme.accent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .liquidGlass(Capsule(), elevated: true)
+                            .liquidGlassCompat(Capsule(), elevated: true)
                     }
                     .buttonStyle(.plain)
                     .padding()
@@ -433,7 +492,7 @@ struct ChatView: View {
             }
 
             // P0-5 专家开场提示：空会话时展示在输入框上方，点击填充（可编辑再发送）
-            if viewModel.sortedMessages.isEmpty, viewModel.streamingMessageId == nil {
+            if displayMessages.isEmpty, viewModel.streamingMessageId == nil {
                 let starters = ExpertCatalog.starters(for: viewModel.expert)
                 if !starters.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -484,6 +543,70 @@ struct ChatView: View {
     }
 }
 
+/// P0-50 ChatGPT 式生图加载动效：占位画布 + shimmer 扫光 + 阶段文案（按经过时间推进）。
+/// 目标：生图约需 40-100 秒，让用户明确"正在画、画到哪了"，而不是面对静止的等待。
+struct ImageGeneratingRow: View {
+    @Environment(\.appTheme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let title: String
+    @State private var shimmerOffset: CGFloat = -220
+    @State private var elapsed: Int = 0
+
+    private var stageText: String {
+        // P0-70 文案云端可配（管理台 IMGPROG_* 即改即生效；未配置时用内置默认值）
+        switch elapsed {
+        case ..<15: return HostedAccount.cachedImgStage1
+        case ..<45: return HostedAccount.cachedImgStage2
+        default: return HostedAccount.cachedImgStage3
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(theme.surface.opacity(0.6))
+                    .frame(width: 260, height: 340)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(theme.border, lineWidth: 0.8))
+                // shimmer 扫光（reduceMotion 时禁用动画，保持静态占位）
+                LinearGradient(colors: [.clear, theme.accent.opacity(0.14), .clear],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .frame(width: 260, height: 340)
+                    .offset(x: shimmerOffset)
+                    .animation(reduceMotion ? nil : .linear(duration: 1.6).repeatForever(autoreverses: false), value: shimmerOffset)
+                VStack(spacing: 10) {
+                    Image(systemName: "paintbrush.pointed.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(theme.accent)
+                    Text("正在绘制「\(title)」")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text(stageText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(HostedAccount.cachedImgEta)   // P0-70 云端可配
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 18)
+            }
+        }
+        .padding(.vertical, 6)
+        .onAppear {
+            shimmerOffset = 220
+            // 阶段文案按真实经过时间推进（5 秒一档）
+            Task { @MainActor in
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    elapsed += 5
+                }
+            }
+        }
+        .accessibilityLabel("正在生成图片：\(title)")
+    }
+}
+
 /// P0-4 编辑重发编辑器：弹出半屏 TextEditor 修改历史消息文本后重新发送
 private struct EditResendSheet: View {
     let initial: String
@@ -521,48 +644,19 @@ private struct EditResendSheet: View {
     }
 }
 
-/// 流式消息行：外层仍是 MessageRow，内层用打字机游标（shownCount → targetCount）
-/// 平滑展示增长中的文本；离开视图时立即补齐，避免视觉跳变。
+/// 流式消息行：外层仍是 MessageRow，直接展示当前已收到的完整 buffer.text。
+/// 10-23 取消逐字符打字机：配合 MarkdownView 的增量解析，直接渲染完整文本，
+/// 避免每 18–24ms 重排整段 Markdown 造成的滚动抖动、布局跳变和主线程压力。
 private struct StreamingMessageRow: View {
     let message: Message
     @ObservedObject var buffer: StreamingReplyBuffer
     let files: [StoredFile]
     let onPreview: (StoredFile) -> Void
-    /// 已平滑展示的字符数（打字机游标）
-    @State private var shownCount = 0
-    /// 打字机目标长度（随 buffer 增长）
-    @State private var targetCount = 0
-    @State private var pump: Task<Void, Never>?
+    /// P0-68 深度思考中状态（由调用方传入）
+    var isReasoning: Bool = false
 
     var body: some View {
-        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview)
-            .onChange(of: buffer.text) { _, newText in
-                targetCount = newText.count
-                startPump()
-            }
-            .onAppear {
-                // 若刷新时已有完整文本（如重新进入会话），直接全量展示，避免从 0 逐字回放
-                shownCount = buffer.text.count
-                targetCount = buffer.text.count
-            }
-            .onDisappear {
-                // 流式结束：立刻补齐剩余字符，避免从打字机截断长度跳到全文的视觉突变
-                shownCount = targetCount
-                pump?.cancel(); pump = nil
-            }
-    }
-
-    /// 平滑打字机：18ms 一帧（≈55fps），积压越多步长越大（≤0.5s 追平模型输出）
-    private func startPump() {
-        guard pump == nil else { return }
-        pump = Task {
-            while !Task.isCancelled, shownCount < targetCount {
-                let pending = targetCount - shownCount
-                shownCount = min(targetCount, shownCount + max(2, pending / 15))
-                try? await Task.sleep(nanoseconds: 18_000_000)
-            }
-            pump = nil
-        }
+        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview, isReasoning: isReasoning)   // P0-68
     }
 }
 

@@ -77,7 +77,7 @@ final class BriefingService {
     /// 失败行为：静默吞错，不写幂等标记（下次补偿重试）
     private func generate(type: String, identity: [String: Any], scheduleId: String, context: ModelContext) async {
         let title = type == "morning" ? "每日早报" : "每周简报"
-        let conv = Self.ensureConversation(title: title, context: context)
+        guard let conv = Self.ensureConversation(title: title, context: context) else { return }
         // 身份字段逐个容错取值：任何一项缺失都不影响提示词生成
         let name = identity["name"] as? String ?? ""
         let company = identity["company"] as? String ?? ""
@@ -110,18 +110,27 @@ final class BriefingService {
             let msg = Message(role: "assistant", text: content)
             msg.createdAt = Date()
             msg.conversation = conv
+            msg.conversationID = conv.id   // 10-22：缺这一行会导致重进会话看不到简报
             context.insert(msg)
             conv.updatedAt = Date()
-            try? context.save()
-            // 成功后才写幂等标记：失败不写，下次补偿时自动重试
-            UserDefaults.standard.set(Self.dayString(Date()), forKey: "bossai.briefing.run." + scheduleId)
+            // 10-22 P2 修复：此前 `try? save` 失败后仍然写幂等标记——
+            // 表现就是"今天简报已经生成过了"，但用户第二天打开什么都没有（假成功）。
+            // 现在只有持久化成功才写标记，失败留给下次补偿重试。
+            do {
+                try context.save()
+                UserDefaults.standard.set(Self.dayString(Date()), forKey: "bossai.briefing.run." + scheduleId)
+            } catch {
+                // 保存失败：不写标记；内容仍在内存（本轮会话可见），下次补偿会重新生成
+            }
         } catch {
             // 静默：网络/额度问题下次补偿时再试
         }
     }
 
-    /// 找到（或创建）简报专属会话
-    private static func ensureConversation(title: String, context: ModelContext) -> Conversation {
+    /// 找到（或创建）简报专属会话。
+    /// 10-23 P2：保存失败时不能返回已被删除的对象——调用方插入消息会挂空引用或触发断言。
+    /// 改为返回 nil，调用方直接放弃本次生成，下次补偿再试。
+    private static func ensureConversation(title: String, context: ModelContext) -> Conversation? {
         let key = HostedAccount.scopeKey
         if let existing = try? context.fetch(FetchDescriptor<Conversation>(
             predicate: #Predicate { $0.title == title && $0.ownerKey == key }
@@ -130,8 +139,14 @@ final class BriefingService {
         }
         let conv = Conversation(expertId: "general", title: title)
         context.insert(conv)
-        try? context.save()
-        return conv
+        do {
+            try context.save()
+            return conv
+        } catch {
+            // 创建失败：把已插入对象从上下文移除，避免污染；返回 nil 让上层放弃本次生成
+            context.delete(conv)
+            return nil
+        }
     }
 
     /// 把日期格式化为 "yyyy-MM-dd" 字符串（幂等标记的存储格式）

@@ -95,7 +95,8 @@ enum CrashReporter {
                 try? FileManager.default.removeItem(at: file)
                 continue
             }
-            var req = URLRequest(url: URL(string: AppConfig.hostedAPIBase + "/crash")!)
+            guard let url = URL(string: AppConfig.hostedAPIBase + "/crash") else { return }
+            var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = data

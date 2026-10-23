@@ -75,7 +75,7 @@ struct InputBar: View {
                         .font(.system(size: 20, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                         .frame(width: 42, height: 42)
-                        .liquidGlass(Circle(), elevated: false)
+                        .liquidGlassCompat(Circle(), elevated: false)
                 }
                 .accessibilityLabel("添加附件")
 
@@ -95,6 +95,7 @@ struct InputBar: View {
                         .font(.system(size: 20))
                         .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
                         .frame(width: 42, height: 42)
+                        .liquidGlassCompat(Circle(), elevated: false)
                 }
                 // 录音启动中/流式输出/读文件期间禁用麦克风，防止状态互相踩踏。
                 .disabled(speech.isStarting || viewModel.isStreaming || viewModel.isImporting)
@@ -107,7 +108,7 @@ struct InputBar: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)
                     // 输入框做成独立玻璃胶囊，交互指向更明确
-                    .liquidGlass(RoundedRectangle(cornerRadius: 22, style: .continuous), elevated: false)
+                    .liquidGlassCompat(RoundedRectangle(cornerRadius: 22, style: .continuous), elevated: false)
 
                 // 流式输出期间发送按钮变为"停止输出"，避免误发新消息。
                 if viewModel.isStreaming {

@@ -83,6 +83,8 @@ enum BackupService {
     struct Manifest: Codable, Sendable {
         var version: Int = 1
         var exportedAt: Date = Date()
+        /// 10-23 P2：记录备份来源账号，导入时明确归属，避免 UUID 碰撞导致"跳过同 ID"或混合数据
+        var sourceOwnerKey: String? = nil
         var conversations: [ConversationDTO] = []
         var memories: [MemoryDTO] = []
         var files: [FileDTO] = []
@@ -98,6 +100,7 @@ enum BackupService {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
             exportedAt = try c.decodeIfPresent(Date.self, forKey: .exportedAt) ?? Date()
+            sourceOwnerKey = try? c.decodeIfPresent(String.self, forKey: .sourceOwnerKey)
             conversations = try c.decodeIfPresent([ConversationDTO].self, forKey: .conversations) ?? []
             memories = try c.decodeIfPresent([MemoryDTO].self, forKey: .memories) ?? []
             files = try c.decodeIfPresent([FileDTO].self, forKey: .files) ?? []
@@ -120,6 +123,8 @@ enum BackupService {
         var createdAt: Date
         /// 最后更新时间
         var updatedAt: Date
+        /// 10-23 P2：同步墓碑状态必须随备份带走，否则已删除会话会被备份"复活"
+        var isDeleted: Bool = false
         /// 会话内的全部消息（已按时间排序）
         var messages: [MessageDTO]
     }
@@ -254,12 +259,20 @@ enum BackupService {
     static func export(password: String, context: ModelContext) async throws -> URL {
         guard !password.isEmpty else { throw BackupError.emptyPassword }
 
-        let conversations = (try context.fetch(FetchDescriptor<Conversation>()))
+        // 10-23 P2：导出必须按当前账号 ownerKey 过滤，防止 A 账号数据被 B 账号备份带走
+        let ownerKey = HostedAccount.scopeKey
+        let conversations = (try context.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.ownerKey == ownerKey }
+        )))
             // 按时间排序保证备份内容顺序稳定、可复现
             .sorted { $0.createdAt < $1.createdAt }
-        let storedFiles = (try context.fetch(FetchDescriptor<StoredFile>()))
+        let storedFiles = (try context.fetch(FetchDescriptor<StoredFile>(
+            predicate: #Predicate { $0.ownerKey == ownerKey }
+        )))
             .sorted { $0.createdAt < $1.createdAt }
-        let memories = (try context.fetch(FetchDescriptor<MemoryItem>()))
+        let memories = (try context.fetch(FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == ownerKey }
+        )))
             .sorted { $0.createdAt < $1.createdAt }
 
         // 空库防呆：没有数据就导出会生成一个"空备份"，误导用户以为已备份成功
@@ -270,12 +283,14 @@ enum BackupService {
         // SwiftData对象快照仍在主线程；大库和图片读取的耗时必须实测。
         var manifest = Manifest()
         manifest.exportedAt = Date()
+        manifest.sourceOwnerKey = ownerKey
         var blobs: [(String, Data)] = []
         var diskFiles: [(String, URL)] = []
 
         for conv in conversations {
             var dto = ConversationDTO(id: conv.id, expertId: conv.expertId, title: conv.title,
-                                      createdAt: conv.createdAt, updatedAt: conv.updatedAt, messages: [])
+                                      createdAt: conv.createdAt, updatedAt: conv.updatedAt,
+                                      isDeleted: conv.isDeleted, messages: [])
             for msg in conv.messages.sorted(by: { $0.createdAt < $1.createdAt }) {
                 var entry: String?
                 if let image = msg.imageData {
@@ -432,6 +447,12 @@ enum BackupService {
         let names = reader.entryNames()
 
         guard manifest.version == 1 else { throw BackupError.corruptArchive("不支持的备份版本") }
+        // 10-22 P2 安全：压缩炸弹防护。加密包本身 ≤128MB，但解压后可能远超内存。
+        // 先按 manifest 声明的 byteCount 求和设总上限，再进入逐条预检。
+        let declaredTotal = manifest.files.reduce(0) { $0 + max(0, $1.byteCount) }
+        guard declaredTotal <= 512 * 1024 * 1024 else {
+            throw BackupError.corruptArchive("备份内容解压后过大（超过 512MB），已拒绝导入")
+        }
         // Preflight every referenced blob before touching the live database.
         // 先做两阶段预检：把所有二进制完整读入内存暂存并逐项校验（ID 去重、角色合法、
         // 大小一致、图片齐全），全部通过才碰线上数据库——避免导入到一半发现坏数据留下脏库。
@@ -457,34 +478,60 @@ enum BackupService {
             }
         }
         let transactionContext = ModelContext(context.container)
-        let existing = try transactionContext.fetch(FetchDescriptor<Conversation>())
-        let existingFiles = Set((try transactionContext.fetch(FetchDescriptor<StoredFile>())).map(\.id))
-        var existingMemoryTexts = Set((try transactionContext.fetch(FetchDescriptor<MemoryItem>())).map(\.content))
+        let targetOwnerKey = HostedAccount.scopeKey
+        // 10-23 P2：导入源账号若与当前账号相同，则按 ID 去重；跨账号导入必须生成新 ID，避免 UUID 冲突/混合
+        let sourceOwnerKey = manifest.sourceOwnerKey ?? ""
+        // 旧备份没有 sourceOwnerKey：默认按同账号恢复（兼容历史备份）；明确记录过且不同才走跨账号
+        let sameAccountRestore = sourceOwnerKey.isEmpty || sourceOwnerKey == targetOwnerKey
+        let existing = try transactionContext.fetch(FetchDescriptor<Conversation>(
+            predicate: #Predicate { $0.ownerKey == targetOwnerKey }
+        ))
+        let existingFiles = Set((try transactionContext.fetch(FetchDescriptor<StoredFile>(
+            predicate: #Predicate { $0.ownerKey == targetOwnerKey }
+        ))).map(\.id))
+        var existingMemoryTexts = Set((try transactionContext.fetch(FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == targetOwnerKey }
+        ))).map(\.content))
         var conversationsByID = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
         var knownMessageIDs = Set(existing.flatMap { $0.messages }.map(\.id))
         var summary = ImportSummary(); summary.exportedAt = manifest.exportedAt
         var createdPaths: [URL] = []
+        // 跨账号导入时的 ID 重映射：原 UUID -> 新 UUID
+        var conversationIDMap: [UUID: UUID] = [:]
+        var fileIDMap: [UUID: UUID] = [:]
         do {
             for dto in manifest.conversations {
+                let convID = sameAccountRestore ? dto.id : (conversationIDMap[dto.id] ?? UUID())
+                if !sameAccountRestore { conversationIDMap[dto.id] = convID }
                 let conv: Conversation
-                if let current = conversationsByID[dto.id] { conv = current; summary.skippedExisting += 1 }
-                else {
+                if sameAccountRestore, let current = conversationsByID[dto.id] {
+                    conv = current; summary.skippedExisting += 1
+                } else {
                     conv = Conversation(expertId: dto.expertId, title: dto.title)
-                    conv.id = dto.id; conv.createdAt = dto.createdAt; conv.updatedAt = dto.updatedAt
-                    transactionContext.insert(conv); conversationsByID[dto.id] = conv; summary.conversations += 1
+                    conv.id = convID; conv.createdAt = dto.createdAt; conv.updatedAt = dto.updatedAt
+                    conv.ownerKey = targetOwnerKey
+                    // 10-23 P2：备份里的删除状态必须保留，不能"复活"已删除会话
+                    conv.isDeleted = dto.isDeleted
+                    transactionContext.insert(conv); conversationsByID[convID] = conv; summary.conversations += 1
                 }
-                for m in dto.messages where knownMessageIDs.insert(m.id).inserted {
+                for m in dto.messages {
+                    let msgID = sameAccountRestore ? m.id : UUID()
+                    guard sameAccountRestore ? knownMessageIDs.insert(msgID).inserted : true else { continue }
                     let message = Message(role: m.role, text: m.text)
                     message.sourcesJSON = m.sourcesJSON ?? ""
-                    message.id = m.id; message.createdAt = m.createdAt; message.attachmentIds = m.attachmentIds
+                    message.id = msgID; message.createdAt = m.createdAt; message.attachmentIds = m.attachmentIds
                     if let entry = m.imageEntry { message.imageData = stagedImages[entry] }
-                    message.conversation = conv; transactionContext.insert(message); summary.messages += 1
+                    message.conversation = conv
+                    message.conversationID = conv.id   // 10-22：缺这一行会导致恢复后重进会话看不到消息
+                    transactionContext.insert(message); summary.messages += 1
                     conv.updatedAt = max(conv.updatedAt, m.createdAt)
                 }
             }
             FileStore.prepare()
             for dto in manifest.files {
-                if existingFiles.contains(dto.id) { summary.skippedExisting += 1; continue }
+                let fileID = sameAccountRestore ? dto.id : (fileIDMap[dto.id] ?? UUID())
+                if !sameAccountRestore { fileIDMap[dto.id] = fileID }
+                if sameAccountRestore && existingFiles.contains(dto.id) { summary.skippedExisting += 1; continue }
                 // New local name avoids collisions with a different existing record.
                 let localName = UUID().uuidString + "." + (dto.ext.filter { $0.isLetter || $0.isNumber }.isEmpty ? "dat" : dto.ext.filter { $0.isLetter || $0.isNumber })
                 let destination = FileStore.rootURL.appendingPathComponent(localName)
@@ -493,13 +540,21 @@ enum BackupService {
                 let record = StoredFile(name: dto.name, ext: dto.ext, storedName: localName,
                                         kind: FileKind(rawValue: dto.kindRaw) ?? .uploaded,
                                         category: FileCategory(rawValue: dto.categoryRaw) ?? .other,
-                                        byteCount: bytes.count, sourceConversationId: dto.sourceConversationId, textContent: dto.textContent)
-                record.id = dto.id; record.createdAt = dto.createdAt; record.isFavorite = dto.isFavorite
+                                        byteCount: bytes.count,
+                                        sourceConversationId: sameAccountRestore
+                                            ? dto.sourceConversationId
+                                            : (UUID(uuidString: dto.sourceConversationId).flatMap { conversationIDMap[$0]?.uuidString } ?? ""),
+                                        textContent: dto.textContent)
+                record.id = fileID; record.createdAt = dto.createdAt; record.isFavorite = dto.isFavorite
+                record.ownerKey = targetOwnerKey
                 transactionContext.insert(record); summary.files += 1
             }
-            for dto in manifest.memories where existingMemoryTexts.insert(dto.content).inserted {
+            for dto in manifest.memories {
+                let memoryID = sameAccountRestore ? dto.id : UUID()
+                guard sameAccountRestore ? existingMemoryTexts.insert(dto.content).inserted : true else { continue }
                 let item = MemoryItem(content: dto.content, source: dto.source ?? "")
-                item.id = dto.id; item.createdAt = dto.createdAt; item.hitCount = dto.hitCount
+                item.id = memoryID; item.createdAt = dto.createdAt; item.hitCount = dto.hitCount
+                item.ownerKey = targetOwnerKey
                 transactionContext.insert(item); summary.memories += 1
             }
             try transactionContext.save()

@@ -38,8 +38,15 @@ struct MessageRow: View {
     var isLastAssistant: Bool = false
     /// 「重新生成」回调；为 nil 时不显示按钮
     var onRegenerate: (() -> Void)? = nil
+    /// P0-68 深度思考中（最高档推理模型首字延迟 ~11s）：流式且无正文时显示"深度思考中…"
+    var isReasoning: Bool = false
 
     /// 按角色分流：user 右对齐气泡；AI 左侧头像 + 平铺内容
+    /// 该消息是否"以文字开头"——决定头像是否需要光学微调
+    private var startsWithText: Bool {
+        message.thumbnailData == nil && message.imageData == nil && files.isEmpty
+    }
+
     var body: some View {
         Group {
             if message.role == "user" {
@@ -66,11 +73,14 @@ struct MessageRow: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
             } else {
-                HStack(alignment: .top, spacing: 10) {
+                // 10-23 视觉稳定性：间距统一为 12；以文字开头的消息，头像上移 2pt 做光学对齐
+                // （对齐圆形视觉中心与首行文字重心，而不是两个视图的布局边界）
+                HStack(alignment: .top, spacing: 12) {
                     AssistantAvatar()
+                        .offset(y: startsWithText ? -2 : 0)
                     VStack(alignment: .leading, spacing: 8) {
-                        if let data = message.imageData {
-                            MessageImageView(data: data).equatable()
+                        if let data = message.thumbnailData ?? message.imageData {   // P0-69 缩略图优先（点开预览用原图）
+                            MessageImageView(data: data, onRegenerate: onRegenerate).equatable()
                         }
                         ForEach(files, id: \.id) { file in
                             FileCardView(file: file) { onPreview(file) }
@@ -83,8 +93,12 @@ struct MessageRow: View {
                                                 isLastAssistant: isLastAssistant,
                                                 onRegenerate: onRegenerate).equatable()
                         } else if message.imageData == nil && files.isEmpty {
-                            // 既无文本也无图片/文件：流式刚开始，显示光标占位
-                            BlinkingCursor()
+                            // 既无文本也无图片/文件：流式刚开始——P0-68 推理中显示"深度思考中…"（消除空等感）
+                            if streamingText != nil && isReasoning {
+                                ReasoningIndicator()
+                            } else {
+                                BlinkingCursor()
+                            }
                         }
                     }
                 }
@@ -97,18 +111,39 @@ struct MessageRow: View {
     }
 }
 
-/// ChatGPT 式 AI 头像：渐变发光圆徽
+/// P0-68 深度思考指示（推理模型首字延迟期间显示）：脉动光点 + 文案
+struct ReasoningIndicator: View {
+    @State private var phase = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .opacity(phase ? 1.0 : 0.35)
+            Text("深度思考中…")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .opacity(phase ? 1.0 : 0.55)
+        }
+        .padding(.vertical, 6)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { phase = true }
+        }
+        .accessibilityLabel("深度思考中")
+    }
+}
+
+/// ChatGPT 式 AI 头像：10-23 升级为玻璃徽章。
+/// iOS 26+ 使用原生 Liquid Glass；低版本保持半透明主题色底 + 细高光边。
 private struct AssistantAvatar: View {
     @Environment(\.appTheme) private var theme
     var body: some View {
         Image(systemName: "sparkles")
             .font(.system(size: 13, weight: .semibold))
-            // 亮色渐变上用深墨图标（白图标压亮青只有 1.8:1，会糊）
-            .foregroundStyle(GlassDesign.inkGlyph)
+            .foregroundStyle(theme.accent)
             .frame(width: 28, height: 28)
-            .background(Circle().fill(theme.accentGradient))
-            .overlay { Circle().strokeBorder(GlassDesign.strokeHighlight, lineWidth: 1) }
-            .shadow(color: theme.glow, radius: 7, x: 0, y: 0)
+            .background(Circle().fill(theme.accent.opacity(0.18)))
+            .liquidGlassCompat(Circle(), elevated: true)
             .accessibilityHidden(true)
     }
 }
@@ -301,6 +336,9 @@ private struct CitationSourceRow: View {
 private struct MessageImageView: View, Equatable {
     /// 图片原始数据
     let data: Data
+    /// 10-22：外部的「换一版」动作。此前直接引用父视图的 onRegenerate，
+    /// 但本结构是独立 View，作用域里找不到 → 编译失败。现在显式传参。
+    var onRegenerate: (() -> Void)? = nil
     /// 后台解码出的缩略图
     @State private var thumbnail: UIImage?
     /// 缩略图解码中
@@ -318,6 +356,11 @@ private struct MessageImageView: View, Equatable {
                     .contextMenu {
                         Button("保存到相册", systemImage: "square.and.arrow.down") {
                             if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
+                        }
+                        if onRegenerate != nil {
+                            Button(action: { onRegenerate?() }) {
+                                Label("换一版", systemImage: "arrow.clockwise")
+                            }
                         }
                     }
             } else if loading { ProgressView("正在读取图片…").frame(height: 120) }

@@ -32,11 +32,44 @@ enum FileStore {
         return docs.appendingPathComponent("Files", isDirectory: true)
     }
 
-    /// 确保仓库目录存在（不存在则创建）
+    /// 确保仓库目录存在（不存在则创建）；同时恢复任何崩溃残留的删除日志
     static func prepare() {
         let url = rootURL
         if !FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        recoverDeletions()
+    }
+
+    /// 10-23 P2：崩溃残留的删除日志恢复。删除流程为"写日志→移隔离→删库→改日志→删隔离→删日志"，
+    /// 任何中间崩溃都能据此把文件恢复到安全状态，避免"库删了但文件没删"或"库没删但文件丢了"。
+    private static func recoverDeletions() {
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: rootURL.path)) ?? []
+        for name in names where name.hasPrefix("deletion-journal-") && name.hasSuffix(".json") {
+            let journalURL = rootURL.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: journalURL),
+                  let journal = try? JSONDecoder().decode(DeletionJournal.self, from: data) else {
+                try? fm.removeItem(at: journalURL)
+                continue
+            }
+            let original = rootURL.appendingPathComponent(journal.original)
+            let quarantine = rootURL.appendingPathComponent(journal.quarantine)
+            let originalExists = fm.fileExists(atPath: original.path)
+            let quarantineExists = fm.fileExists(atPath: quarantine.path)
+
+            if journal.state == DeletionJournal.committed {
+                // 库已删、隔离文件可安全清理
+                if quarantineExists { try? fm.removeItem(at: quarantine) }
+            } else {
+                // 未确认提交：保守回滚，把隔离文件移回原位（若 save 实际已发生，文件会变成孤儿，cleanupOrphans 会处理）
+                if !originalExists && quarantineExists {
+                    try? fm.moveItem(at: quarantine, to: original)
+                } else if quarantineExists {
+                    try? fm.removeItem(at: quarantine)
+                }
+            }
+            try? fm.removeItem(at: journalURL)
         }
     }
 
@@ -128,24 +161,40 @@ enum FileStore {
         return record
     }
 
-    /// 删除文件：先物理挪到隔离名，数据库保存成功后再真删。
-    /// 失败行为：入库失败时回滚并把隔离文件移回原位，文件绝不丢失
+    /// 删除文件：先写崩溃恢复日志，再物理挪到隔离名；数据库保存成功后再清日志与隔离文件。
+    /// 10-23 P2：失败行为改为"手动恢复文件 + 清理日志"，避免对共享 ModelContext 调用宽泛 rollback()
+    ///（rollback 会丢弃调用方在同一上下文上的所有未保存修改）。
     static func delete(_ file: StoredFile, context: ModelContext) throws {
         let path = url(for: file)
+        let fileName = path.lastPathComponent
         // 隔离名：删除期间文件改姓改名，等库保存成功才真正移除
-        let quarantine = rootURL.appendingPathComponent("delete-" + UUID().uuidString)
+        let quarantineName = "delete-" + UUID().uuidString
+        let quarantine = rootURL.appendingPathComponent(quarantineName)
+        let journalURL = rootURL.appendingPathComponent("deletion-journal-\(file.id.uuidString).json")
         let exists = FileManager.default.fileExists(atPath: path.path)
+
+        // 1) 写日志：记录原文件名与隔离文件名，状态为 pending
+        var journal = DeletionJournal(original: fileName, quarantine: quarantineName, state: DeletionJournal.pending)
+        try? JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
+
+        // 2) 移入隔离
         if exists { try FileManager.default.moveItem(at: path, to: quarantine) }
+
+        // 3) 删除数据库记录并保存
         context.delete(file)
         do { try context.save() }
         catch {
-            // 回滚并撤销隔离：把文件移回原名，删除动作完全抵消
-            context.rollback()
+            // 保存失败：撤销隔离（文件移回原位），清理日志，但不 rollback 整个上下文
             if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
+            try? FileManager.default.removeItem(at: journalURL)
             throw error
         }
-        // 走到这里说明库已保存成功，隔离文件可以安全真删
+
+        // 4) 保存成功：标记 committed，然后清理隔离文件与日志
+        journal.state = DeletionJournal.committed
+        try? JSONEncoder().encode(journal).write(to: journalURL, options: .atomic)
         if exists { try? FileManager.default.removeItem(at: quarantine) }
+        try? FileManager.default.removeItem(at: journalURL)
         NotificationCenter.default.post(name: .bossAIFilesChanged, object: nil)
     }
 
@@ -178,6 +227,15 @@ extension StoredFile {
 
 /// 文件变化通知名：文件新增/删除后广播，UI 据此刷新
 extension Notification.Name { static let bossAIFilesChanged = Notification.Name("bossai.files.changed") }
+
+/// 10-23 P2 删除崩溃恢复日志：记录一次删除操作的原文件、隔离文件与提交状态。
+private struct DeletionJournal: Codable {
+    static let pending = "pending"
+    static let committed = "committed"
+    let original: String
+    let quarantine: String
+    var state: String
+}
 
 /// 串行文件 IO 执行者：把磁盘读写从 MainActor 挪走，保证不卡界面
 private actor FileIOWorker {

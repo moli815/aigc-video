@@ -98,12 +98,43 @@ enum WebSearchService {
     ///   - count: 期望结果数（上限 12，超出会被钳制）
     ///   - recency: 时效窗口；非 any 时会触发新鲜度降权
     /// - Returns: 排序去重后的结果列表（可能少于 count，全部失败时为空数组）
+    /// 端到端总时限：快通道（服务端搜索）通常 <1s；慢通道（本地多引擎 + 回退）可能叠加到 20s+。
+    /// 统一封顶后超时返回空结果（由调用方决定降级文案），并 cancelAll 向子任务传播取消。
+    private static func withSearchDeadline(seconds: Double, _ work: @escaping @Sendable () async -> [SearchHit]) async -> [SearchHit] {
+        await withTaskGroup(of: [SearchHit]?.self) { group in
+            group.addTask { await work() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? []
+        }
+    }
+
     static func search(query: String, count: Int = 8, recency: SearchRecency = .any) async -> [SearchHit] {
         let bounded = min(12, max(0, count))
         guard bounded > 0 else { return [] }
+        return await withSearchDeadline(seconds: 20) { await searchCore(query: query, bounded: bounded, recency: recency) }
+    }
+
+    private static func searchCore(query: String, bounded: Int, recency: SearchRecency) async -> [SearchHit] {
+        // P0-68 优先服务端 DeepSeek 官方搜索（结构化结果：权威性/日期/长摘要，实测 0.5s 级、质量稳定）；
+        // 未配置/失败/无结果时降级本地多引擎（原链路完整保留作为兜底）——搜索从此有双通道。
+        // 宿主注入（hostedSearchProvider）：App 层提供实现；测试 target 无此依赖（nil 时纯本地）。
+        if let provider = hostedSearchProvider,
+           let serverHits = await provider(recency.query(query), bounded), !serverHits.isEmpty {
+            return rankRelevant(query: query, hits: serverHits, count: bounded, recency: recency)
+        }
         let raw = await searchUnranked(query: recency.query(query), count: bounded, recency: recency)
         return rankRelevant(query: query, hits: raw, count: bounded, recency: recency)
     }
+
+    /// P0-68 宿主注入：服务端官方搜索实现（App 层注入——避免本文件依赖 App 层类型，
+    /// 因本文件同时被测试 target 编译）。nil 时搜索纯走本地多引擎。
+    /// 签名：(query, count) -> 结构化结果（title/url/摘要/日期）
+    nonisolated(unsafe) static var hostedSearchProvider: (@Sendable (String, Int) async -> [SearchHit]?)?
 
     /// Search engines may return unrelated pages. Never send zero-match candidates to the model.
     /// - recency：时效查询会做新鲜度降权——无日期或日期超出窗口的结果排到最后。

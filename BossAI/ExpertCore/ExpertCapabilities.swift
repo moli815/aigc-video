@@ -112,14 +112,41 @@ struct SkillValidation: Codable {
 
 /// 技能运行时：工具许可裁决与 expert_skill 工具的实际执行。
 enum ExpertSkillRuntime {
-    /// 工具许可白名单：基础技能人人可用；搜索/作图/出文档看专家档案开关，默认拒绝。
-    static func permits(_ name: String, profile: ExpertCapability) -> Bool {
+    /// 工具许可白名单：基础技能人人可用；搜索/作图/出文档看**有效工具列表**，默认拒绝。
+    ///
+    /// 10-23 关键修复（用户实测"模型调 image_generate 被拒"的根因）：
+    /// ① 此前只认旧名 `generate_image`，拆分后的 `image_generate` / `image_edit` /
+    ///    `image_decompose` / `image_series` 全部落到 `default: return false`，
+    ///    模型一调用就被拒，回给模型的文案是「当前专家禁止该工具」——再被转述成"权限限制"。
+    /// ② 权限来源与 `ChatService.resolveToolPermissions` 不一致：那边云端 `expertTools` 优先，
+    ///    这里却只用本地档案，于是"云端开了生图、本地档案没开"时运行时仍拒绝。
+    /// 现在两处统一：`expertTools`（云端下发）优先，本地 `profile` 只做兜底。
+    /// - disabledTools：云端显式关闭的工具 ID 集合。**隐藏 ≠ 禁止执行**——
+    ///   工具从 tools[] 移除只是让模型看不见；若模型残留/伪造调用，执行器必须在这里拒绝。
+    static func permits(_ name: String, profile: ExpertCapability,
+                        allowedTools: [String]? = nil,
+                        disabledTools: Set<String> = []) -> Bool {
+        if disabledTools.contains(name) { return false }
+
+        // 注意：本文件属于 BossAIExpertCore（SPM target），看不到 App 层的 ExpertTool 枚举，
+        // 因此这里用工具名字符串（与 ChatService 传给 tools[] 的 name 同源）。
+        let canSearch = allowedTools.map { $0.contains("search") } ?? profile.allowSearch
+        let canImage = allowedTools.map { $0.contains("image") } ?? profile.allowImages
+
         switch name {
-        case "expert_skill", "search_library", "render_chart": return true
-        case "web_search", "$web_search": return profile.allowSearch
-        case "generate_image": return profile.allowImages
-        case "create_document": return !profile.documentFormats.isEmpty
-        default: return false
+        case "expert_skill", "search_library", "render_chart":
+            return true
+        case "web_search", "$web_search":
+            return canSearch
+        case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":
+            return canImage
+        case "create_document":
+            if let at = allowedTools {
+                return !at.filter { ["word", "ppt", "excel", "pdf"].contains($0) }.isEmpty
+            }
+            return !profile.documentFormats.isEmpty
+        default:
+            return false
         }
     }
 

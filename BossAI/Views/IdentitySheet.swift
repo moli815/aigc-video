@@ -27,6 +27,10 @@ struct IdentitySheet: View {
     @Environment(\.modelContext) private var modelContext
     // 按创建时间倒序查询长期记忆，最新的显示在最上面。
     @Query(sort: \MemoryItem.createdAt, order: .reverse) private var memories: [MemoryItem]
+    /// 10-22 P1 隔离修复：@Query 拿的是全量（跨账号），展示与清空都必须限定当前账号
+    private var scopedMemories: [MemoryItem] {
+        memories.filter { $0.ownerKey == HostedAccount.scopeKey }
+    }
 
     // 初始化身份：优先本机已存身份；称呼为空时回退到云端账号昵称（P0-19），
     // 让新用户第一次打开就有像样的默认称呼。
@@ -264,15 +268,15 @@ struct IdentitySheet: View {
                             .padding(.vertical, 2)
                         }
                     }
-                    card("长期记忆（\(memories.count) 条）", symbol: "brain", tint: .purple) {
-                        if memories.isEmpty {
+                    card("长期记忆（\(scopedMemories.count) 条）", symbol: "brain", tint: .purple) {
+                        if scopedMemories.isEmpty {
                             Text("暂无记忆。随着对话进行，中防AI会自动记住你的公司、项目和偏好。")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
                             // 记忆条目：内容 + 来源标注；来源缺失时提示"需核对"，
                             // 与产品"可溯源"原则一致。行内删除按钮即时生效并落盘。
                             VStack(spacing: 8) {
-                                ForEach(memories, id: \.id) { item in
+                                ForEach(scopedMemories, id: \.id) { item in
                                     HStack(alignment: .top, spacing: 8) {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(item.content).font(.footnote)
@@ -394,7 +398,7 @@ struct IdentitySheet: View {
             // 防止一键误删长期记忆。
             .confirmationDialog("确定清空全部长期记忆？", isPresented: $showClearConfirm, titleVisibility: .visible) {
                 Button("清空", role: .destructive) {
-                    for m in memories { modelContext.delete(m) }
+                    for m in scopedMemories { modelContext.delete(m) }
                     try? modelContext.save()
                 }
                 Button("取消", role: .cancel) {}

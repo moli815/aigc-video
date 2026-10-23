@@ -121,13 +121,17 @@ final class ChatService {
                 var receivedFirstDelta = false
                 do {
                     guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ChatError.missingKey }
-                    var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
+                    guard let url = URL(string: "\(profile.baseURL)/chat/completions") else {
+                        throw ChatError.incomplete("服务地址无效")
+                    }
+                    var request = URLRequest(url: url)
                     request.httpMethod = "POST"
                     request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     // 声明接受事件流：让服务端明确走 SSE，而不是一次性返回 JSON
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    request.timeoutInterval = 120
+                    // P0-64 超时云端可调（在线可修复）：管理台改 APP_CHAT_TIMEOUT 即生效
+                    request.timeoutInterval = HostedAccount.isHostedActive ? HostedAccount.cachedChatTimeout : 120
 
                     var body: [String: Any] = [
                         "model": profile.model,
@@ -385,12 +389,13 @@ final class ChatService {
 
     /// P0-40 工具挂载以「专家的实际工具列表」为准（云端下发），本地能力档案只作兜底——
     /// 此前用本地 ExpertSkills.json 的 allowImages 判定，导致"云端已开放生图、App 仍不挂工具、模型如实拒绝"的不一致。
+    /// 10-23：统一使用 EffectiveToolPolicy 作为单一事实源，避免注册表、能力清单、执行器权限不一致。
     private func applyTools(to body: inout [String: Any], expertID: String, allowSearch: Bool = true, useNativeSearch: Bool, expertTools: [ExpertTool]? = nil) throws {
         let capability = try ExpertCapabilityCatalog.profile(expertID)
-        let perms = try Self.resolveToolPermissions(expertID: expertID, expertTools: expertTools)
-        let canSearch = perms.canSearch
-        let canImage = perms.canImage
-        let nativeSearch = canSearch && allowSearch && useNativeSearch
+        let policy = try EffectiveToolPolicy.forExpertID(expertID, expertTools: expertTools)
+        let canSearch = policy.canSearch && allowSearch
+        let canImage = policy.canImage
+        let nativeSearch = canSearch && useNativeSearch
         if nativeSearch {
             switch profile.searchStyle {
             case .kimiBuiltin:
@@ -406,24 +411,49 @@ final class ChatService {
             }
         }
 
+        // P0-59 可用性预过滤（对照 Hermes check_fn 语义）：不可用的能力不进 tools[]——
+        // 模型看不到就不会误调用/不会谎报能做到（"调用顺畅且不易出错"的第一道防线）
+        // 10-23：policy.availableToolIDs 已经统一应用「本地可用性 + 云端开关」
         var tools = (body["tools"] as? [[String: Any]]) ?? []
-        if canSearch && allowSearch && !nativeSearch { tools.append(["type": "function", "function": Self.webSearchFunction]) }
-        if canImage { tools.append(["type": "function", "function": Self.generateImageFunction]) }
-        tools.append(["type": "function", "function": Self.renderChartFunction])
-        // 文档导出工具：可导出格式由权限解析统一给出（云端工具优先，本地档案兜底）
-        if !perms.docFormats.isEmpty {
+        if canSearch && !nativeSearch && policy.availableToolIDs.contains("web_search") { tools.append(["type": "function", "function": Self.webSearchFunction]) }
+        // 10-19 拆 4 工具（仿 Harness 插件契约）：只注册职责隔离的 4 个新工具；
+        // 旧 generate_image 不再注册（执行分支仍兼容旧名，防旧模型残留调用）
+        if canImage {
+            // 10-22 修复：逐个按插件 ID 过滤。此前只检查旧 ID "generate_image" 就整批注册，
+            // 导致 availability=false 的 image_decompose / image_series 仍出现在 tools[] 里——
+            // 模型看得见就会尝试调用，执行器再拒绝，白白消耗一轮。
+            for plugin in Self.imageToolPlugins where policy.availableToolIDs.contains(plugin.name) {
+                tools.append(["type": "function", "function": plugin.definition])
+            }
+        }
+        if policy.availableToolIDs.contains("render_chart") { tools.append(["type": "function", "function": Self.renderChartFunction]) }
+        // 文档导出工具：可导出格式由 EffectiveToolPolicy 统一给出（云端工具优先，本地档案兜底）
+        if !policy.docFormats.isEmpty && policy.availableToolIDs.contains("create_document") {
             var document = Self.createDocumentFunction
             var parameters = document["parameters"] as? [String: Any] ?? [:]
             var properties = parameters["properties"] as? [String: Any] ?? [:]
-            properties["format"] = ["type": "string", "enum": perms.docFormats]
+            properties["format"] = ["type": "string", "enum": policy.docFormats]
             parameters["properties"] = properties
             document["parameters"] = parameters
             tools.append(["type": "function", "function": document])
         }
-        tools.append(["type": "function", "function": Self.expertSkillFunction(capability)])
-        tools.append(["type": "function", "function": ["name": "search_library",
-            "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
-            "parameters": ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]]]])
+        if policy.availableToolIDs.contains("expert_skill") { tools.append(["type": "function", "function": Self.expertSkillFunction(capability)]) }
+        if policy.availableToolIDs.contains("search_library") {
+            tools.append([
+                "type": "function",
+                "function": [
+                    "name": "search_library",
+                    "description": "在用户上传的本机专业资料中检索证据。企业制度、合同、财务资料优先使用该工具；只检索近200份前20000字符，未命中须说明。",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "query": ["type": "string"]
+                        ],
+                        "required": ["query"]
+                    ]
+                ]
+            ])
+        }
         body["tools"] = tools
     }
 
@@ -498,18 +528,106 @@ final class ChatService {
                 ],
                 "edit_last_image": [
                     "type": "boolean",
-                    "description": "是否基于对话中最近一张生成的图片进行编辑修改",
+                    "description": "是否以对话中最近一张生成的图片为底图（如「把这张海报改一改」）。若同时要把用户上传的图（Logo/素材）叠加到底图上，edit_last_image 与 use_attached_image 同时设为 true",
+                ],
+                "use_attached_image": [
+                    "type": "boolean",
+                    "description": "是否使用用户本轮上传的图片：①单独 true = 编辑上传的图；②与 edit_last_image 同时 true = 双图融合（把上传的 Logo/素材叠加到最近生成的图上，提示词里说明叠加位置），如「把 Logo 加到刚才的海报上」「在图片二上面加我们的 logo」等场景",
                 ],
             ],
             "required": ["prompt"],
         ]
         let functionDefinition: [String: Any] = [
             "name": "generate_image",
-            "description": "生成或编辑图片。当用户要求画图、生成海报/配图/示意图，或要求修改对话中已有的图片时调用。注意：数据统计图/图表禁止使用本工具，请改用 Markdown 数据表呈现。返回后图片会自动展示给用户，你只需补充简短说明。",
+            "description": "生成或编辑图片（兼容旧名；新代码请用 image_generate / image_edit）。",
             "parameters": generateImageParameters,
         ]
         return functionDefinition
     }()
+
+    // ── 10-19 拆 4 工具（仿 Harness"工具即契约"）：职责隔离，消除"忘带图→退化成文生图" ──
+
+    /// ① 纯文生图：**不存在**任何图片入参（模型想"编辑"只能换工具）
+    /// 10-21 新增 structured：把需求拆成 7 个视觉字段，服务端按模板拼装成专业 prompt（信息更可控、文字更准）
+    static let imageGenerateFunction: [String: Any] = [
+        "name": "image_generate",
+        "description": "纯文生图：根据文字描述从零生成一张新图片（海报、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。数据统计图请改用 Markdown 数据表。**优先用 structured 传结构化字段**（信息更可控、画面文字更准确）；只有确实无法拆分时才用 prompt。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "（可选，structured 的兜底）详细的图像描述（中文）：主体、场景、构图、光影、材质、文字"],
+                "structured": [
+                    "type": "object",
+                    "description": "结构化视觉字段（推荐）：每字段用完整短句描述，每段独立成句。内容必须来自用户需求，禁止套用示例的具体主体/场景，禁止编造用户未给的店名/地址/电话/价格。",
+                    "properties": [
+                        "subject": ["type": "string", "description": "主体：是什么、什么状态、在做什么"],
+                        "setting": ["type": "string", "description": "场景/环境：地点、前后景、环境元素"],
+                        "composition": ["type": "string", "description": "镜头/构图：视角（俯/平/仰）、焦段、主体位置、留白区域"],
+                        "lighting": ["type": "string", "description": "光影：光源方向、色温、明暗关系、阴影特征"],
+                        "material": ["type": "string", "description": "材质/画质：纹理细节、摄影或插画风格"],
+                        "text": ["type": "string", "description": "画面文字：要渲染的精确文案 + 位置（用户没给就不填）"],
+                        "negative": ["type": "string", "description": "排除项：不要出现的内容，以「禁止」开头"],
+                    ],
+                    "required": ["subject", "setting", "composition", "lighting", "material"],
+                ],
+            ],
+            "required": [],
+        ],
+    ]
+
+    /// ② 图生图编辑：source 必须明确指定底图（enum 强制，不再靠两个 boolean 猜）
+    static let imageEditFunction: [String: Any] = [
+        "name": "image_edit",
+        "description": "编辑已有图片（改风格/加元素/去元素/换背景）。**source 必填**：last=最近生成的图、attached=用户本轮上传的图、both=双图融合（底图+上传素材）。用户说「这张图/这张照片」且刚上传过图 → attached；说「刚才那张/你生成的」→ last；要把 Logo/人物加到生成图上 → both。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "编辑指令：具体改什么、在哪里、保持什么不变（会由服务端叠加一致性/阴影/保持/排除约束）"],
+                "source": [
+                    "type": "string",
+                    "enum": ["last", "attached", "both"],
+                    "description": "底图来源：last=最近生成 | attached=用户上传 | both=双图融合（第一张为底图，第二张为叠加素材）",
+                ],
+            ],
+            "required": ["prompt", "source"],
+        ],
+    ]
+
+    /// ③ 图层拆分：把图片拆成底图 + 可独立编辑的图层（Seedream Pro/Flash 能力）
+    static let imageDecomposeFunction: [String: Any] = [
+        "name": "image_decompose",
+        "description": "图层拆分：把一张图拆成 1 张底图 + 若干独立图层（便于后续单独替换/移动元素）。用户说「拆图层/分层/把元素分开」时使用。仅支持已有图片（最近生成的图或用户上传的图）。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "说明要拆哪些元素（可选；不填则整体拆分）"],
+                "source": ["type": "string", "enum": ["last", "attached"], "description": "拆分哪张图：last=最近生成 | attached=用户上传"],
+            ],
+            "required": ["source"],
+        ],
+    ]
+
+    /// ④ 组图（多张关联图）：仅 Seedream 5.0 Lite 支持（Pro 传参直接 400）
+    static let imageSeriesFunction: [String: Any] = [
+        "name": "image_series",
+        "description": "组图生成：一次生成多张内容关联的图片（漫画分镜、品牌视觉系列）。用户说「生成一组/一套/N张/分镜」时使用。注意：需模型支持组图能力，当前若不可用会返回明确提示。",
+        "parameters": [
+            "type": "object",
+            "properties": [
+                "prompt": ["type": "string", "description": "整组图的统一描述（各图差异点写清楚）"],
+                "count": ["type": "integer", "description": "生成张数（1-4）"],
+            ],
+            "required": ["prompt"],
+        ],
+    ]
+
+    /// 4 工具注册表（仿 Harness 的插件契约表：新增能力只加一项）
+    static let imageToolPlugins: [(name: String, definition: [String: Any])] = [
+        ("image_generate", imageGenerateFunction),
+        ("image_edit", imageEditFunction),
+        ("image_decompose", imageDecomposeFunction),
+        ("image_series", imageSeriesFunction),
+    ]
 
     /// 自定义文档生成工具定义：让 AI 直接产出可下载的 Word/PPT/Excel/PDF
     static let createDocumentFunction: [String: Any] = {

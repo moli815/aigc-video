@@ -87,7 +87,10 @@ enum ProviderCatalog {
         baseURL: AppConfig.hostedAPIBase,
         model: "cloud",
         memoryModel: "cloud",
-        searchStyle: .none)
+        // P0-61 优先用模型自带联网（dashscope enable_search）：DeepSeek（flash/pro）实测支持且有效
+        // （无搜索答不出实时金价、有搜索直接返回 901.07）。原生搜索一轮完成，比本地多引擎更稳更快；
+        // 原生失败时 runLoop 已有自动降级回本地 web_search 工具（nativeEvidenceFallbackUsed 机制）。
+        searchStyle: .dashscopeParam)
 
     static let hostedImage = ImageProfile(
         id: "hosted",
@@ -264,6 +267,58 @@ enum BudgetTracker {
     /// 粗略估算 token 数（中文约 1.5 字符 1 token，够用于额度控制）
     static func estimateTokens(_ text: String) -> Int {
         max(1, Int(ceil(Double(text.count) / 1.5)))
+    }
+
+    /// 10-22 修复：按「消息结构」估算，而不是把整个字典 `String(describing:)` 成字符串。
+    /// 旧实现会把 image_url 里的 base64（一张 1.5MB 图 ≈ 200 万字符）算成约 133 万 token，
+    /// 供应商没返回 usage 时会用这个值记账，导致图片对话额度被严重多扣。
+    /// 现在：正文按 1.5 字符/token；图片按「张数 × 1200 token」保守估算（视觉 token 量级）。
+    static func estimateRequestTokens(_ messages: [[String: Any]]) -> Int {
+        var chars = 0
+        var imageCount = 0
+        for m in messages {
+            if let t = m["content"] as? String {
+                chars += t.count
+            } else if let parts = m["content"] as? [[String: Any]] {
+                for part in parts {
+                    if let t = part["text"] as? String { chars += t.count }
+                    if part["image_url"] != nil { imageCount += 1 }
+                }
+            }
+            if let calls = m["tool_calls"] as? [[String: Any]] {
+                for c in calls {
+                    if let f = c["function"] as? [String: Any], let args = f["arguments"] as? String { chars += args.count }
+                }
+            }
+        }
+        let textTokens = max(1, Int(ceil(Double(chars) / 1.5)))
+        return textTokens + imageCount * BudgetTracker.visualTokensPerImage
+    }
+
+    /// 10-22 精度边界：每张图的视觉 token 是**估算值**，不同模型/尺寸/细节策略差异很大。
+    /// 真实用量以供应商返回的 usage 为准（调用方已有 `requestPromptTokens > 0` 优先逻辑）。
+    /// 这里集中成一个常量，便于按模型调参，也便于日志里区分「文本估算 / 视觉估算 / 真实用量」。
+    static let visualTokensPerImage = 1200
+
+    /// 拆分估算（供诊断/日志使用）：分别给出文本与视觉部分，避免把两者混成一个数字。
+    static func estimateBreakdown(_ messages: [[String: Any]]) -> (text: Int, visual: Int) {
+        var chars = 0
+        var imageCount = 0
+        for m in messages {
+            if let t = m["content"] as? String { chars += t.count }
+            else if let parts = m["content"] as? [[String: Any]] {
+                for part in parts {
+                    if let t = part["text"] as? String { chars += t.count }
+                    if part["image_url"] != nil { imageCount += 1 }
+                }
+            }
+            if let calls = m["tool_calls"] as? [[String: Any]] {
+                for c in calls {
+                    if let f = c["function"] as? [String: Any], let a = f["arguments"] as? String { chars += a.count }
+                }
+            }
+        }
+        return (max(1, Int(ceil(Double(chars) / 1.5))), imageCount * visualTokensPerImage)
     }
 
     /// 各家单价（元 / 百万 token，估算值，仅用于额度控制）

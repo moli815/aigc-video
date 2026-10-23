@@ -27,7 +27,10 @@ final class MemoryService {
     /// 注入用：返回「【关于用户的已知信息】」片段
     func injectionFragment(context: ModelContext) -> String {
         // 只取最近 100 条做对照 + 注入上限裁剪：控制 token 成本与提示词长度
+        // 10-22 P1 隔离修复：记忆注入必须只取当前账号，否则 A 的偏好会被注入 B 的提示词
+        let injectKey = HostedAccount.scopeKey
         var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == injectKey },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         descriptor.fetchLimit = AppConfig.memoryInjectLimit
@@ -41,6 +44,8 @@ final class MemoryService {
     /// 后台抽取：对照现有记忆返回 add/update/skip 操作并落库。
     /// source：本条记忆来自哪段对话（会话标题），落到每条记忆上，供查看与纠错定位。
     func extract(from recentDialogue: String, source: String = "", context: ModelContext) async {
+        // 10-22：记录发起任务时的账号归属，写库前校验
+        let ownerAtStart = HostedAccount.scopeKey
         // P0-46 修复：会员模式（hosted）走服务端抽取——此前本地抽取依赖 apiKey，
         // 而会员模式的 apiKey 为空 → 记忆抽取从未生效（记忆功能在会员模式失效）。
         // 服务端抽取算法可热更（改策略不出包），且各端行为一致。
@@ -52,7 +57,12 @@ final class MemoryService {
 
         // 请求任何模型前先查预算并确认任务未被取消：记忆是增强功能，超支即放弃
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
-        var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
+        let memKey = HostedAccount.scopeKey
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == memKey },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
         descriptor.fetchLimit = 100
         let existing = (try? context.fetch(descriptor)) ?? []
         let existingList = existing.enumerated()
@@ -73,7 +83,8 @@ final class MemoryService {
         \(recentDialogue)
         """
 
-        var request = URLRequest(url: URL(string: "\(profile.baseURL)/chat/completions")!)
+        guard let url = URL(string: "\(profile.baseURL)/chat/completions") else { return }
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -86,8 +97,11 @@ final class MemoryService {
         ModelRequestAdapter.apply(to: &body, profile: profile, purpose: .memory)
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, http.statusCode == 200, data.count <= 1_048_576, !Task.isCancelled,
+        // 10-22 统一走 BoundedHTTPClient：与其它网络请求共享「大小上限 / 超时 / 取消传播」语义，
+        // 避免记忆提取这条链路用 URLSession.shared 无上限下载（此前是下载完才检查 1MB）。
+        let memorySession = BoundedHTTPClient.session(resourceTimeout: 60)
+        guard let (data, http) = try? await BoundedHTTPClient.data(for: request, session: memorySession, limit: 1_048_576),
+              http.statusCode == 200, !Task.isCancelled,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
@@ -113,6 +127,8 @@ final class MemoryService {
             known.insert(text)
             switch action {
             case "add":
+                // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
+                guard HostedAccount.scopeKey == ownerAtStart else { return }
                 context.insert(MemoryItem(content: text, source: source))
             case "update":
                 if let index = op["index"] as? Int, existing.indices.contains(index) {
@@ -120,13 +136,16 @@ final class MemoryService {
                     if !source.isEmpty { existing[index].source = source }
                 } else {
                     // 模型给出的 index 越界（幻觉）：退化为新增，不丢内容
+                    // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
+                    guard HostedAccount.scopeKey == ownerAtStart else { return }
                     context.insert(MemoryItem(content: text, source: source))
                 }
             default:
                 continue
             }
         }
-        try? context.save()
+        // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
+        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
     }
 
     // MARK: - P0-46 会员模式：服务端抽取（Mem0 式合并决策）
@@ -134,8 +153,15 @@ final class MemoryService {
     /// 调用服务端 /memories/extract 产出合并决策，并本地执行 ADD/UPDATE/DELETE 落库。
     /// 防呆：决策越界（update/delete 的 index 无效）退化为 add；失败静默（抽取是增强，不阻塞对话）。
     private func extractViaHosted(from recentDialogue: String, source: String, context: ModelContext) async {
+        // 10-22：记录发起任务时的账号归属，写库前校验
+        let ownerAtStart = HostedAccount.scopeKey
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
-        var descriptor = FetchDescriptor<MemoryItem>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
+        let memKey = HostedAccount.scopeKey
+        var descriptor = FetchDescriptor<MemoryItem>(
+            predicate: #Predicate { $0.ownerKey == memKey },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
         descriptor.fetchLimit = 100
         let existing = (try? context.fetch(descriptor)) ?? []
         let existingContents = existing.map(\.content)
@@ -152,6 +178,8 @@ final class MemoryService {
             case "add":
                 guard !content.isEmpty, !known.contains(content) else { continue }
                 known.insert(content)
+                // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
+                guard HostedAccount.scopeKey == ownerAtStart else { return }
                 context.insert(MemoryItem(content: content, source: source))
             case "update":
                 if let index, existing.indices.contains(index), !content.isEmpty {
@@ -160,6 +188,8 @@ final class MemoryService {
                 } else if !content.isEmpty, !known.contains(content) {
                     // index 越界（幻觉）：退化为新增，不丢内容
                     known.insert(content)
+                    // 10-22 账号切换保护：任务期间若已切账号，丢弃本次写入（避免写到别人名下）
+                    guard HostedAccount.scopeKey == ownerAtStart else { return }
                     context.insert(MemoryItem(content: content, source: source))
                 }
             case "delete":
@@ -168,6 +198,7 @@ final class MemoryService {
                 continue
             }
         }
-        try? context.save()
+        // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
+        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
     }
 }
