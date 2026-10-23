@@ -144,7 +144,8 @@ final class MemoryService {
                 continue
             }
         }
-        try? context.save()
+        // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
+        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
     }
 
     // MARK: - P0-46 会员模式：服务端抽取（Mem0 式合并决策）
@@ -197,6 +198,7 @@ final class MemoryService {
                 continue
             }
         }
-        try? context.save()
+        // 10-23：记忆写入失败要能观察（否则"记忆看起来存了、重启就没了"）
+        do { try context.save() } catch { /* 保留内存态，下次抽取会重试 */ }
     }
 }
