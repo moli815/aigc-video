@@ -227,6 +227,9 @@ struct ExpertBanner: View {
             Spacer()
             Button("技能与工具", systemImage: "slider.horizontal.3") { showSkills = true }
                 .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .liquidGlassCompat(Capsule(), elevated: false)
                 .accessibilityIdentifier("expert-skills")
         }
         .padding(.horizontal, 14)
@@ -480,7 +483,7 @@ struct ChatView: View {
                             .foregroundStyle(theme.accent)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 10)
-                            .liquidGlass(Capsule(), elevated: true)
+                            .liquidGlassCompat(Capsule(), elevated: true)
                     }
                     .buttonStyle(.plain)
                     .padding()
@@ -641,8 +644,9 @@ private struct EditResendSheet: View {
     }
 }
 
-/// 流式消息行：外层仍是 MessageRow，内层用打字机游标（shownCount → targetCount）
-/// 平滑展示增长中的文本；离开视图时立即补齐，避免视觉跳变。
+/// 流式消息行：外层仍是 MessageRow，直接展示当前已收到的完整 buffer.text。
+/// 10-23 取消逐字符打字机：配合 MarkdownView 的增量解析，直接渲染完整文本，
+/// 避免每 18–24ms 重排整段 Markdown 造成的滚动抖动、布局跳变和主线程压力。
 private struct StreamingMessageRow: View {
     let message: Message
     @ObservedObject var buffer: StreamingReplyBuffer
@@ -650,43 +654,9 @@ private struct StreamingMessageRow: View {
     let onPreview: (StoredFile) -> Void
     /// P0-68 深度思考中状态（由调用方传入）
     var isReasoning: Bool = false
-    /// 已平滑展示的字符数（打字机游标）
-    @State private var shownCount = 0
-    /// 打字机目标长度（随 buffer 增长）
-    @State private var targetCount = 0
-    @State private var pump: Task<Void, Never>?
 
     var body: some View {
-        MessageRow(message: message, streamingText: String(buffer.text.prefix(shownCount)), files: files, onPreview: onPreview, isReasoning: isReasoning)   // P0-68
-            .onChange(of: buffer.text) { _, newText in
-                targetCount = newText.count
-                startPump()
-            }
-            .onAppear {
-                // 若刷新时已有完整文本（如重新进入会话），直接全量展示，避免从 0 逐字回放
-                shownCount = buffer.text.count
-                targetCount = buffer.text.count
-            }
-            .onDisappear {
-                // 流式结束：立刻补齐剩余字符，避免从打字机截断长度跳到全文的视觉突变
-                shownCount = targetCount
-                pump?.cancel(); pump = nil
-            }
-    }
-
-    /// 平滑打字机：18ms 一帧（≈55fps），积压越多步长越大（≤0.5s 追平模型输出）
-    private func startPump() {
-        guard pump == nil else { return }
-        pump = Task {
-            while !Task.isCancelled, shownCount < targetCount {
-                let pending = targetCount - shownCount
-                shownCount = min(targetCount, shownCount + max(2, pending / 15))
-                // 10-22 性能：18ms（≈55fps）→ 24ms（≈42fps）。每帧都在重排整段 Markdown，
-                // 降到 42fps 视觉几乎无差，但重排次数减少约 25%。
-                try? await Task.sleep(nanoseconds: 24_000_000)
-            }
-            pump = nil
-        }
+        MessageRow(message: message, streamingText: buffer.text, files: files, onPreview: onPreview, isReasoning: isReasoning)   // P0-68
     }
 }
 
