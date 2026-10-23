@@ -117,7 +117,17 @@ final class ImageService {
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
     func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false) async throws -> Data {
-        guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
+        // 10-23 关键修复：hosted 模式必须用「会员 token」鉴权——服务端 bf-image 校验的是账号 token，
+        // 供应商 Key 只在服务端。旧实现第一行就 guard apiKey（hosted 下为空）→ 直接抛 missingKey，
+        // 模型收到工具失败后转述成"当前专家配置禁止使用 image_generate"（用户看到的错误结论）。
+        let apiKey: String
+        if profile.id == "hosted" {
+            guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
+            apiKey = t
+        } else {
+            guard let k = apiKeyProvider(), !k.isEmpty else { throw ImageError.missingKey }
+            apiKey = k
+        }
         // 10-19 关键修复：hosted 模式改走 bf-image 独立函数（/img/image）——
         // 实测 /api/image 这条路径在网关层被特殊对待：同代码 /api/test-upstream 39s、/api/image >320s。
         // 新路径 /img/image 实测 42s 稳定。
