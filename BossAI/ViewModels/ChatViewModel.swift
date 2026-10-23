@@ -425,13 +425,20 @@ final class ChatViewModel: ObservableObject {
             var textParts: [String] = []
             if !messageText.isEmpty { textParts.append(messageText) }
             var imageURLs: [String] = []
+            // 10-23 408 修复：只允许「最后一条用户消息」携带图片本体。
+            // 旧实现每轮都会把历史里所有附件重新转 base64（一张 1.5MB → 约 200 万字符），
+            // 多轮对话后请求体膨胀到几十 MB，网关直接 408；同一会话"第一轮能看图、之后全 408"由此而来。
+            let isLatestUserMessage = (m.id == sortedMessages.last(where: { $0.role == "user" })?.id)
 
             for file in attached {
                 if file.isImage {
                     // P0-13 真·看图：除 OCR 文本外把原图作为多模态 image_url 输入（10-19 张数 3→6，
                     // 配合参考图压缩 768/0.65，单次 6 张约 0.5MB 仍在云网关限制内）
-                    if imageURLs.count < 6, let dataURL = Self.imageDataURL(for: file) {
+                    if isLatestUserMessage, imageURLs.count < 6, let dataURL = Self.imageDataURL(for: file) {
                         imageURLs.append(dataURL)
+                    } else if !isLatestUserMessage {
+                        // 历史图片：不再重发本体，只保留占位说明（模型仍知道"当时看过这张图"）
+                        textParts.append("【历史图片：\(file.name)（此前已识别，本轮不重复传输）】")
                     }
                     let ocr = file.contextText(limit: 2000)
                     if !ocr.isEmpty {
