@@ -69,6 +69,10 @@ extension ChatViewModel {
         /// 10-23 P0：本轮是否已有产物真正落库（图片/文档）。
         /// 线程安全旗标，供超时任务与 catch 分支读取——有产物时后续说明失败只能降级为"部分成功"。
         let artifactFlag = FirstTokenFlag()
+        // 10-24 宣称校验：本轮是否尝试过图片/图表工具、已自动修复次数、修复预算
+        var imageToolAttempted = false
+        var claimRepairCount = 0
+        var claimRepairBudget = 0
         var currentTextCommitted = true
         do {
             if capability.allowSearch, researchMode != .local, !nativeSearch, needsFreshEvidence {
@@ -130,7 +134,7 @@ extension ChatViewModel {
             // 10-22 修复：此前硬编码 min(8, 配置16)，配置永远是 8 与注释不符。
             // 现在让配置真正生效（上限 16），复杂多实体任务不会在规划完成前被截断。
             let roundLimit = min(16, max(1, AppConfig.maxToolIterations))
-            loop: while iteration < roundLimit {
+            loop: while iteration < roundLimit + claimRepairBudget {
                 iteration += 1
                 var pendingToolCalls: [ChatService.ToolCall] = []
                 assistantText = ""
@@ -184,7 +188,7 @@ extension ChatViewModel {
                 }
                 defer { timeoutTask.cancel() }
 
-                for try await event in chatService.stream(messages: apiMessages, enableTools: iteration < roundLimit, expertID: expert.id, allowSearch: researchMode != .local, useNativeSearch: nativeSearch && !nativeEvidenceFallbackUsed && !nativeSearchRejected, tier: researchMode == .online ? "pro" : "flash", fastMode: false, expertTools: expert.skill.tools, chatMode: HostedAccount.isHostedActive ? chatMode : nil) {
+                for try await event in chatService.stream(messages: apiMessages, enableTools: iteration < roundLimit + claimRepairBudget, expertID: expert.id, allowSearch: researchMode != .local, useNativeSearch: nativeSearch && !nativeEvidenceFallbackUsed && !nativeSearchRejected, tier: researchMode == .online ? "pro" : "flash", fastMode: false, expertTools: expert.skill.tools, chatMode: HostedAccount.isHostedActive ? chatMode : nil) {
                     // P0-38 档位仅会员模式生效：自备 Key 模式直连上游，注入 chatMode 会被上游判为未知参数；
                     // 同时自备模式没有服务端路由，档位本就无意义（与 line 234 的成本保护同思路）。
                     if Task.isCancelled { break }
@@ -277,6 +281,32 @@ extension ChatViewModel {
                 saveOrWarn()
 
                 if Task.isCancelled { break loop }
+
+                // 10-24：宣称校验闸门。模型偶尔不发工具却回复"已生成"，用户点重新生成才成功。
+                // 命中条件：图片意图 + 成功表述 + 本轮无产物。先自动修复一轮（每轮最多一次）。
+                if pendingToolCalls.isEmpty, claimRepairCount < 1,
+                   ToolClaimGuard.shouldIntercept(userText: userText,
+                                                  reply: assistantText,
+                                                  artifactPersisted: artifactFlag.isSet,
+                                                  imageToolAttempted: imageToolAttempted) {
+                    claimRepairCount += 1
+                    claimRepairBudget = 1
+                    NSLog("[ToolClaimGuard] 拦截谎报：无产物但文本宣称成功，brief=%@", String(assistantText.prefix(60)))
+                    statusText = "正在补生成图片…"
+                    if apiMessages.count > 1, (apiMessages[1]["role"] as? String) == "system" {
+                        let prev = (apiMessages[1]["content"] as? String) ?? ""
+                        apiMessages[1]["content"] = prev + "\n\n" + ToolClaimGuard.repairInstruction
+                    } else {
+                        apiMessages.insert(["role": "system", "content": ToolClaimGuard.repairInstruction], at: min(1, apiMessages.count))
+                    }
+                    assistantText = ""
+                    streamingText = ""
+                    fullText = ""
+                    assistantMessage.text = ""
+                    saveOrWarn()
+                    iteration -= 1          // 把这一轮还回去，确保修复轮仍带工具权限
+                    continue loop
+                }
                 if pendingToolCalls.isEmpty { exhausted = false; break loop }
 
                 var assistantRecord: [String: Any] = [
@@ -351,6 +381,7 @@ extension ChatViewModel {
                                                 "content": ToolPipeline.failureNote(pluginID: "expert_skill", reason: error.localizedDescription)])
                         }
                     case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":   // 10-19 拆 4 工具（统一执行器，旧名兼容）
+                        imageToolAttempted = true
                         statusText = "正在生成图片…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
@@ -545,6 +576,7 @@ extension ChatViewModel {
                         researchSummary = "本轮检索 \(researchBudget.searches) 个主题 · \(citations.sources.count) 条候选来源"
 
                     case "render_chart":
+                        imageToolAttempted = true
                         statusText = "正在绘制统计图…"
                         if let spec = ChartSpec.parse(call.arguments), let image = ChartRenderer.render(spec) {
                             // P0-59 统一管道落库（含 save）
@@ -641,6 +673,18 @@ extension ChatViewModel {
             } else if !assistantMessage.text.isEmpty {
                 assistantMessage.text += "\n\n*（已停止生成）*"
             }
+        }
+
+        // 10-24：自动修复后仍未产出 → 不再展示模型的"已生成"话术，改成如实说明并允许重试
+        if !Task.isCancelled, errorMessage == nil,
+           ToolClaimGuard.shouldIntercept(userText: userText,
+                                          reply: assistantMessage.text,
+                                          artifactPersisted: artifactFlag.isSet,
+                                          imageToolAttempted: imageToolAttempted) {
+            NSLog("[ToolClaimGuard] 修复后仍未产出，改写为如实文案")
+            assistantMessage.text = ToolClaimGuard.honestFailureText
+            failedUserMessageID = sortedMessages.last(where: { $0.role == "user" })?.id
+            failedAssistantMessageID = assistantMessage.id
         }
 
         conv.updatedAt = Date()
