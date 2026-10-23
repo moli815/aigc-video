@@ -42,6 +42,11 @@ struct MessageRow: View {
     var isReasoning: Bool = false
 
     /// 按角色分流：user 右对齐气泡；AI 左侧头像 + 平铺内容
+    /// 该消息是否"以文字开头"——决定头像是否需要光学微调
+    private var startsWithText: Bool {
+        message.thumbnailData == nil && message.imageData == nil && files.isEmpty
+    }
+
     var body: some View {
         Group {
             if message.role == "user" {
@@ -68,8 +73,11 @@ struct MessageRow: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
             } else {
-                HStack(alignment: .top, spacing: 10) {
+                // 10-23 视觉稳定性：间距统一为 12；以文字开头的消息，头像上移 2pt 做光学对齐
+                // （对齐圆形视觉中心与首行文字重心，而不是两个视图的布局边界）
+                HStack(alignment: .top, spacing: 12) {
                     AssistantAvatar()
+                        .offset(y: startsWithText ? -2 : 0)
                     VStack(alignment: .leading, spacing: 8) {
                         if let data = message.thumbnailData ?? message.imageData {   // P0-69 缩略图优先（点开预览用原图）
                             MessageImageView(data: data, onRegenerate: onRegenerate).equatable()
