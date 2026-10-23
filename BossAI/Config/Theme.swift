@@ -251,4 +251,28 @@ extension View {
     func liquidGlass<S: InsettableShape>(_ shape: S, elevated: Bool = true) -> some View {
         modifier(LiquidGlassSurface(shape: shape, elevated: elevated))
     }
+
+    /// 10-23 原生 Liquid Glass 兼容修饰符：
+    /// - iOS 26+ 使用系统 `glassEffect(.regular, in: shape)`
+    /// - iOS 17–25 回退到现有 `.ultraThinMaterial` + 高光描边的毛玻璃实现
+    /// 这样无需强迫所有用户升级系统，也不必完全重写现有主题组件。
+    func liquidGlassCompat<S: InsettableShape>(_ shape: S, elevated: Bool = true) -> some View {
+        modifier(LiquidGlassCompat(shape: shape, elevated: elevated))
+    }
+}
+
+/// 原生 Liquid Glass 兼容修饰符：iOS 26+ 使用系统 glassEffect，低版本回退到现有毛玻璃。
+struct LiquidGlassCompat<S: InsettableShape>: ViewModifier {
+    let shape: S
+    var elevated: Bool = true
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            // 系统原生 Liquid Glass：自动处理材质、折射与高光边缘
+            content.glassEffect(.regular, in: shape)
+        } else {
+            // iOS 17–25 兼容路径：保留现有深空玻璃风格
+            content.modifier(LiquidGlassSurface(shape: shape, elevated: elevated))
+        }
+    }
 }
