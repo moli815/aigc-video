@@ -100,8 +100,10 @@ enum ToolPipeline {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["tool": pluginID, "reason": String(reason.prefix(300))])
-            req.timeoutInterval = 10
-            _ = try? await URLSession.shared.data(for: req)
+            // 10-23 P3：工具失败上报走受限网络客户端，响应体限制 256KB
+            _ = try? await BoundedHTTPClient.data(for: req,
+                                                  session: BoundedHTTPClient.searchSession,
+                                                  limit: 256 * 1024)
         }
     }
 

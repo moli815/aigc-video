@@ -51,8 +51,10 @@ enum PerformanceTrace {
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "tool": "perf:\\(name)", "reason": "slow \\(Int(ms))ms",
             ])
-            req.timeoutInterval = 8
-            _ = try? await URLSession.shared.data(for: req)
+            // 10-23 P3：性能事件上报走受限网络客户端，响应体限制 128KB
+            _ = try? await BoundedHTTPClient.data(for: req,
+                                                  session: BoundedHTTPClient.searchSession,
+                                                  limit: 128 * 1024)
         }
     }
 }

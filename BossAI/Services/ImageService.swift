@@ -72,9 +72,11 @@ final class ImageService {
         credReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         credReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
         credReq.httpBody = try? JSONSerialization.data(withJSONObject: ["ext": "jpg"])
-        credReq.timeoutInterval = 20
-        guard let (credData, credResp) = try? await URLSession.shared.data(for: credReq),
-              (credResp as? HTTPURLResponse)?.statusCode == 200,
+        // 10-23 P3：凭证请求走受限网络客户端，响应体限制 256KB
+        guard let (credData, credResp) = try? await BoundedHTTPClient.data(for: credReq,
+                                                                           session: BoundedHTTPClient.chatSession,
+                                                                           limit: 256 * 1024),
+              credResp.statusCode == 200,
               let credJSON = try? JSONSerialization.jsonObject(with: credData) as? [String: Any],
               let putURLString = credJSON["url"] as? String,
               let putURL = URL(string: putURLString),
@@ -82,20 +84,24 @@ final class ImageService {
 
         // 10-22 安全：直传前校验 host 白名单。凭证由服务端签发，但若链路被篡改/配置错误，
         // 原实现会把用户图片 PUT 到任意第三方域名。这里只放行腾讯云 COS / CloudBase 域。
-        guard let putHost = putURL.host?.lowercased(),
+        // 10-23 P3 补充：必须强制 HTTPS，防止授权头经明文传输。
+        guard putURL.scheme?.lowercased() == "https",
+              let putHost = putURL.host?.lowercased(),
               putHost.hasSuffix(".myqcloud.com") || putHost.hasSuffix(".tcloudbase.com") || putHost.hasSuffix(".tencentcloudapi.com")
         else { return nil }
 
-        // ② 直传 COS（PUT）
+        // ② 直传 COS（PUT）：图片上传不走 BoundedHTTPClient 的 bytes 流（上传体已知大小），
+        // 但仍用 imageSession 保证统一超时；响应体很小，限制 64KB。
         var putReq = URLRequest(url: putURL)
         putReq.httpMethod = "PUT"
         putReq.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Authorization") }
         if let cosToken = credJSON["token"] as? String { putReq.setValue(cosToken, forHTTPHeaderField: "x-cos-security-token") }
         putReq.httpBody = data
-        putReq.timeoutInterval = 60
-        guard let (_, putResp) = try? await URLSession.shared.data(for: putReq),
-              (putResp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        guard let (_, putResp) = try? await BoundedHTTPClient.data(for: putReq,
+                                                                  session: BoundedHTTPClient.imageSession,
+                                                                  limit: 64 * 1024),
+              putResp.statusCode == 200 else { return nil }
 
         // ③ fileID → 公网 URL
         guard let fileURL = URL(string: base + "/file-url") else { return nil }
@@ -104,9 +110,10 @@ final class ImageService {
         fileReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         fileReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
         fileReq.httpBody = try? JSONSerialization.data(withJSONObject: ["fileIDs": [fileID]])
-        fileReq.timeoutInterval = 20
-        guard let (fileData, fileResp) = try? await URLSession.shared.data(for: fileReq),
-              (fileResp as? HTTPURLResponse)?.statusCode == 200,
+        guard let (fileData, fileResp) = try? await BoundedHTTPClient.data(for: fileReq,
+                                                                           session: BoundedHTTPClient.chatSession,
+                                                                           limit: 256 * 1024),
+              fileResp.statusCode == 200,
               let fileJSON = try? JSONSerialization.jsonObject(with: fileData) as? [String: Any],
               let urls = fileJSON["urls"] as? [String],
               let url = urls.first, !url.isEmpty else { return nil }

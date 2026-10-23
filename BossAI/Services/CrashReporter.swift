@@ -100,13 +100,14 @@ enum CrashReporter {
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = data
-            // 短超时：上报不能拖慢启动；失败保留文件下次再试
-            req.timeoutInterval = 8
-            URLSession.shared.dataTask(with: req) { _, response, _ in
-                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                    try? FileManager.default.removeItem(at: file)
-                }
-            }.resume()
+            // 10-23 P3：崩溃上报也走受限网络客户端，响应体限制 256KB；失败保留文件下次再试
+            Task {
+                guard let (_, resp) = try? await BoundedHTTPClient.data(for: req,
+                                                                        session: BoundedHTTPClient.searchSession,
+                                                                        limit: 256 * 1024),
+                      (200...299).contains(resp.statusCode) else { return }
+                try? FileManager.default.removeItem(at: file)
+            }
         }
     }
 

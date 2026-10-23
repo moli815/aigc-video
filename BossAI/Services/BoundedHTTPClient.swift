@@ -34,8 +34,9 @@ enum BoundedHTTPClient {
     }
     /// 搜索专用会话：短超时，快速失败
     static let searchSession = session(resourceTimeout: 10)
-    /// 作图专用会话：图片生成慢，给足 180 秒
-    static let imageSession = session(resourceTimeout: 180)
+    /// 作图专用会话：图片生成慢，最高配置可到 300 秒；Session 资源超时直接给足 300 秒，
+    /// 避免配置显示 300s、底层 180s 被截断的不一致（P0-64 云端可配置 timeout）。
+    static let imageSession = session(resourceTimeout: 300)
     /// 聊天/补全专用会话：同样给足 180 秒
     static let chatSession = session(resourceTimeout: 180)
 

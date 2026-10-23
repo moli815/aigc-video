@@ -523,16 +523,18 @@ final class HostedAccount: ObservableObject {
         req.timeoutInterval = 30
 
         let data: Data
-        let response: URLResponse
+        let http: HTTPURLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: req)
+            // 10-23 P3：所有会员 API 统一走受限网络客户端，限制单次响应体 10MB，避免异常大响应拖垮内存
+            (data, http) = try await BoundedHTTPClient.data(for: req,
+                                                            session: BoundedHTTPClient.chatSession,
+                                                            limit: 10 * 1024 * 1024)
         } catch {
             throw HostedError.network("无法连接服务，请检查网络后重试")
         }
-        let http = response as? HTTPURLResponse
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
 
-        if let http, !(200..<300).contains(http.statusCode) {
+        if !(200..<300).contains(http.statusCode) {
             let code = json["error"] as? String ?? "HTTP \(http.statusCode)"
             let message = json["message"] as? String
             // 会员 token 失效：直接清空登录态，UI 会回到登录页
@@ -630,6 +632,8 @@ final class HostedAccount: ObservableObject {
         chatModes = ChatModeOption.fallback
         defaultChatMode = "standard"
         appName = "中防AI"
+        // 10-23 P3：清空图片附件 data URL 缓存，避免旧账号图片 base64 被新账号请求误用
+        ChatViewModel.invalidateImageURLCache()
         UserDefaults.standard.removeObject(forKey: infoKey)
     }
 
@@ -764,26 +768,30 @@ final class HostedAccount: ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 120   // 生图链路较慢（约 30~80s），超时必须放宽
+        // 10-23 P3：海报生图链路用 imageSession，响应体限制 12MB；同时把 Session 资源超时提到 300s 与配置对齐
 
         let data: Data
-        let response: URLResponse
+        let http: HTTPURLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: req)
+            (data, http) = try await BoundedHTTPClient.data(for: req,
+                                                            session: BoundedHTTPClient.imageSession,
+                                                            limit: 12 * 1024 * 1024)
         } catch {
             throw HostedError.network("网络异常，请检查连接后重试")
         }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
-        if status != 200 {
+        if http.statusCode != 200 {
             let msg = json["message"] as? String
-            throw HostedError.server(code: json["error"] as? String ?? "POSTER_FAILED", status: status, message: msg)
+            throw HostedError.server(code: json["error"] as? String ?? "POSTER_FAILED", status: http.statusCode, message: msg)
         }
         // 底图 URL → 下载 → 客户端叠字
         guard let baseURLString = json["imageUrl"] as? String, let baseURL = URL(string: baseURLString) else {
             throw HostedError.network("海报底图缺失，请重试")
         }
-        guard let (imgData, _) = try? await URLSession.shared.data(from: baseURL),
+        guard let (imgData, imgResp) = try? await BoundedHTTPClient.data(for: URLRequest(url: baseURL),
+                                                                         session: BoundedHTTPClient.imageSession,
+                                                                         limit: 32 * 1024 * 1024),
+              imgResp.statusCode == 200,
               let base = UIImage(data: imgData) else {
             throw HostedError.network("底图下载失败，请重试")
         }
@@ -807,9 +815,11 @@ final class HostedAccount: ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["dialogue": dialogue, "existing": existing])
-        req.timeoutInterval = 70   // 抽取含一次上游调用，超时放宽
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
+        // 10-23 P3：记忆抽取走受限网络客户端，响应体限制 2MB
+        guard let (data, resp) = try? await BoundedHTTPClient.data(for: req,
+                                                                   session: BoundedHTTPClient.chatSession,
+                                                                   limit: 2 * 1024 * 1024),
+              resp.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let ops = json["ops"] as? [[String: Any]] else { return [] }
         return ops

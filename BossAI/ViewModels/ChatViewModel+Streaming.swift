@@ -38,7 +38,7 @@ extension ChatViewModel {
             return
         }
         citations = CitationRegistry()
-        var apiMessages = buildAPIMessages(conv: conv)
+        var apiMessages = await buildAPIMessages(conv: conv)
         // P0-19 深度研究增强（Pro+ 权益）：搜索主题数与证据预算按档位放大（服务端 features 下发，App 不写死）
         var researchBudget: ResearchBudget = {
             if HostedAccount.cachedDeepResearchEnabled {

@@ -300,8 +300,6 @@ struct SidebarView: View {
                             ForEach(ExpertCatalog.all) { expert in
                                 Button { onOpenExpert(expert) } label: {
                                     ExpertRow(expert: expert)
-                                        .padding(.vertical, 5)
-                                        .padding(.horizontal, 8)
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
@@ -324,8 +322,6 @@ struct SidebarView: View {
                             ForEach(filtered, id: \.id) { conv in
                                 Button { selectedConversationId = conv.id } label: {
                                     ConversationRow(conversation: conv)
-                                        .padding(.vertical, 5)
-                                        .padding(.horizontal, 8)
                                         .background(
                                             selectedConversationId == conv.id ? theme.accent.opacity(0.16) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -431,18 +427,11 @@ struct SidebarView: View {
 
     // MARK: - 侧栏自绘组件（10-23 List → ScrollView 重构配套）
 
+    /// 10-23 P3：侧栏统一行组件。固定 22pt 图标槽、12pt 图标文字间距、10pt 左侧内边距，
+    /// 保证一级导航、专家行、对话行的图标列和文字左边缘严格对齐。
     private func sidebarNavRow(_ title: String, _ icon: String, active: Bool = false,
                                action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label { Text(title) } icon: { Image(systemName: icon) }
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(active ? Color.accentColor : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        SidebarRow(icon: icon, title: title, active: active, action: action)
     }
 
     private func sidebarSectionHeader(_ title: String, count: Int, chevron: Bool?,
@@ -741,30 +730,78 @@ struct LiquidGlassRing: View {
     }
 }
 
-/// 侧栏专家行：monogram 徽章 + 名称 + 一句话介绍
+/// 10-23 P3：侧栏统一行组件。固定 22pt 图标槽、12pt 间距、10pt 左侧内边距，
+/// 保证导航/专家/对话三种行在图标列和文字起始列严格对齐。
+struct SidebarRow: View {
+    let icon: String
+    var iconSize: CGFloat = 14
+    let title: String
+    var subtitle: String? = nil
+    var trailing: String? = nil
+    var active: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: iconSize, weight: .regular))
+                    .foregroundStyle(active ? Color.accentColor : Color.primary)
+                    .frame(width: 22, alignment: .center)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .regular))
+                        .foregroundStyle(active ? Color.accentColor : Color.primary)
+                        .lineLimit(1)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                if let trailing, !trailing.isEmpty {
+                    Text(trailing)
+                        .font(.system(size: 10))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 侧栏专家行：复用 SidebarRow 的固定图标槽与间距，保证与导航/对话行严格对齐。
 struct ExpertRow: View {
-    @Environment(\.appTheme) private var theme
     let expert: Expert
 
     var body: some View {
-        HStack(spacing: 10) {
-            // P0-47 简笔风图标（方案 A 实装）：SF Symbol 线性描边（去 .fill 变体）+ 低饱和底，
-            // 替代卡通 emoji——与设计预览一致；symbol 缺失时才回退 emoji/首字徽章。
-            // 固定 frame + 居中 = 任何图标形态下都绝对对齐（P0-23 结论保留）。
-            // 10-22 用户要求：取消每位专家的独立图标，统一为品牌图标的黑白简笔画（线性描边、无底色）
+        // P0-47 简笔风图标（方案 A 实装）：统一品牌图标线性描边，取消每位专家独立图标
+        HStack(spacing: 12) {
             Image(systemName: "shield.lefthalf.filled")
                 .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(.secondary)
-                .frame(width: 20, alignment: .center)
+                .frame(width: 22, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(expert.name)
-                    .font(.subheadline)
+                    .font(.system(size: 14, weight: .regular))
                 Text(expert.subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            Spacer()
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 
     /// 简笔线性图标：把 SF Symbol 的 .fill 变体转成描边风格（与方案 A 简笔预览一致）。
@@ -783,20 +820,20 @@ struct ExpertRow: View {
     }
 }
 
-/// 侧栏单条对话行：图标 + 标题 + 最后一条消息预览 + 专家名胶囊
+/// 侧栏单条对话行：复用 SidebarRow 的固定图标槽与间距，保证与导航/专家行严格对齐。
 struct ConversationRow: View {
     @Environment(\.appTheme) private var theme
     let conversation: Conversation
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: conversation.expert.symbol)
-                .font(.system(size: 12))
+                .font(.system(size: 13, weight: .regular))
                 .foregroundStyle(.secondary)
-                .frame(width: 20)
+                .frame(width: 22, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(conversation.title)
-                    .font(.subheadline)
+                    .font(.system(size: 14, weight: .regular))
                     .lineLimit(1)
                 Text(preview)
                     .font(.caption2)
@@ -811,6 +848,9 @@ struct ConversationRow: View {
                 .background(Color(.tertiarySystemFill), in: Capsule())
                 .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 
     /// 预览文案：取最新一条消息的文字；图片/文件分别用占位符；无消息给兜底文案

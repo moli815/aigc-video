@@ -435,10 +435,11 @@ enum ProviderDetector {
         guard let url = URL(string: "\(baseURL)/models") else { return false }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 8
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return false }
-        return http.statusCode == 200
+        // 10-23 P3：Key 探测走受限网络客户端，限制响应体 1MB
+        guard let (_, response) = try? await BoundedHTTPClient.data(for: request,
+                                                                    session: BoundedHTTPClient.searchSession,
+                                                                    limit: 1 * 1024 * 1024) else { return false }
+        return response.statusCode == 200
     }
 
     private static func probeImageEndpoint(baseURL: String, key: String) async -> Bool {
@@ -448,10 +449,11 @@ enum ProviderDetector {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data("{}".utf8)
-        request.timeoutInterval = 8
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return false }
+        // 10-23 P3：图片 Key 探测走受限网络客户端，限制响应体 256KB
+        guard let (_, response) = try? await BoundedHTTPClient.data(for: request,
+                                                                    session: BoundedHTTPClient.searchSession,
+                                                                    limit: 256 * 1024) else { return false }
         // Empty-request validation is only a connectivity hint; not a successful image-generation test.
-        return [200, 201, 400, 422].contains(http.statusCode) // 404/429/5xx are inconclusive, never authentication success
+        return [200, 201, 400, 422].contains(response.statusCode) // 404/429/5xx are inconclusive, never authentication success
     }
 }

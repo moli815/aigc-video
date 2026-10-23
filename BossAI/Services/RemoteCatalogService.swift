@@ -58,10 +58,12 @@ enum RemoteCatalogService {
         guard let url = URL(string: AppConfig.hostedAPIBase + "/experts") else { return }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 10
+        // 10-23 P3：专家目录走受限网络客户端，响应体限制 8MB（目录 JSON 通常 <100KB，留足余量）
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200,
+            let (data, resp) = try await BoundedHTTPClient.data(for: req,
+                                                                session: BoundedHTTPClient.searchSession,
+                                                                limit: 8 * 1024 * 1024)
+            guard resp.statusCode == 200,
                   let payload = try? JSONDecoder().decode(Payload.self, from: data),
                   !payload.experts.isEmpty else {
                 PerformanceTrace.event("remote_catalog.fetch_skip")
@@ -111,13 +113,22 @@ enum RemoteCatalogService {
             let base = fallback[dto.id]
             let id = dto.id
             guard !id.isEmpty, !dto.name.isEmpty else { continue }
-            let tools = (dto.tools ?? []).compactMap(ExpertTool.init(rawValue:))
+            // 10-23 P3：区分"服务端明确传了空工具列表"与"字段缺失"。
+            // 显式空数组必须保留为空（关闭所有工具），只有字段缺失时才回退默认工具。
+            let providedTools = dto.tools
+            let parsedTools = (providedTools ?? []).compactMap(ExpertTool.init(rawValue:))
+            let resolvedTools: [ExpertTool]
+            if let providedTools {
+                resolvedTools = parsedTools
+            } else {
+                resolvedTools = base?.skill.tools ?? [.search]
+            }
             let deliverable = DocumentFormat(rawValue: dto.deliverable ?? "") ?? base?.skill.deliverable ?? .word
             let skill = ExpertSkill(
                 framework: dto.framework ?? base?.skill.framework ?? "结构化分析",
                 steps: (dto.steps?.isEmpty == false ? dto.steps! : base?.skill.steps) ?? [],
                 deliverable: deliverable,
-                tools: tools.isEmpty ? (base?.skill.tools ?? [.search]) : tools,
+                tools: resolvedTools,
                 checklist: dto.checklist ?? base?.skill.checklist ?? [],
                 freshnessCue: dto.freshnessCue ?? base?.skill.freshnessCue ?? ""
             )

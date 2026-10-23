@@ -76,11 +76,15 @@ struct MessageRow: View {
                 // 10-23 视觉稳定性：间距统一为 12；以文字开头的消息，头像上移 2pt 做光学对齐
                 // （对齐圆形视觉中心与首行文字重心，而不是两个视图的布局边界）
                 HStack(alignment: .top, spacing: 12) {
-                    AssistantAvatar()
+                    AssistantAvatar(isReasoning: streamingText != nil && isReasoning)
                         .offset(y: startsWithText ? -2 : 0)
                     VStack(alignment: .leading, spacing: 8) {
-                        if let data = message.thumbnailData ?? message.imageData {   // P0-69 缩略图优先（点开预览用原图）
-                            MessageImageView(data: data, onRegenerate: onRegenerate).equatable()
+                        // 10-23 P3：列表渲染用缩略图，全屏/保存/分享必须用原图，避免用户存下 400px 小图
+                        if let original = message.imageData ?? message.thumbnailData {
+                            MessageImageView(thumbnailData: message.thumbnailData,
+                                             originalData: original,
+                                             canRegenerate: onRegenerate != nil,
+                                             onRegenerate: onRegenerate).equatable()
                         }
                         ForEach(files, id: \.id) { file in
                             FileCardView(file: file) { onPreview(file) }
@@ -111,40 +115,43 @@ struct MessageRow: View {
     }
 }
 
-/// P0-68 深度思考指示（推理模型首字延迟期间显示）：脉动光点 + 文案
+/// P0-68 深度思考文案（推理模型首字延迟期间显示）：图标已归并到 AssistantAvatar，
+/// 这里只保留脉动文字，避免头像容器重复。
 struct ReasoningIndicator: View {
     @State private var phase = false
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .opacity(phase ? 1.0 : 0.35)
-            Text("深度思考中…")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .opacity(phase ? 1.0 : 0.55)
-        }
-        .padding(.vertical, 6)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { phase = true }
-        }
-        .accessibilityLabel("深度思考中")
+        Text("深度思考中…")
+            .font(.system(size: 13))
+            .foregroundStyle(.secondary)
+            .opacity(phase ? 1.0 : 0.55)
+            .padding(.vertical, 6)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { phase = true }
+            }
+            .accessibilityLabel("深度思考中")
     }
 }
 
-/// ChatGPT 式 AI 头像：10-23 升级为玻璃徽章。
-/// iOS 26+ 使用原生 Liquid Glass；低版本保持半透明主题色底 + 细高光边。
+/// ChatGPT 式 AI 头像：10-23 升级为玻璃徽章；推理态复用同一 28×28 几何容器，
+/// 只替换内部图标并加脉动动画，切换为正式回答时视觉重心不变。
 private struct AssistantAvatar: View {
     @Environment(\.appTheme) private var theme
+    var isReasoning = false
+    @State private var phase = false
     var body: some View {
-        Image(systemName: "sparkles")
+        Image(systemName: isReasoning ? "sparkles" : "sparkles")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(theme.accent)
+            .foregroundStyle(isReasoning ? .secondary : theme.accent)
+            .opacity(isReasoning ? (phase ? 1.0 : 0.35) : 1.0)
             .frame(width: 28, height: 28)
-            .background(Circle().fill(theme.accent.opacity(0.18)))
-            .liquidGlassCompat(Circle(), elevated: true)
+            .background(Circle().fill(isReasoning ? Color.secondary.opacity(0.12) : theme.accent.opacity(0.18)))
+            .liquidGlassCompat(Circle(), elevated: !isReasoning)
             .accessibilityHidden(true)
+            .onAppear {
+                if isReasoning {
+                    withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { phase = true }
+                }
+            }
     }
 }
 
@@ -332,21 +339,27 @@ private struct CitationSourceRow: View {
     }
 }
 
-/// 消息内图片：后台解码缩略图 + 点击全屏 + 长按保存相册；值相等只看二进制数据
+/// 消息内图片：列表用缩略图，点击/全屏/保存/分享用原图；避免用户存下小图。
 private struct MessageImageView: View, Equatable {
-    /// 图片原始数据
-    let data: Data
+    /// 列表展示的缩略图数据（可能为空，此时用原图解码缩略图）
+    let thumbnailData: Data?
+    /// 原图数据：全屏预览、保存相册、分享均走这里
+    let originalData: Data
+    /// 「换一版」按钮是否显示——转成 Bool 纳入 Equatable，避免 closure 不可比较导致状态不及时刷新
+    let canRegenerate: Bool
     /// 10-22：外部的「换一版」动作。此前直接引用父视图的 onRegenerate，
     /// 但本结构是独立 View，作用域里找不到 → 编译失败。现在显式传参。
     var onRegenerate: (() -> Void)? = nil
-    /// 后台解码出的缩略图
+    /// 后台解码出的列表缩略图
     @State private var thumbnail: UIImage?
     /// 缩略图解码中
     @State private var loading = true
     /// 是否打开全屏预览
     @State private var fullscreen = false
-    /// 值相等判断：数据没变就跳过重渲染（解码不重复触发）
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.data == rhs.data }
+    /// 值相等判断：数据与可重新生成状态没变就跳过重渲染（解码不重复触发）
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.thumbnailData == rhs.thumbnailData && lhs.originalData == rhs.originalData && lhs.canRegenerate == rhs.canRegenerate
+    }
     var body: some View {
         Group {
             if let thumbnail {
@@ -355,9 +368,9 @@ private struct MessageImageView: View, Equatable {
                     .onTapGesture { fullscreen = true }
                     .contextMenu {
                         Button("保存到相册", systemImage: "square.and.arrow.down") {
-                            if let original = UIImage(data: data) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
+                            if let original = UIImage(data: originalData) { UIImageWriteToSavedPhotosAlbum(original, nil, nil, nil) }
                         }
-                        if onRegenerate != nil {
+                        if canRegenerate {
                             Button(action: { onRegenerate?() }) {
                                 Label("换一版", systemImage: "arrow.clockwise")
                             }
@@ -368,14 +381,20 @@ private struct MessageImageView: View, Equatable {
         }
         .accessibilityLabel("生成的图片，点按可放大查看")
         .fullScreenCover(isPresented: $fullscreen) {
-            ImageFullscreenView(data: data)
+            ImageFullscreenView(data: originalData)
         }
-        .task(id: data) {
-            // 缩略图在 actor 后台解码：大图不在主线程解码，避免滚动掉帧
-            let image = await ImageThumbnailWorker.shared.thumbnail(data)
+        .task(id: EquatableTuple(thumbnailData: thumbnailData, originalData: originalData)) {
+            // 优先用预生成缩略图；没有则拿原图在 actor 后台解码，避免主线程解大图掉帧
+            let source = thumbnailData ?? originalData
+            let image = await ImageThumbnailWorker.shared.thumbnail(source)
             // 任务可能已被取消（视图销毁/数据变化），取消后不再写状态
             if !Task.isCancelled { thumbnail = image.map { UIImage(cgImage: $0) }; loading = false }
         }
+    }
+    /// 让 Data? + Data 能作为 .task(id:) 的标识
+    private struct EquatableTuple: Equatable {
+        let thumbnailData: Data?
+        let originalData: Data
     }
 }
 

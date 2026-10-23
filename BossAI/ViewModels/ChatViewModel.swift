@@ -132,9 +132,11 @@ final class ChatViewModel: ObservableObject {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["query": query, "count": count])
-            req.timeoutInterval = 15
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200,
+            // 10-23 P3：接入受限网络客户端，统一响应体上限与超时
+            guard let (data, resp) = try? await BoundedHTTPClient.data(for: req,
+                                                                       session: BoundedHTTPClient.searchSession,
+                                                                       limit: 2 * 1024 * 1024),
+                  resp.statusCode == 200,
                   let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let results = j["results"] as? [[String: Any]], !results.isEmpty else { return nil }
             let hits: [SearchHit] = results.compactMap { r in
@@ -158,7 +160,11 @@ final class ChatViewModel: ObservableObject {
         self.researchService = researchService
         self.injectedSearchPlanner = searchPlanner
         filesObserver = NotificationCenter.default.addObserver(forName: .bossAIFilesChanged, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.invalidateFileCache() }
+            Task { @MainActor [weak self] in
+                self?.invalidateFileCache()
+                // 10-23 P3：资料库文件增删/更新后清空图片 data URL 缓存，避免请求里混入已删/旧版本文件
+                Self.invalidateImageURLCache()
+            }
         }
         // 10-22 长任务编排：若上次任务在同一会话里异常中断，进入时把它挂出来供用户决定是否继续。
         if let progress = UserDefaults.standard.dictionary(forKey: Self.taskProgressKey),
@@ -280,9 +286,11 @@ final class ChatViewModel: ObservableObject {
             "image": "data:image/jpeg;base64," + imageData.base64EncodedString(),
             "question": "用户要求：\(String(requirement.prefix(200)))。生成的图片是否满足该要求？",
         ])
-        req.timeoutInterval = 45
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
+        // 10-23 P3：视觉校验请求体可能较大，响应为 small JSON；用 chatSession 给足 180s 并限制响应体 1MB
+        guard let (data, resp) = try? await BoundedHTTPClient.data(for: req,
+                                                                   session: BoundedHTTPClient.chatSession,
+                                                                   limit: 1 * 1024 * 1024),
+              resp.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return (ok: (j["ok"] as? Bool) ?? true, note: (j["note"] as? String) ?? "")
     }
@@ -386,7 +394,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    func buildAPIMessages(conv: Conversation) -> [[String: Any]] {
+    func buildAPIMessages(conv: Conversation) async -> [[String: Any]] {
         let span = PerformanceTrace.begin("ContextBuild")
         defer { PerformanceTrace.end("ContextBuild", span) }
         let identity = UserIdentity.load()
@@ -440,7 +448,7 @@ final class ChatViewModel: ObservableObject {
                 if file.isImage {
                     // P0-13 真·看图：除 OCR 文本外把原图作为多模态 image_url 输入（10-19 张数 3→6，
                     // 配合参考图压缩 768/0.65，单次 6 张约 0.5MB 仍在云网关限制内）
-                    if isLatestUserMessage, imageURLs.count < 6, let dataURL = Self.imageDataURL(for: file) {
+                    if isLatestUserMessage, imageURLs.count < 6, let dataURL = await Self.imageDataURL(for: file) {
                         imageURLs.append(dataURL)
                     } else if !isLatestUserMessage {
                         // 历史图片：不再重发本体，只保留占位说明（模型仍知道"当时看过这张图"）
@@ -526,19 +534,15 @@ final class ChatViewModel: ObservableObject {
     /// 读取图片附件 → 交给 ImageCompressor 压缩（长边 1024 / JPEG 0.78）→ data URL。
     /// P0-42：视觉 token ≈ 像素 ÷ 750，压缩到 1K 长边可省约 90% 的识别成本（实测识别质量无损）。
     /// 失败返回 nil：调用方降级为"仅 OCR 文本"，绝不因图片处理失败而中断发送。
-    /// 10-22 性能：图片「读取 → 解压 → 缩放 → 重编码 → base64」只做一次并缓存。
-    /// 此前每轮模型请求都会对同一批附件重做一遍（最多 6 张），多轮工具循环下开销叠加。
-    /// 注：这是最小改动版——彻底方案是把预处理改成异步管道（避免首帧在主线程解码大图）。
-    private static var imageURLCache: [UUID: String] = [:]
+    /// 10-23 P3：压缩与读取全部移到后台 actor；缓存带 60MB/100 条上限的 LRU 淘汰，
+    /// 账号切换/文件变化时整池失效，避免旧账号图片混进新账号请求。
+    static func imageDataURL(for file: StoredFile) async -> String? {
+        await ImageDataURLCache.shared.dataURL(for: file)
+    }
 
-    static func imageDataURL(for file: StoredFile) -> String? {
-        if let cached = imageURLCache[file.id] { return cached }
-        let url = FileStore.url(for: file)
-        guard let raw = try? Data(contentsOf: url), !raw.isEmpty else { return nil }
-        guard let payload = ImageCompressor.compressedData(from: raw) else { return nil }
-        let dataURL = "data:image/jpeg;base64," + payload.base64EncodedString()
-        imageURLCache[file.id] = dataURL
-        return dataURL
+    /// 10-23 P3：账号切换或资料库文件变化时清空图片缓存，避免跨账号/过期数据混入。
+    static func invalidateImageURLCache() {
+        Task { await ImageDataURLCache.shared.removeAll() }
     }
 
     // MARK: - 编辑重发（P0-4）
@@ -635,6 +639,56 @@ final class ChatViewModel: ObservableObject {
         }
         text += "\n\n" + ToolRegistry.capabilityManifest(cloudExtra: HostedAccount.cachedCapabilityExtra, overrides: HostedAccount.cachedCapabilityOverrides)
         return text
+    }
+}
+
+    /// 10-23 P3：图片附件 → data URL 的线程安全 LRU 缓存。
+/// - 读取与压缩在 Task.detached 后台执行，不阻塞主线程
+/// - 按压缩后字节数设 60MB 总上限，最多 100 条，LRU 淘汰
+/// - 账号切换/文件变化时整池失效
+actor ImageDataURLCache {
+    struct Entry {
+        let url: String
+        let cost: Int
+        var lastAccess: Date
+    }
+    static let shared = ImageDataURLCache()
+    private var entries: [UUID: Entry] = [:]
+    private var totalCost = 0
+    private let maxCost = 60 * 1024 * 1024
+    private let maxEntries = 100
+
+    func dataURL(for file: StoredFile) async -> String? {
+        if var entry = entries[file.id] {
+            entry.lastAccess = Date()
+            entries[file.id] = entry
+            return entry.url
+        }
+        let url = FileStore.url(for: file)
+        guard let raw = try? await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: url)
+        }.value, !raw.isEmpty else { return nil }
+        guard let payload = await Task.detached(priority: .userInitiated) {
+            ImageCompressor.compressedData(from: raw)
+        }.value, !payload.isEmpty else { return nil }
+        let dataURL = "data:image/jpeg;base64," + payload.base64EncodedString()
+        insert(id: file.id, url: dataURL, cost: payload.count)
+        return dataURL
+    }
+
+    private func insert(id: UUID, url: String, cost: Int) {
+        while (totalCost + cost > maxCost || entries.count >= maxEntries) && !entries.isEmpty {
+            guard let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess }) else { break }
+            totalCost -= oldest.value.cost
+            entries.removeValue(forKey: oldest.key)
+        }
+        entries[id] = Entry(url: url, cost: cost, lastAccess: Date())
+        totalCost += cost
+    }
+
+    func removeAll() {
+        entries.removeAll()
+        totalCost = 0
     }
 }
 
