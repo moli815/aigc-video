@@ -448,54 +448,6 @@ enum DocumentBuilder {
             imageRels += "<Relationship Id=\"rIdImg\(item.index)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image\(item.index).png\"/>"
         }
 
-        // 10-23 Excel 嵌图：单独一张「附图」工作表，图片按行锚定、右侧单元格放图注。
-        // 表格本身仍保持纯文本（便于筛选/汇总），图片不再被降级成一句"见附图"。
-        var excelImages: [(index: Int, png: Data, size: CGSize)] = []
-        for (index, item) in images.enumerated() {
-            if let png = normalizedPNG(item.data), let image = UIImage(data: png) {
-                excelImages.append((index, png, image.size))
-            }
-        }
-        var excelContentExtra = ""
-        var excelSheetsExtra = ""
-        var excelRelsExtra = ""
-        var imageSheetXML = ""
-        var imageDrawingXML = ""
-        var imageDrawingRels = ""
-        if !excelImages.isEmpty {
-            excelContentExtra = "<Default Extension=\"png\" ContentType=\"image/png\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/drawings/drawing1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>"
-            excelSheetsExtra = "<sheet name=\"附图\" sheetId=\"2\" r:id=\"rId3\"/>"
-            excelRelsExtra = "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>"
-            var captionRows = ""
-            var anchors = ""
-            var drawingRels = ""
-            let rowStep = 26
-            for (offset, item) in excelImages.enumerated() {
-                let rowIndex = offset * rowStep
-                captionRows += "<row r=\"\(rowIndex + 1)\"><c r=\"H\(rowIndex + 1)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(images[item.index].caption))</t></is></c></row>"
-                let maxW: CGFloat = 4_755_880
-                let maxH: CGFloat = 3_017_520
-                let ratio = item.size.height / max(item.size.width, 1)
-                var cx = maxW
-                var cy = cx * ratio
-                if cy > maxH { cy = maxH; cx = cy / max(ratio, 0.01) }
-                anchors += "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(rowIndex)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"\(offset + 2)\" name=\"img\(offset + 1)\"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId\(offset + 1)\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"
-                drawingRels += "<Relationship Id=\"rId\(offset + 1)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/img\(item.index + 1).png\"/>"
-            }
-            imageSheetXML = """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cols><col min="1" max="7" width="12" customWidth="1"/><col min="8" max="8" width="46" customWidth="1"/></cols><sheetData>\(captionRows)</sheetData><drawing r:id="rId1"/></worksheet>
-            """
-            imageDrawingXML = """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">\(anchors)</xdr:wsDr>
-            """
-            imageDrawingRels = """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(drawingRels)</Relationships>
-            """
-        }
-
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -876,6 +828,54 @@ enum DocumentBuilder {
                 colDefs += "<col min=\"\(col + 1)\" max=\"\(col + 1)\" width=\"\(String(format: "%.1f", width))\" customWidth=\"1\"/>"
             }
             cols = "<cols>\(colDefs)</cols>"
+        }
+
+        // 10-23 Excel 嵌图：单独一张「附图」工作表，图片按行锚定、右侧单元格放图注。
+        // 表格本身仍保持纯文本（便于筛选/汇总），图片不再被降级成一句"见附图"。
+        var excelImages: [(index: Int, png: Data, size: CGSize)] = []
+        for (index, item) in images.enumerated() {
+            if let png = normalizedPNG(item.data), let image = UIImage(data: png) {
+                excelImages.append((index, png, image.size))
+            }
+        }
+        var excelContentExtra = ""
+        var excelSheetsExtra = ""
+        var excelRelsExtra = ""
+        var imageSheetXML = ""
+        var imageDrawingXML = ""
+        var imageDrawingRels = ""
+        if !excelImages.isEmpty {
+            excelContentExtra = "<Default Extension=\"png\" ContentType=\"image/png\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/drawings/drawing1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>"
+            excelSheetsExtra = "<sheet name=\"附图\" sheetId=\"2\" r:id=\"rId3\"/>"
+            excelRelsExtra = "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>"
+            var captionRows = ""
+            var anchors = ""
+            var drawingRels = ""
+            let rowStep = 26
+            for (offset, item) in excelImages.enumerated() {
+                let rowIndex = offset * rowStep
+                captionRows += "<row r=\"\(rowIndex + 1)\"><c r=\"H\(rowIndex + 1)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(images[item.index].caption))</t></is></c></row>"
+                let maxW: CGFloat = 4_755_880
+                let maxH: CGFloat = 3_017_520
+                let ratio = item.size.height / max(item.size.width, 1)
+                var cx = maxW
+                var cy = cx * ratio
+                if cy > maxH { cy = maxH; cx = cy / max(ratio, 0.01) }
+                anchors += "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(rowIndex)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"\(offset + 2)\" name=\"img\(offset + 1)\"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId\(offset + 1)\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"
+                drawingRels += "<Relationship Id=\"rId\(offset + 1)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/img\(item.index + 1).png\"/>"
+            }
+            imageSheetXML = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cols><col min="1" max="7" width="12" customWidth="1"/><col min="8" max="8" width="46" customWidth="1"/></cols><sheetData>\(captionRows)</sheetData><drawing r:id="rId1"/></worksheet>
+            """
+            imageDrawingXML = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">\(anchors)</xdr:wsDr>
+            """
+            imageDrawingRels = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(drawingRels)</Relationships>
+            """
         }
 
         var zip = ZipWriter()
