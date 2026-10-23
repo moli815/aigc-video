@@ -33,6 +33,10 @@ enum ToolClaimGuard {
     static func claimsArtifact(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
+        // 失败语境优先：'生成失败了' 里的 '生成…了' 不能当成成功宣称。
+        // 只要出现失败/否定标记，就交给失败分支处理（宁可漏拦，不可误拦）。
+        let failureMarkers = ["失败", "未能", "无法", "没有生成", "没生成", "未生成", "出错", "报错", "抱歉"]
+        if failureMarkers.contains(where: { trimmed.contains($0) }) { return false }
         let patterns = [
             "(已|已经)[^。\\n]{0,8}(生成|重绘|改好|做好|完成|保存|放入|更新|替换)",
             "(生成|重绘|改好|做好|保存)[^。\\n]{0,3}(好|完成|了)",

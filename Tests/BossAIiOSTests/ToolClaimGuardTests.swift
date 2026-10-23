@@ -23,6 +23,7 @@ final class ToolClaimGuardTests: XCTestCase {
 
     func testDoesNotTreatFailureAsClaim() {
         XCTAssertFalse(ToolClaimGuard.claimsArtifact("生成失败了，请重试"))
+        XCTAssertFalse(ToolClaimGuard.claimsArtifact("已经尝试生成但失败了"))
         XCTAssertFalse(ToolClaimGuard.claimsArtifact("我没有生成图片，因为缺少参考图"))
         XCTAssertFalse(ToolClaimGuard.claimsArtifact("如果需要，我可以继续帮你调整"))
         XCTAssertFalse(ToolClaimGuard.claimsArtifact(""))
