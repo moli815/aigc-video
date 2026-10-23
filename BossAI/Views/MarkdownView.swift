@@ -252,7 +252,6 @@ struct MarkdownView: View, Equatable {
         var lineRanges: [Range<String.Index>] = []
         text.enumerateSubstrings(in: text.startIndex..., options: .byLines) { _, _, range, _ in
             lineRanges.append(range)
-            return true
         }
 
         func flushParagraph(endLine: Int) {
