@@ -276,15 +276,13 @@ extension ChatViewModel {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "重复工具ID已拒绝，避免重复扣费或写入文件。"]); continue
                     }
                     if BudgetTracker.chatExceeded { throw ExpertSkillError.denied("本月对话额度已达上限，停止继续请求") }
-                    // 10-23：传入专家实际生效的工具列表（云端优先），与 tools[] 注册保持同一份配置
+                    // 10-23：使用 EffectiveToolPolicy 作为单一事实源，与 tools[] 注册保持同一份配置。
                     // 云端显式关闭的工具：即使模型残留调用，执行器也拒绝（隐藏 ≠ 禁止执行）
-                    let disabledToolIDs = Set((HostedAccount.cachedCapabilityOverrides ?? [:]).compactMap { id, v -> String? in
-                        guard let ov = v as? [String: Any], let enabled = ov["enabled"] as? Bool, enabled == false else { return nil }
-                        return id
-                    })
-                    guard ExpertSkillRuntime.permits(call.name, profile: capability,
-                                                     allowedTools: expert.skill.tools.map(\.rawValue),
-                                                     disabledTools: disabledToolIDs) else {
+                    let policy = (try? EffectiveToolPolicy.forExpert(expert)) ?? EffectiveToolPolicy(
+                        canSearch: capability.allowSearch, canImage: capability.allowImages,
+                        docFormats: capability.documentFormats, disabledToolIDs: [], availableToolIDs: []
+                    )
+                    guard policy.permits(call.name) else {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                             "content": "当前专家禁止该工具：\(call.name)"])
                         continue
