@@ -121,9 +121,11 @@ enum ExpertSkillRuntime {
     /// ② 权限来源与 `ChatService.resolveToolPermissions` 不一致：那边云端 `expertTools` 优先，
     ///    这里却只用本地档案，于是"云端开了生图、本地档案没开"时运行时仍拒绝。
     /// 现在两处统一：`expertTools`（云端下发）优先，本地 `profile` 只做兜底。
-    static func permits(_ name: String, profile: ExpertCapability, expertTools: [ExpertTool]? = nil) -> Bool {
-        let canSearch = expertTools?.contains(.search) ?? profile.allowSearch
-        let canImage = expertTools?.contains(.image) ?? profile.allowImages
+    static func permits(_ name: String, profile: ExpertCapability, allowedTools: [String]? = nil) -> Bool {
+        // 注意：本文件属于 BossAIExpertCore（SPM target），看不到 App 层的 ExpertTool 枚举，
+        // 因此这里用工具名字符串（与 ChatService 传给 tools[] 的 name 同源）。
+        let canSearch = allowedTools.map { $0.contains("search") } ?? profile.allowSearch
+        let canImage = allowedTools.map { $0.contains("image") } ?? profile.allowImages
 
         switch name {
         case "expert_skill", "search_library", "render_chart":
@@ -133,8 +135,8 @@ enum ExpertSkillRuntime {
         case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":
             return canImage
         case "create_document":
-            if let et = expertTools {
-                return !et.filter { [ExpertTool.word, .ppt, .excel, .pdf].contains($0) }.isEmpty
+            if let at = allowedTools {
+                return !at.filter { ["word", "ppt", "excel", "pdf"].contains($0) }.isEmpty
             }
             return !profile.documentFormats.isEmpty
         default:
