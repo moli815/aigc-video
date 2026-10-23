@@ -126,6 +126,9 @@ final class HostedAccount: ObservableObject {
     /// 单设备登录：账号在别处登录时，这里存放给用户看的提示（弹窗后清空）
     @Published var sessionReplacedNotice: String?
     @Published private(set) var refreshing = false
+    /// 10-23 P0：会话代次。登录/登出/切换账号时递增；异步请求返回后若代次已变，
+    /// 说明账号已切换，必须丢弃旧响应，不能修改当前账号状态或把当前账号登出。
+    @Published private(set) var sessionGeneration: Int = 0
 
     /// 最近一次请求失败的原因（展示用）
     @Published var lastErrorMessage: String?
@@ -470,15 +473,17 @@ final class HostedAccount: ObservableObject {
 
     /// 统一的 token 写入/清除入口：Keychain 为真源，UserDefaults 只做镜像标志，
     /// 并广播凭据变更通知，让 ChatService 等持有旧 Key 的对象立即刷新。
-    private func storeToken(_ value: String?) {
+    /// - Returns: 是否成功写入/清除；写入失败时返回 false，调用方必须中止登录流程。
+    @discardableResult
+    private func storeToken(_ value: String?) -> Bool {
         if let value, !value.isEmpty {
-            // 10-22 可靠性：Keychain 写入失败时必须显式失败，否则会出现"显示已登录、重启后掉登录"
+            // 10-22/10-23 可靠性：Keychain 写入失败时必须显式失败，否则会出现"显示已登录、重启后掉登录"
             let saved = KeychainHelper.save(value, service: AppConfig.keychainService, account: Self.tokenAccount)
             if !saved {
                 token = nil
                 UserDefaults.standard.set(false, forKey: Self.loggedInKey)
                 lastErrorMessage = "登录凭证保存失败（系统钥匙串不可写），请重启 App 后重试"
-                return
+                return false
             }
         } else {
             KeychainHelper.delete(service: AppConfig.keychainService, account: Self.tokenAccount)
@@ -488,6 +493,7 @@ final class HostedAccount: ObservableObject {
         token = value
         // 通知凭据层重新读取（ChatService 的 apiKeyProvider 依赖它）
         NotificationCenter.default.post(name: .bossAIKeysChanged, object: nil)
+        return true
     }
 
     // MARK: - 网络
@@ -498,14 +504,18 @@ final class HostedAccount: ObservableObject {
     /// 然后无条件强制登出（防止拿到过期 token 继续发请求）。
     private func request(_ path: String, method: String = "GET",
                          body: [String: Any]? = nil, authorized: Bool = true) async throws -> [String: Any] {
+        // 10-23 P0：捕获发起请求时的会话代次与 token。await 期间若用户切换账号，
+        // 返回后必须校验代次，防止旧账号的 401 把新账号登出，或旧 /me 覆盖新账号状态。
+        let startGeneration = sessionGeneration
+        let capturedToken = token
         guard let url = URL(string: AppConfig.hostedAPIBase + path) else {
             throw HostedError.network("服务地址无效")
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if authorized, let token, !token.isEmpty {
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if authorized, let capturedToken, !capturedToken.isEmpty {
+            req.setValue("Bearer \(capturedToken)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -526,7 +536,8 @@ final class HostedAccount: ObservableObject {
             let code = json["error"] as? String ?? "HTTP \(http.statusCode)"
             let message = json["message"] as? String
             // 会员 token 失效：直接清空登录态，UI 会回到登录页
-            if http.statusCode == 401, authorized {
+            // 但仅在发起请求的账号仍当前账号时才执行登出，避免旧请求登出新账号
+            if http.statusCode == 401, authorized, startGeneration == sessionGeneration {
                 // P0-15 单设备：区分"被其他设备顶下线"与普通过期，给出明确提示
                 if code == "SESSION_REPLACED" {
                     sessionReplacedNotice = message ?? "账号已在其他设备登录，当前设备已退出"
@@ -566,7 +577,12 @@ final class HostedAccount: ObservableObject {
         guard let newToken = json["token"] as? String, !newToken.isEmpty else {
             throw HostedError.server(code: "NO_TOKEN", status: 200, message: "服务未返回登录凭证")
         }
-        storeToken(newToken)
+        // 10-23 P0：Keychain 写入失败必须阻断登录流程，不能继续更新账号元数据
+        guard storeToken(newToken) else {
+            throw HostedError.input("登录凭证保存失败（系统钥匙串不可写），请重启 App 后重试")
+        }
+        // 登录成功：递增会话代次，使此前账号的未决旧响应失效
+        sessionGeneration &+= 1
         accountName = trimmed
         displayName = json["displayName"] as? String ?? trimmed
         if let s = json["memberUntil"] as? String {
@@ -579,6 +595,8 @@ final class HostedAccount: ObservableObject {
     /// 登出：清空 token、资料与所有额度/档位缓存，并删除本地快照，
     /// 防止下一个账号登录后看到上一个账号的残留数据（隐私与数据隔离防呆）。
     func logout() {
+        // 10-23 P0：登出/切换账号时递增会话代次，让未决旧请求返回后不再修改当前状态
+        sessionGeneration &+= 1
         storeToken(nil)
         displayName = ""
         memberUntil = nil
@@ -595,9 +613,23 @@ final class HostedAccount: ObservableObject {
         monthResetAt = nil
         poolUsedCny = 0
         poolCapCny = 0
+        poolBand = .normal
+        usedFlashCny = 0
+        usedProCny = 0
+        usedImageCny = 0
         sessionReplacedNotice = nil
         daysLeft = nil
         accountName = ""
+        // 10-23 P0：清理账号级远程配置，防止下一账号继承旧账号的 features/overrides/chatModes 等
+        features = nil
+        capabilityExtra = nil
+        capabilityOverridesRaw = nil
+        appBehavior = nil
+        uiConfig = [:]
+        appUpdate = [:]
+        chatModes = ChatModeOption.fallback
+        defaultChatMode = "standard"
+        appName = "中防AI"
         UserDefaults.standard.removeObject(forKey: infoKey)
     }
 
@@ -623,8 +655,11 @@ final class HostedAccount: ObservableObject {
         guard isLoggedIn, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
+        let startGeneration = sessionGeneration
         do {
             let json = try await request("/me")
+            // 10-23 P0：await 期间若账号已切换，丢弃旧 /me 响应，不覆盖新账号状态
+            guard startGeneration == sessionGeneration else { return }
             displayName = json["displayName"] as? String ?? displayName
             if let s = json["memberUntil"] as? String {
                 memberUntil = ISO8601DateFormatter().date(from: s)
