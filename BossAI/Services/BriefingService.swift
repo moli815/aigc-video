@@ -137,7 +137,8 @@ final class BriefingService {
         }
         let conv = Conversation(expertId: "general", title: title)
         context.insert(conv)
-        try? context.save()
+        // 10-23：会话保存失败要留痕（否则简报会话没建出来，后面写消息会挂空引用）
+        do { try context.save() } catch { context.delete(conv); return conv }
         return conv
     }
 
