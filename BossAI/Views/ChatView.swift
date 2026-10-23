@@ -258,7 +258,8 @@ struct ChatView: View {
     // P0-11 滚动层重写（参考 exyte/Chat 成熟实现，1885★）：
     // 废弃持久化 scrollPosition(id:) 绑定——它会在键盘等每次布局变化时用过期几何重新锚定，
     // 是"键盘顶空/抽动"的最后根源。改为「一次性滚动请求」：目标消费后立即清空，不再重复锚定。
-    @State private var pendingScrollTarget: UUID?
+    // 10-23：滚动目标改为 AnyHashable —— 支持"底部锚点"字符串，而不只是某条消息 ID
+    @State private var pendingScrollTarget: AnyHashable?
     @State private var pendingScrollAnimated = false
     @State private var scrollClock = ScrollClock()
     private final class ScrollClock { var lastTime: TimeInterval = 0; var pending: Task<Void, Never>? }
@@ -286,10 +287,11 @@ struct ChatView: View {
 
     /// 一次性贴底请求：写入末条消息 id，由 ScrollViewReader 消费后立即清空（关键：不做持久锚定）。
     private func requestScrollToBottom(animated: Bool = false, delay: TimeInterval = 0) {
-        guard let lastID = displayMessages.last?.id else { return }
+        // 10-23 修复：滚到底部锚点，而不是"最后一条消息"——
+        // 消息之后还可能渲染生图占位、追问建议、状态提示，滚到最后一条并不等于滚到内容末尾。
         let fire = {
             pendingScrollAnimated = animated
-            pendingScrollTarget = lastID
+            pendingScrollTarget = AnyHashable("bottom-anchor")
         }
         if delay > 0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: fire)
@@ -414,6 +416,10 @@ struct ChatView: View {
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                     }
+
+                    // 10-23 底部锚点：所有贴底滚动都滚到这里——它保证"滚到内容真正末尾"，
+                    // 而不是停在最后一条消息（其后还有生图占位、追问建议、状态条）
+                    Color.clear.frame(height: 1).id("bottom-anchor")
                 }
                 .padding(.vertical, 12)
                 .scrollTargetLayout()
