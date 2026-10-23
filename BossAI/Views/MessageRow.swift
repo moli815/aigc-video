@@ -133,18 +133,17 @@ struct ReasoningIndicator: View {
     }
 }
 
-/// ChatGPT 式 AI 头像：渐变发光圆徽
+/// ChatGPT 式 AI 头像：10-23 升级为玻璃徽章。
+/// iOS 26+ 使用原生 Liquid Glass；低版本保持半透明主题色底 + 细高光边。
 private struct AssistantAvatar: View {
     @Environment(\.appTheme) private var theme
     var body: some View {
         Image(systemName: "sparkles")
             .font(.system(size: 13, weight: .semibold))
-            // 亮色渐变上用深墨图标（白图标压亮青只有 1.8:1，会糊）
-            .foregroundStyle(GlassDesign.inkGlyph)
+            .foregroundStyle(theme.accent)
             .frame(width: 28, height: 28)
-            .background(Circle().fill(theme.accentGradient))
-            .overlay { Circle().strokeBorder(GlassDesign.strokeHighlight, lineWidth: 1) }
-            .shadow(color: theme.glow, radius: 7, x: 0, y: 0)
+            .background(Circle().fill(theme.accent.opacity(0.18)))
+            .liquidGlassCompat(Circle(), elevated: true)
             .accessibilityHidden(true)
     }
 }
