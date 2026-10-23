@@ -343,8 +343,8 @@ enum DocumentBuilder {
         guard !body.isEmpty else { throw BuildError.emptyContent }
         switch format {
         case .word: return docx(title: title, markdown: body, theme: theme, images: images)
-        case .ppt: return pptx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme)
-        case .excel: return xlsx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme)
+        case .ppt: return pptx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme, images: images)
+        case .excel: return xlsx(title: title, markdown: replacingImageMarkers(body, images: images), theme: theme, images: images)
         case .pdf: return try pdf(title: title, markdown: body, theme: theme, images: images)
         }
     }
@@ -448,6 +448,54 @@ enum DocumentBuilder {
             imageRels += "<Relationship Id=\"rIdImg\(item.index)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/image\(item.index).png\"/>"
         }
 
+        // 10-23 Excel 嵌图：单独一张「附图」工作表，图片按行锚定、右侧单元格放图注。
+        // 表格本身仍保持纯文本（便于筛选/汇总），图片不再被降级成一句"见附图"。
+        var excelImages: [(index: Int, png: Data, size: CGSize)] = []
+        for (index, item) in images.enumerated() {
+            if let png = normalizedPNG(item.data), let image = UIImage(data: png) {
+                excelImages.append((index, png, image.size))
+            }
+        }
+        var excelContentExtra = ""
+        var excelSheetsExtra = ""
+        var excelRelsExtra = ""
+        var imageSheetXML = ""
+        var imageDrawingXML = ""
+        var imageDrawingRels = ""
+        if !excelImages.isEmpty {
+            excelContentExtra = "<Default Extension=\"png\" ContentType=\"image/png\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/drawings/drawing1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/>"
+            excelSheetsExtra = "<sheet name=\"附图\" sheetId=\"2\" r:id=\"rId3\"/>"
+            excelRelsExtra = "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>"
+            var captionRows = ""
+            var anchors = ""
+            var drawingRels = ""
+            let rowStep = 26
+            for (offset, item) in excelImages.enumerated() {
+                let rowIndex = offset * rowStep
+                captionRows += "<row r=\"\(rowIndex + 1)\"><c r=\"H\(rowIndex + 1)\" t=\"inlineStr\"><is><t xml:space=\"preserve\">\(xmlEscape(images[item.index].caption))</t></is></c></row>"
+                let maxW: CGFloat = 4_755_880
+                let maxH: CGFloat = 3_017_520
+                let ratio = item.size.height / max(item.size.width, 1)
+                var cx = maxW
+                var cy = cx * ratio
+                if cy > maxH { cy = maxH; cx = cy / max(ratio, 0.01) }
+                anchors += "<xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>\(rowIndex)</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"\(offset + 2)\" name=\"img\(offset + 1)\"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId\(offset + 1)\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"\(Int(cx))\" cy=\"\(Int(cy))\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>"
+                drawingRels += "<Relationship Id=\"rId\(offset + 1)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/img\(item.index + 1).png\"/>"
+            }
+            imageSheetXML = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><cols><col min="1" max="7" width="12" customWidth="1"/><col min="8" max="8" width="46" customWidth="1"/></cols><sheetData>\(captionRows)</sheetData><drawing r:id="rId1"/></worksheet>
+            """
+            imageDrawingXML = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">\(anchors)</xdr:wsDr>
+            """
+            imageDrawingRels = """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(drawingRels)</Relationships>
+            """
+        }
+
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -500,7 +548,25 @@ enum DocumentBuilder {
 
     // MARK: - PowerPoint (.pptx)
 
-    static func pptx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
+    /// 附图页：标题 + 等比缩放图片 + 图注。画布 16:9（12192000 x 6858000 EMU）。
+    private static func imageSlideXML(caption: String, imageSize: CGSize, theme: DocTheme) -> String {
+        let slideW: CGFloat = 12_192_000
+        let maxW: CGFloat = 10_515_600
+        let maxH: CGFloat = 4_200_000
+        let ratio = imageSize.height / max(imageSize.width, 1)
+        var cx = maxW
+        var cy = cx * ratio
+        if cy > maxH { cy = maxH; cx = cy / max(ratio, 0.01) }
+        let offX = (slideW - cx) / 2
+        let offY: CGFloat = 1_500_000
+        let captionY = offY + cy + 120_000
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="420000"/><a:ext cx="10515600" cy="760000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN" sz="2800" b="1"><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill></a:rPr><a:t>附图</a:t></a:r></a:p></p:txBody></p:sp><p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId2"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="\(Int(offX))" y="\(Int(offY))"/><a:ext cx="\(Int(cx))" cy="\(Int(cy))"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:pic><p:sp><p:nvSpPr><p:cNvPr id="4" name="Caption"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="\(Int(captionY))"/><a:ext cx="10515600" cy="520000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang="zh-CN" sz="1200"><a:solidFill><a:srgbClr val="888888"/></a:solidFill></a:rPr><a:t>\(xmlEscape(caption))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        """
+    }
+
+    static func pptx(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) -> Data {
         var deck = MarkdownParser.slides(from: markdown)
         if deck.first?.title.isEmpty ?? true {
             deck.insert((title, []), at: 0)
@@ -557,6 +623,33 @@ enum DocumentBuilder {
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(slideRelsExtra)</Relationships>
             """)
             slideRelsExtra = ""
+        }
+
+        // 10-23 附图：每张图片单独一页（16:9 画布内等比缩放 + 图注）。
+        // 这样「带现场照片的 PPT」可以直接交付，而不是在正文里留一句"见附图"。
+        var pptImages: [(index: Int, png: Data, size: CGSize)] = []
+        for (index, item) in images.enumerated() {
+            if let png = normalizedPNG(item.data), let image = UIImage(data: png) {
+                pptImages.append((index, png, image.size))
+            }
+        }
+        if !pptImages.isEmpty {
+            contentTypes = contentTypes.replacingOccurrences(
+                of: "<Default Extension=\"xml\" ContentType=\"application/xml\"/>",
+                with: "<Default Extension=\"xml\" ContentType=\"application/xml\"/><Default Extension=\"png\" ContentType=\"image/png\"/>")
+        }
+        for (offset, item) in pptImages.enumerated() {
+            let n = deck.count + 1 + offset
+            let relId = "rId\(n + 1)"
+            slideIdList += "<p:sldId id=\"\(256 + deck.count + offset)\" r:id=\"\(relId)\"/>"
+            presentationRels += "<Relationship Id=\"\(relId)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide\(n).xml\"/>"
+            contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+            zip.add("ppt/slides/slide\(n).xml", imageSlideXML(caption: images[item.index].caption, imageSize: item.size, theme: theme))
+            zip.add("ppt/slides/_rels/slide\(n).xml.rels", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/img\(item.index + 1).png"/></Relationships>
+            """)
+            zip.add("ppt/media/img\(item.index + 1).png", item.png)
         }
 
         // 封面页与结尾页（slide 文件名任意，显示顺序由 sldIdLst 决定）
@@ -737,7 +830,7 @@ enum DocumentBuilder {
 
     // MARK: - Excel (.xlsx)
 
-    static func xlsx(title: String, markdown: String, theme: DocTheme = .business) -> Data {
+    static func xlsx(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) -> Data {
         var rows = MarkdownParser.table(from: markdown)
         if rows.isEmpty {
             rows = MarkdownParser.blocks(from: markdown).map { [$0.text] }
@@ -788,7 +881,7 @@ enum DocumentBuilder {
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>\(excelContentExtra)<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>
         """)
         zip.add("_rels/.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -796,11 +889,11 @@ enum DocumentBuilder {
         """)
         zip.add("xl/workbook.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(MarkdownTableCore.sheetName(title)))" sheetId="1" r:id="rId1"/></sheets></workbook>
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(MarkdownTableCore.sheetName(title)))" sheetId="1" r:id="rId1"/>\(excelSheetsExtra)</sheets></workbook>
         """)
         zip.add("xl/_rels/workbook.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>\(excelRelsExtra)</Relationships>
         """)
         zip.add("xl/styles.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -810,6 +903,18 @@ enum DocumentBuilder {
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>\(cols)<sheetData>\(sheetData)</sheetData></worksheet>
         """)
+        if !excelImages.isEmpty {
+            zip.add("xl/worksheets/sheet2.xml", imageSheetXML)
+            zip.add("xl/worksheets/_rels/sheet2.xml.rels", """
+            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>
+            """)
+            zip.add("xl/drawings/drawing1.xml", imageDrawingXML)
+            zip.add("xl/drawings/_rels/drawing1.xml.rels", imageDrawingRels)
+            for item in excelImages {
+                zip.add("xl/media/img\(item.index + 1).png", item.png)
+            }
+        }
         return zip.finalize()
     }
 

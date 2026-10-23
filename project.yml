@@ -8,11 +8,6 @@ packages:
   SwiftSoup:
     url: https://github.com/scinfu/SwiftSoup
     exactVersion: 2.13.9
-  # 10-23 迁移阶段 0：聊天 UI 底座 POC（Exyte Chat，MIT，iOS 17+）
-  # 只在 POC 视图里使用，主线 ChatView 暂不替换——先验证编译、滚动与流式表现。
-  ExyteChat:
-    url: https://github.com/exyte/Chat
-    from: "3.0.0"
 
 targets:
   BossAI:
@@ -20,7 +15,6 @@ targets:
     platform: iOS
     dependencies:
       - package: SwiftSoup
-      - package: ExyteChat
     sources:
       - path: BossAI
     settings:

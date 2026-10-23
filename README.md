@@ -24,6 +24,8 @@ macOS、Xcode 26.3（与 CI 一致；原生 Liquid Glass 需要 Xcode 26 SDK）�
 bash scripts/run-quality.sh
 ```
 
+**依赖策略（2026-10-23）**：只允许精确版本（`exactVersion` / `.exact(...)`），CI 的 `Dependency pin check` 会在出现 `from` / `branch` / `revision` 时直接失败。由于 `*.xcodeproj` 被忽略，生成的 `Package.resolved` 不纳入版本控制；精确版本已足以保证可重复解析。**若以后确实需要范围版本**，需同时提交 `ci/Package.resolved`，并在 `xcodegen generate` 之后复制到 `BossAI.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/`，否则全新 runner 可能解析到不同版本。ExyteChat 因主 target 零引用已移除。
+
 [GitHub原生测试](https://github.com/moli815/aigc-video/actions/runs/37465045756)及[未签名IPA构建](https://github.com/moli815/aigc-video/actions/runs/37465045960)来自同一提交。IPA需签名后安装；模拟器测试不代表真机帧率、发热、电量或复杂任务准确率。
 
 第三方依赖及许可证见 BossAI/Resources/ThirdPartyNotices.txt。专业资料分块/FTS索引、记忆确认机制、字段级证据和全上下文预算仍是待做项，具体方案在交付说明中。

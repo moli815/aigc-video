@@ -47,6 +47,30 @@ final class ExportAndPolicyTests: XCTestCase {
         XCTAssertGreaterThan(withImage.count, withoutImage.count, "PDF 附图页应带来额外字节")
     }
 
+    /// PPT：每张图生成一页「附图」，包里必须有 media 条目（此前完全降级为文字）。
+    func testPptxEmbedsImageSlide() throws {
+        let png = try samplePNG()
+        let images = [ExportImage(data: png, caption: "现场照片 · 测试")]
+        let withImage = DocumentBuilder.pptx(title: "测试", markdown: "第一页要点\n\n第二页要点", images: images)
+        let withoutImage = DocumentBuilder.pptx(title: "测试", markdown: "第一页要点\n\n第二页要点", images: [])
+        XCTAssertNotNil(withImage.range(of: Data("ppt/media/img1.png".utf8)),
+                        "PPT 包内必须包含 ppt/media/img1.png")
+        XCTAssertGreaterThan(withImage.count, withoutImage.count)
+    }
+
+    /// Excel：图片进独立「附图」工作表，主表保持纯文本。
+    func testXlsxEmbedsImageSheet() throws {
+        let png = try samplePNG()
+        let images = [ExportImage(data: png, caption: "现场照片 · 测试")]
+        let withImage = DocumentBuilder.xlsx(title: "测试", markdown: "| 项目 | 值 |\n| --- | --- |\n| A | 1 |", images: images)
+        XCTAssertNotNil(withImage.range(of: Data("xl/worksheets/sheet2.xml".utf8)),
+                        "缺少附图工作表")
+        XCTAssertNotNil(withImage.range(of: Data("xl/drawings/drawing1.xml".utf8)),
+                        "缺少图片锚点定义")
+        XCTAssertNotNil(withImage.range(of: Data("xl/media/img1.png".utf8)),
+                        "缺少图片二进制")
+    }
+
     func testPptAndExcelDegradeToReferenceNote() {
         let markdown = "正文\n\n\(DocumentBuilder.imageMarker(0))"
         let images = [ExportImage(data: Data([0x89, 0x50, 0x4E, 0x47]), caption: "附图 1")]

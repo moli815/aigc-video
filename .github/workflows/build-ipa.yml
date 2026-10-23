@@ -63,6 +63,16 @@ jobs:
           restore-keys: |
             macos-15-xcode-26.3-spm-
 
+      # 依赖可重复性：只允许精确版本。出现 from/branch/revision 会让全新 runner 解析到
+      # 不同版本，构建结果不可比（ExyteChat 已从主 target 移除，目前仅 SwiftSoup 2.13.9）。
+      - name: Dependency pin check
+        run: |
+          if grep -nE '^[[:space:]]+(from|branch|revision):' project.yml; then
+            echo "::error::project.yml 存在非精确版本依赖，请改用 exactVersion（或提交 lockfile 方案）"
+            exit 1
+          fi
+          echo "✅ 依赖均为精确版本"
+
       - name: Run Swift package tests
         run: |
           set -o pipefail
