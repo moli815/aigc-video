@@ -56,6 +56,10 @@ final class ChatViewModel: ObservableObject {
     var canRetryReply: Bool { failedUserMessageID != nil && !isStreaming && !isImporting }
     /// 待发送的附件
     @Published var pendingAttachments: [StoredFile] = []
+    /// 首 token 超时秒数覆盖（仅测试注入用；nil 表示按线上配置：
+    /// hosted 模式读云端可调值，自带 Key 模式固定 45s）。
+    /// 独立成实例属性而不是全局开关，避免测试之间互相污染。
+    var firstTokenTimeoutOverride: TimeInterval?
     @Published var isImporting = false
     @Published var isExporting = false
     @Published var toast: String?

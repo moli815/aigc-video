@@ -156,12 +156,14 @@ extension ChatViewModel {
 
                 // 10-23 修复：首 token 硬性超时保护。模型/网关偶发不响应时，
                 // 不能无限停在"正在分析任务…"；45 秒无首包则视为失败，给出明确错误并允许重试。
-                let firstTokenTimeout = HostedAccount.isHostedActive ? HostedAccount.cachedChatFirstTokenTimeout : 45
-                var didTimeout = false
+                // 测试可通过 firstTokenTimeoutOverride 注入更短值，避免单测等待 45s。
+                let firstTokenTimeout = firstTokenTimeoutOverride
+                    ?? (HostedAccount.isHostedActive ? HostedAccount.cachedChatFirstTokenTimeout : 45)
+                let timeoutFlag = FirstTokenFlag()
                 let timeoutTask = Task { [weak self] in
                     try? await Task.sleep(nanoseconds: UInt64(firstTokenTimeout * 1_000_000_000))
                     guard let self, !Task.isCancelled, !firstTokenFlag.isSet else { return }
-                    didTimeout = true
+                    timeoutFlag.set()
                     self.errorMessage = "模型首包响应超时（\(firstTokenTimeout)秒），请检查网络后重试。"
                     self.failedUserMessageID = self.sortedMessages.last(where: { $0.role == "user" })?.id
                     self.failedAssistantMessageID = assistantMessage.id
@@ -207,7 +209,7 @@ extension ChatViewModel {
                     }
                 }
 
-                if didTimeout {
+                if timeoutFlag.isSet {
                     // 超时任务已经设置 errorMessage 并取消 streamTask；本轮直接退出，
                     // 由 retry 机制或用户手动重试处理。
                     break loop
