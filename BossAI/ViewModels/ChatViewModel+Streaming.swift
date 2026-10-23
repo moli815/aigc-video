@@ -344,9 +344,19 @@ extension ChatViewModel {
                                                         "content": ToolPipeline.failureNote(pluginID: "image_edit", reason: "没有找到要编辑的图片（source=\((args?["source"] as? String) ?? "last")）。请让用户确认要改哪张图，或改用 image_generate 生成新图。")])
                                     continue
                                 }
-                            } else if toolName == "image_decompose" || toolName == "image_series" {
+} else if toolName == "image_decompose" {
+                                // 10-23 上线：图层拆分需要 1 张待拆图（用户上传或最近生成图）
+                                if let up = attachedImageData(in: conv) { refs.append(up) }
+                                else if let last = lastGeneratedImage { refs.append(last) }
+                                guard !refs.isEmpty else {
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(pluginID: "image_decompose", reason: "图层拆分需要一张待拆分的图片：请让用户先上传图片，或先生成一张图再拆。")])
+                                    continue
+                                }
+                            } else if toolName == "image_series" {
+                                // 10-23 官方核实：Seedream 5.0 Pro 不支持组图（传 sequential_image_generation=auto 会直接报错）
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": ToolPipeline.failureNote(pluginID: toolName, reason: "当前版本暂不支持该能力（图层拆分/组图需模型能力与界面支持）。请改用 image_edit 或 image_generate。")])
+                                                    "content": ToolPipeline.failureNote(pluginID: "image_series", reason: "当前使用的 Seedream 5.0 Pro 不支持组图（官方能力表标注暂不支持）。请如实告诉用户：可以一次生成一张，或改用 5.0 Lite 模型。")])
                                 continue
                             } else if toolName == "image_generate" {
                                 // 纯文生图：契约上就不带参考图
@@ -357,7 +367,7 @@ extension ChatViewModel {
                             }
                             // 10-21 结构化字段（有则优先，服务端按模板拼装）
                             let structuredArgs = args?["structured"] as? [String: Any]
-                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs)
+                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose")
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
                             // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
