@@ -234,10 +234,14 @@ enum ToolRegistry {
             }
             lines.append("- \(p.displayName)（\(p.id)）：可做「\(p.abilities.joined(separator: "、"))」；边界：\(limits.joined(separator: "；"))")
         }
-        // 明确告知"哪些能力当前不可用"（对照 Hermes：不可用工具不进清单，这里额外给出显式负向说明，避免用户问了模型硬编）
+        // 10-23 修复：此前这里写"当前不可用：图层拆分、组图生成"，模型会把这句话**泛化**成
+        // "图片生成被禁用"，从而拒绝出图（用户实际看到的错误回答）。现在把范围钉死：
+        // 只影响这两个细分场景，文生图/图片编辑明确标注为正常，禁止扩大解释。
         let unavailable = plugins.filter { p in !(p.availability?() ?? true) }
         if !unavailable.isEmpty {
-            lines.append("- 当前不可用（用户要求时如实说明，禁止硬说能用）：" + unavailable.map { $0.displayName }.joined(separator: "、"))
+            lines.append("- 仅以下**细分场景**暂未开放：" + unavailable.map { $0.displayName }.joined(separator: "、"))
+            lines.append("- 除此之外，文生图（image_generate）、图片编辑（image_edit）、Word/PPT/Excel/PDF 导出**全部正常可用**。")
+            lines.append("- 严禁把上面这两个细分场景说成「图片生成被禁用」或「当前专家不支持生图」——这是错误结论。")
         }
         lines.append("清单之外的能力不存在，禁止声称拥有；清单内标注的边界禁止越过（如文档工具不能插图）。")
         if let extra = cloudExtra, !extra.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
