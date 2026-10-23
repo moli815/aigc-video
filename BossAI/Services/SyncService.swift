@@ -250,7 +250,8 @@ final class SyncService {
         guard let data = payload.data(using: .utf8),
               let dict = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let idString = dict["id"] as? String, let uuid = UUID(uuidString: idString) else { return }
-        let existing = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.id == uuid })).first
+        // 10-23 P0：记忆合并必须同时匹配 ownerKey，防止不同账号 UUID 碰撞导致跨账号覆盖/误删
+        let existing = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.id == uuid && $0.ownerKey == key })).first
         if deleted { if let existing { context.delete(existing) }; return }
         guard existing == nil else { return }
         let item = MemoryItem(content: dict["content"] as? String ?? "")
