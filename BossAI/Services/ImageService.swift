@@ -116,7 +116,7 @@ final class ImageService {
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false) async throws -> Data {
         guard let apiKey = apiKeyProvider(), !apiKey.isEmpty else { throw ImageError.missingKey }
         // 10-19 关键修复：hosted 模式改走 bf-image 独立函数（/img/image）——
         // 实测 /api/image 这条路径在网关层被特殊对待：同代码 /api/test-upstream 39s、/api/image >320s。
@@ -149,6 +149,10 @@ final class ImageService {
         // 10-22 幂等键：同一 requestId 在服务端 5 分钟内复用结果，避免"回填失败重试"重复生成/重复扣费
         if let requestId, !requestId.isEmpty {
             body["requestId"] = requestId
+        }
+        // 10-23 图层拆分（Seedream 5.0 pro 原生）：仅 1 张图，返回底图 + 最多 16 个透明 PNG 图层
+        if layerDecomposition {
+            body["layer_decomposition"] = true
         }
         switch profile.style {
         case .volc:
@@ -199,8 +203,24 @@ final class ImageService {
                 "服务商响应异常（\(response.statusCode)），请稍后重试。\(String(bodyText.suffix(200)))"
             )
         }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let arr = json["data"] as? [[String: Any]], let first = arr.first else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+        // 10-23 关键修复：bf-image（hosted 模式）返回的是扁平结构 { ok, url, cost, cached, retried }，
+        // 而这里此前只解析 OpenAI 的 { data: [ { url | b64_json } ] } ——
+        // 结果是「服务端已经出图并扣了 0.45、App 端却抛 noImage」，用户看到"无法出图"。
+        // 先认扁平 url，再回落到标准 data 数组。
+        if let urlString = json["url"] as? String, let url = URL(string: urlString), url.scheme == "https" {
+            let (img, response) = try await BoundedHTTPClient.data(for: URLRequest(url: url),
+                                                                 session: BoundedHTTPClient.imageSession,
+                                                                 limit: 32 * 1024 * 1024)
+            guard response.statusCode == 200, response.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
+            return img
+        }
+        if let b64 = json["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
+            return img
+        }
+        guard let arr = json["data"] as? [[String: Any]], let first = arr.first else {
             throw ImageError.noImage
         }
         if let b64 = first["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
