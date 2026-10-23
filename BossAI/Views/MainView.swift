@@ -201,71 +201,6 @@ struct MainView: View {
         columnVisibility = .detailOnly
     }
 
-    // MARK: - 侧栏自绘组件（10-23 List → ScrollView 重构配套）
-
-    private func sidebarNavRow(_ title: String, _ icon: String, active: Bool = false,
-                               action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label { Text(title) } icon: { Image(systemName: icon) }
-                .font(.system(size: 14, weight: .regular))
-                .foregroundStyle(active ? Color.accentColor : Color.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func sidebarSectionHeader(_ title: String, count: Int, chevron: Bool?,
-                                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(count)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                if let chevron {
-                    Image(systemName: chevron ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var sidebarSearchField: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            TextField("搜索对话", text: $searchText)
-                .textFieldStyle(.plain)
-                .font(.footnote)
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
-    }
-
     private func delete(_ conv: Conversation) {
         if selectedConversationId == conv.id { selectedConversationId = nil }
         if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
@@ -492,6 +427,71 @@ struct SidebarView: View {
         }
         // P0-47 方案 A：「定时任务」入口打开身份页（含定时任务卡）
         .sheet(isPresented: $showIdentitySheet) { IdentitySheet() }
+    }
+
+    // MARK: - 侧栏自绘组件（10-23 List → ScrollView 重构配套）
+
+    private func sidebarNavRow(_ title: String, _ icon: String, active: Bool = false,
+                               action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label { Text(title) } icon: { Image(systemName: icon) }
+                .font(.system(size: 14, weight: .regular))
+                .foregroundStyle(active ? Color.accentColor : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sidebarSectionHeader(_ title: String, count: Int, chevron: Bool?,
+                                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                if let chevron {
+                    Image(systemName: chevron ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sidebarSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            TextField("搜索对话", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.footnote)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
     }
 
     private func delete(_ conv: Conversation) {
