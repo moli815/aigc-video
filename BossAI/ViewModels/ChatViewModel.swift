@@ -609,6 +609,8 @@ final class ChatViewModel: ObservableObject {
         if HostedAccount.cachedDeepResearchEnabled {
             caps.append("深度研究：最多可并行检索 8 个主题并逐页读取原文，适合多品牌对比、参数核实")
         }
+        // 10-23 关键修复：此前清单里完全没有"作图"，模型面对"设计名片/做海报"会退化成给文字方案或 Word。
+        caps.append("图片生成：用户说「做一张图 / 设计海报 / 重新设计名片 / 出封面 / 配图 / 画个示意图」时，**必须直接调用 image_generate 出图**（改已有图用 image_edit），不要用文字描述、规格清单或 Word 文档代替图片——用户要的是图，不是排版说明")
         if HostedAccount.cachedExportDocEnabled {
             caps.append("文档导出：回答完成后，用户可点击右上角导出按钮把整段对话生成 Word/PPT/Excel/PDF 文件——当用户要'文件/表格/文档'时，请直接给出完整内容并提醒用户使用导出功能，严禁说'我无法生成文件'")
         }
