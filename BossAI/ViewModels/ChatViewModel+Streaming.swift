@@ -344,17 +344,8 @@ extension ChatViewModel {
                                                         "content": ToolPipeline.failureNote(pluginID: "image_edit", reason: "没有找到要编辑的图片（source=\((args?["source"] as? String) ?? "last")）。请让用户确认要改哪张图，或改用 image_generate 生成新图。")])
                                     continue
                                 }
-} else if toolName == "image_decompose" {
-                                // 10-23 上线：图层拆分需要 1 张待拆图（用户上传或最近生成图）
-                                if let up = attachedImageData(in: conv) { refs.append(up) }
-                                else if let last = lastGeneratedImage { refs.append(last) }
-                                guard !refs.isEmpty else {
-                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": ToolPipeline.failureNote(pluginID: "image_decompose", reason: "图层拆分需要一张待拆分的图片：请让用户先上传图片，或先生成一张图再拆。")])
-                                    continue
-                                }
-                            } else if toolName == "image_series" {
-                                // 10-23 官方核实：Seedream 5.0 Pro 不支持组图（传 sequential_image_generation=auto 会直接报错）
+} else if toolName == "image_series" {
+                                // 10-23 官方核实：5.0 Pro 不支持组图（传 auto 会直接报错）
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                     "content": ToolPipeline.failureNote(pluginID: "image_series", reason: "当前使用的 Seedream 5.0 Pro 不支持组图（官方能力表标注暂不支持）。请如实告诉用户：可以一次生成一张，或改用 5.0 Lite 模型。")])
                                 continue
