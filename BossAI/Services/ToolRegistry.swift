@@ -91,10 +91,10 @@ enum ToolRegistry {
             abilities: ["纯文生图（海报/插画/封面/示意图），无任何参考图入参"],
             limits: ["改图/加元素/换背景必须用 image_edit——禁止用本工具处理已有图片"],
             requiresEnv: ["生图 API Key"],
-            availability: {
-                if HostedAccount.isHostedActive { return (HostedAccount.cachedPoolRemainingPercent ?? 100) > 0 }
-                return true
-            },
+            // 10-23 修复：此前用「额度剩余百分比」决定工具是否出现——
+            // 额度显示为 0 时工具直接从 tools[] 消失，模型只能回答"配置禁用了图片生成"（用户看到的能力缺失）。
+            // 额度不足应由服务端在执行时返回 429 POOL_EXHAUSTED 兜底，不该让"工具不存在"。
+            availability: { true },
             maxResultChars: 4000, executionTimeout: 180,
             retryOnTransient: true, producesArtifact: true,
             failureAdvice: "建议点击重试或稍后再试（这类接口异常通常是临时的）"
@@ -108,10 +108,10 @@ enum ToolRegistry {
             ],
             limits: ["source 必填；找不到底图时明确报错，绝不退化成文生图"],
             requiresEnv: ["生图 API Key"],
-            availability: {
-                if HostedAccount.isHostedActive { return (HostedAccount.cachedPoolRemainingPercent ?? 100) > 0 }
-                return true
-            },
+            // 10-23 修复：此前用「额度剩余百分比」决定工具是否出现——
+            // 额度显示为 0 时工具直接从 tools[] 消失，模型只能回答"配置禁用了图片生成"（用户看到的能力缺失）。
+            // 额度不足应由服务端在执行时返回 429 POOL_EXHAUSTED 兜底，不该让"工具不存在"。
+            availability: { true },
             maxResultChars: 4000, executionTimeout: 180,
             retryOnTransient: true, producesArtifact: true,
             failureAdvice: "请确认要编辑的图片是否存在，或改用 image_generate 生成新图"
