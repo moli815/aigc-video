@@ -27,7 +27,8 @@ import SwiftData
 @MainActor
 enum FileStore {
     /// 文件仓库根目录：Documents/Files（惰性计算）
-    static var rootURL: URL {
+    /// 10-23 P3：标为 nonisolated，允许后台 actor（如 ImageDataURLCache）计算文件 URL
+    nonisolated static var rootURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         return docs.appendingPathComponent("Files", isDirectory: true)
     }
@@ -75,7 +76,8 @@ enum FileStore {
 
     /// 取文件在沙盒中的完整 URL。
     /// storedName 经安全校验，非法名退化为 "invalid-file-name"，防路径穿越
-    static func url(for file: StoredFile) -> URL {
+    /// 10-23 P3：标为 nonisolated，允许后台 actor 安全调用（只读路径计算，不访问主线程状态）
+    nonisolated static func url(for file: StoredFile) -> URL {
         rootURL.appendingPathComponent(StorageBoundary.isSafeLeaf(file.storedName) ? file.storedName : "invalid-file-name")
     }
 
