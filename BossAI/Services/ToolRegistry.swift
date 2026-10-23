@@ -150,13 +150,11 @@ enum ToolRegistry {
                 "画面中极小文字可能出错，长文/小字建议用文档承载",
             ],
             requiresEnv: ["生图 API Key"],
-            // 对照 Hermes check_fn：生图可用性动态探测（额度内、Key 已配置）
-            availability: {
-                if HostedAccount.isHostedActive {
-                    return (HostedAccount.cachedPoolRemainingPercent ?? 100) > 0
-                }
-                return true   // 自备 Key 模式：由 ImageService 自身校验
-            },
+            // 10-23 修复：旧 ID 的 availability 同样不能用「额度百分比」——
+            // 系统提示的能力清单由 availablePlugins() 生成，额度判断为 false 时清单里就没有生图，
+            // 模型会回答"当前专家配置禁用了图片生成"（用户看到的能力缺失）。
+            // 额度不足交给服务端执行时 429 兜底。
+            availability: { true },
             maxResultChars: 4000, executionTimeout: 180,
             retryOnTransient: true, producesArtifact: true,
             failureAdvice: "建议点击重试或稍后再试（这类接口异常通常是临时的）"
