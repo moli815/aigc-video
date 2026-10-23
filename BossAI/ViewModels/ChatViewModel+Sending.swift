@@ -228,7 +228,8 @@ extension ChatViewModel {
         failedAssistantMessageID = nil
         orderedMessageCount = -1
         for m in conversation?.messages ?? [] { modelContext.delete(m) }
-        try? modelContext.save()
+        // 10-23：编辑重发前的删除要显式（失败会导致旧消息残留、新消息重复）
+        saveOrWarn()
     }
 
     // MARK: - 工具调用主循环
