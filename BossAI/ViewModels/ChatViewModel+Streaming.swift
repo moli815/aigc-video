@@ -276,7 +276,8 @@ extension ChatViewModel {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "重复工具ID已拒绝，避免重复扣费或写入文件。"]); continue
                     }
                     if BudgetTracker.chatExceeded { throw ExpertSkillError.denied("本月对话额度已达上限，停止继续请求") }
-                    guard ExpertSkillRuntime.permits(call.name, profile: capability) else {
+                    // 10-23：传入专家实际生效的工具列表（云端优先），与 tools[] 注册保持同一份配置
+                    guard ExpertSkillRuntime.permits(call.name, profile: capability, expertTools: expert.skill.tools) else {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                             "content": "当前专家禁止该工具：\(call.name)"])
                         continue
