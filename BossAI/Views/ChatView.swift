@@ -349,6 +349,34 @@ struct ChatView: View {
             }
     }
 
+    /// 错误区（10-24）：有结构化信封 → 带真实动作的卡片；否则保持原来的纯文本错误。
+    /// 两者不会同时出现，避免同一句话重复两遍。
+    @ViewBuilder
+    private var errorSection: some View {
+        if let env = viewModel.errorEnvelope {
+            RecoverableErrorView(envelope: env, busy: viewModel.isRetryingSeries) { action in
+                switch action {
+                case "renew", "view_quota":
+                    showMembership = true
+                case "relogin":
+                    Task { await HostedAccount.shared.handleSessionFailure("登录状态已更新，请重新登录") }
+                default:
+                    viewModel.handleErrorAction(action)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 6)
+        } else if let error = viewModel.errorMessage {
+            Text(error)
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 4)
+        }
+    }
+
     /// 消息区：消息列表 + 追问建议 + 滚动控制 + 研究摘要 + 错误与重试
     @ViewBuilder
     private var messageSection: some View {
@@ -455,7 +483,12 @@ struct ChatView: View {
             }
             .onChange(of: viewModel.isStreaming) { _, streaming in
                 // 发送（开始流式）与回答结束两个节点都强制回到底部
-                if streaming { followOutput = true }
+                if streaming {
+                    followOutput = true
+                    // 新一轮开始：上一轮的错误按钮/重试上下文不再适用
+                    viewModel.errorEnvelope = nil
+                    viewModel.pendingSeriesRetry = nil
+                }
                 if followOutput { requestScrollToBottom() }
             }
             .onReceive(viewModel.replyBuffer.$text) { _ in
@@ -523,15 +556,7 @@ struct ChatView: View {
                     .padding(.horizontal, 20).padding(.vertical, 5)
                     .accessibilityIdentifier("research-summary")
             }
-            if let error = viewModel.errorMessage {
-                Text(error)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 4)
-            }
+            errorSection
 
             if let note = viewModel.partialSuccessMessage {
                 // 10-23 P0：产物已保存但说明未完成——橙色提示，不显示红错、不提供"重新生成"，

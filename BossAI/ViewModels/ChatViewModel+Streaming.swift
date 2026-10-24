@@ -456,6 +456,69 @@ extension ChatViewModel {
                             }()
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
                             let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
+                            // ── 组图（10-24 P0-2）：独立路径，返回**多张**，逐张落库 ──
+                            if toolName == "image_series" {
+                                let n = max(2, min(4, requestedCount > 1 ? requestedCount : 2))
+                                // 只报系统确实知道的：要生成 N 张 + 这是串行任务。
+                                // 不编造百分比/阶段（服务端没有进度回传）。
+                                statusText = "正在生成 \(n) 张图片（逐张生成，约需 1–2 分钟）…"
+                                let outcome = try await Self.generateSeriesWithRetry(
+                                    prompt: prompt, references: refs, service: imageService,
+                                    requestedCount: n, structured: structuredArgs,
+                                    renderIntent: renderIntent, aspectRatio: aspectRatio,
+                                    qualityTier: qualityTier)
+                                let images = outcome.succeededItems.compactMap(\.imageData)
+                                let meta = SeriesMeta(
+                                    requestId: outcome.requestId,
+                                    requested: outcome.requested,
+                                    succeeded: images.count,
+                                    failedIndices: outcome.failedIndices,
+                                    downloadFailedIndices: outcome.downloadFailedIndices,
+                                    pricedCny: outcome.pricedCny,
+                                    committedCny: outcome.committedCny,
+                                    pendingCostCount: outcome.pendingCostCount,
+                                    partial: outcome.partial,
+                                    size: outcome.size,
+                                    qualityTier: outcome.qualityTier)
+                                guard !images.isEmpty else {
+                                    // 一张都没拿到：不落空消息，如实回注（含下载失败的情况）
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(
+                                                            pluginID: "image_series",
+                                                            reason: meta.downloadFailedIndices.isEmpty
+                                                                ? "本次 \(outcome.requested) 张都没有生成成功。"
+                                                                : "图片已生成，但没有一张能下载到本机（网络或存储异常）。不要重新生成。",
+                                                            requestId: outcome.requestId)])
+                                    continue
+                                }
+                                do {
+                                    let stored = try ToolPipeline.persistSeriesArtifact(
+                                        conversation: conv, images: images, meta: meta,
+                                        context: modelContext)
+                                    artifactFlag.set()
+                                    lastGeneratedImage = images.first
+                                    // 按**真实新生成**张数计本地预算（复用的不重复计）
+                                    let newly = outcome.items.filter { $0.ok && !$0.reused }.count
+                                    if newly > 0 { BudgetTracker.addImageGeneration(newly) }
+                                    if meta.failedIndices.isEmpty {
+                                        pendingSeriesRetry = nil
+                                    } else {
+                                        pendingSeriesRetry = SeriesRetryContext(
+                                            requestId: outcome.requestId,
+                                            failedIndices: meta.failedIndices,
+                                            messageID: stored.id)
+                                    }
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": Self.seriesNote(outcome: outcome, meta: meta)])
+                                } catch {
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(
+                                                            pluginID: "image_series",
+                                                            reason: "图片已生成但保存到本地失败（\(error.localizedDescription)）。请如实告知用户保存失败，不要说已成功，也不要重新生成。",
+                                                            requestId: outcome.requestId)])
+                                }
+                                continue
+                            }
                             var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: imageTaskKind, qualityTier: qualityTier, requestedCount: requestedCount > 1 ? requestedCount : nil)
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
@@ -489,11 +552,17 @@ extension ChatViewModel {
                                 "content": ToolPipeline.successNote(pluginID: "generate_image", detail: ""),
                             ])
                         } catch {
+                            // 10-24：先吸收结构化信封（actions / requestId），UI 才能给出可点按钮
+                            adopt(error)
                             // P0-59 失败统一走管道（防谎报文案由 ToolRegistry 声明生成，不会漏写）
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,
-                                "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: error.localizedDescription),
+                                "content": ToolPipeline.failureNote(
+                                    pluginID: call.name == "image_series" ? "image_series" : "generate_image",
+                                    reason: error.localizedDescription,
+                                    requestId: errorEnvelope?.requestId ?? "",
+                                    errorCode: errorEnvelope?.code ?? ""),
                             ])
                         }
                         }

@@ -14,8 +14,8 @@ import SwiftData
 enum ToolPipeline {
 
     /// 失败回注（统一防谎报）：任何工具失败都走这里（并顺带上报云端，供管理台诊断）
-    static func failureNote(pluginID: String, reason: String) -> String {
-        reportFailure(pluginID: pluginID, reason: reason)
+    static func failureNote(pluginID: String, reason: String, requestId: String = "", errorCode: String = "") -> String {
+        reportFailure(pluginID: pluginID, reason: reason, requestId: requestId, errorCode: errorCode)
         let plugin = ToolRegistry.plugin(pluginID)
         let name = plugin?.displayName ?? pluginID
         let advice = plugin?.failureAdvice ?? "建议稍后重试"
@@ -68,6 +68,56 @@ enum ToolPipeline {
         }
     }
 
+    /// 10-24 组图落库（P0-2）：多张图 + 元信息写进**同一条**消息。
+    /// 每张图都真实落库，重开 App 仍能看到全部图片；保存失败照旧抛出，由调用方如实告知。
+    @MainActor
+    @discardableResult
+    static func persistSeriesArtifact(conversation: Conversation,
+                                      images: [Data],
+                                      meta: SeriesMeta,
+                                      text: String = "",
+                                      context: ModelContext) throws -> Message {
+        let msg = Message(role: "assistant", text: text)
+        if let first = images.first {
+            msg.imageData = first
+            msg.thumbnailData = makeThumbnail(first)
+        }
+        if images.count > 1 {
+            msg.extraImagesJSON = try? JSONEncoder().encode(Array(images.dropFirst()))
+        }
+        msg.seriesMetaJSON = (try? JSONEncoder().encode(meta))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        msg.conversation = conversation
+        msg.conversationID = conversation.id
+        context.insert(msg)
+        do {
+            try context.save()
+            return msg
+        } catch {
+            context.delete(msg)
+            throw error
+        }
+    }
+
+    /// 10-24 组图结果更新（重试失败项后合并）：
+    /// 只替换图片与元信息，不新增消息 —— 否则历史里会出现两条"同一组图"。
+    @MainActor
+    static func updateSeriesArtifact(_ message: Message,
+                                     images: [Data],
+                                     meta: SeriesMeta,
+                                     context: ModelContext) throws {
+        if let first = images.first {
+            message.imageData = first
+            message.thumbnailData = makeThumbnail(first)
+        }
+        message.extraImagesJSON = images.count > 1
+            ? (try? JSONEncoder().encode(Array(images.dropFirst())))
+            : nil
+        message.seriesMetaJSON = (try? JSONEncoder().encode(meta))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        try context.save()
+    }
+
     /// P0-69 缩略图生成（长边 400px、JPEG 0.7）：列表渲染用——防大图（2K 约数 MB）在列表滚动时卡顿；
     /// 小图原样返回；生成失败回退 nil（渲染层自动用原图）。
     static func makeThumbnail(_ data: Data) -> Data? {
@@ -90,7 +140,7 @@ enum ToolPipeline {
 
     /// P0-64 工具失败上报（fire-and-forget、静默）：业务错误对云端可见（此前只有崩溃上报）。
     /// 管理台可据此发现"某个能力在特定账号上持续失败"——在线定位问题、减少人工排查。
-    static func reportFailure(pluginID: String, reason: String) {
+    static func reportFailure(pluginID: String, reason: String, requestId: String = "", errorCode: String = "") {
         guard HostedAccount.isHostedActive else { return }
         Task { @MainActor in
             guard let token = HostedAccount.shared.token,
@@ -99,7 +149,12 @@ enum ToolPipeline {
             req.httpMethod = "POST"
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: ["tool": pluginID, "reason": String(reason.prefix(300))])
+            if !requestId.isEmpty { req.setValue(requestId, forHTTPHeaderField: "X-Request-Id") }
+            // 10-24 P1-8：带上 requestId / errorCode，管理台能把"工具失败"与"服务端那次请求"对上
+            var payload: [String: Any] = ["tool": pluginID, "reason": String(reason.prefix(300))]
+            if !requestId.isEmpty { payload["requestId"] = requestId }
+            if !errorCode.isEmpty { payload["errorCode"] = errorCode }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
             // 10-23 P3：工具失败上报走受限网络客户端，响应体限制 256KB
             _ = try? await BoundedHTTPClient.data(for: req,
                                                   session: BoundedHTTPClient.searchSession,

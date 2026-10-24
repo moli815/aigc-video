@@ -1,26 +1,32 @@
 import Foundation
 
 // ============================================================================
-// 文件职责：文生图 / 参考图编辑服务。
+// 文件职责：文生图 / 参考图编辑 / 组图服务。
 // 在 App 中的角色：ChatService 之外的第二条模型调用链——按 ImageProfile（火山
 //   Seedream / 智谱 CogView / 云端 hosted）调用 /images/generations 并解码图片。
 // 关键设计决策与防呆：
 //   1. 统一走 BoundedHTTPClient（限响应体大小 + 专用超时会话），防止异常大响应拖垮内存；
 //   2. 云端 hosted 模式只透出服务端中文 message，不泄露上游错误细节；401 等会话
 //      失效错误统一交给 HostedAccount 强制登出；
-//   3. b64 与 URL 两种返回形态都支持，URL 限定 https 且校验 MIME，防止误下载。
+//   3. b64 与 URL 两种返回形态都支持，URL 限定 https 且校验 MIME，防止误下载；
+//   4. 10-24 组图：新增 generateSeries() 返回**多图结果**，不再把 N 张塞进单个 Data。
+//      单图 generate() 保留原契约，旧调用点零改动。
 // ============================================================================
 
 /// 图像服务：按识别到的服务商档案调用（火山 Seedream 4.0 / 智谱 CogView）。
-/// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）。
+/// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）；云端模式支持组图编排。
 final class ImageService {
     /// 生图相关错误的统一封装（errorDescription 均为用户可读中文）。
-    /// missingKey=未配置 Key；badResponse=上游响应异常(状态码+脱敏片段)；
-    /// noImage=响应里没有图片；unsupportedEdit=当前服务商不支持参考图编辑。
-    enum ImageError: LocalizedError {
-        case missingKey, badResponse(Int, String), noImage, unsupportedEdit
-        /// 云端会员模式的结构化错误（不泄露上游细节）
+    enum ImageError: LocalizedError, APIErrorCarrying {
+        case missingKey
+        case badResponse(Int, String)
+        case noImage
+        case unsupportedEdit
+        /// 云端会员模式的结构化错误（历史形态，保留兼容）
         case hosted(Int, String, String)
+        /// 10-24：带完整信封（actions / requestId / retryable）的云端错误
+        case envelope(APIErrorEnvelope)
+
         var errorDescription: String? {
             switch self {
             case .unsupportedEdit: return "当前作图服务不支持参考图编辑，请切换支持编辑的服务商。"
@@ -28,25 +34,33 @@ final class ImageService {
             case .badResponse(let code, let body): return "生图失败（\(code)）：\(body.prefix(300))"
             case .noImage: return "生图接口未返回图片"
             case .hosted(_, _, let message): return message
+            case .envelope(let e): return e.message
             }
         }
-        /// 会话失效（重置密码/封停/到期）——调用方据此强制登出
+
+        /// 会话失效（重置密码/封停/到期）—— 调用方据此强制登出
         var isSessionFailure: Bool {
-            if case .hosted(let status, let code, _) = self {
+            switch self {
+            case .envelope(let e): return e.isSessionFailure
+            case .hosted(let status, let code, _):
                 return status == 401 || code == "ACCOUNT_SUSPENDED" || code == "MEMBERSHIP_EXPIRED"
+            default: return false
             }
-            return false
         }
-        /// P0-52 是否可重试：仅上游网关/超时类错误（5xx）可自动重试；
-        /// 参数(4xx)/额度/会话失效等不可重试（重试无意义或有副作用）。
+
+        /// 是否可重试：优先用服务端给出的 retryable，旧服务端回落到状态码判断。
         var isRetryable: Bool {
-            // P0-80 瞬时错误可重试（App 端双保险）：5xx + 429/430/439（网关限流/上游抖动——
-            // "不要直接反馈给用户，先自己多尝试几次"；服务端也有一层重试）
+            if case .envelope(let e) = self { return e.retryable }
             switch self {
             case .badResponse(let code, _): return code >= 500 || [429, 430, 439].contains(code)
             case .hosted(let code, _, _): return code >= 500 || [429, 430, 439].contains(code)
             default: return false
             }
+        }
+
+        var envelope: APIErrorEnvelope? {
+            if case .envelope(let e) = self { return e }
+            return nil
         }
     }
 
@@ -72,7 +86,6 @@ final class ImageService {
         credReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         credReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
         credReq.httpBody = try? JSONSerialization.data(withJSONObject: ["ext": "jpg"])
-        // 10-23 P3：凭证请求走受限网络客户端，响应体限制 256KB
         guard let (credData, credResp) = try? await BoundedHTTPClient.data(for: credReq,
                                                                            session: BoundedHTTPClient.chatSession,
                                                                            limit: 256 * 1024),
@@ -84,14 +97,12 @@ final class ImageService {
 
         // 10-22 安全：直传前校验 host 白名单。凭证由服务端签发，但若链路被篡改/配置错误，
         // 原实现会把用户图片 PUT 到任意第三方域名。这里只放行腾讯云 COS / CloudBase 域。
-        // 10-23 P3 补充：必须强制 HTTPS，防止授权头经明文传输。
         guard putURL.scheme?.lowercased() == "https",
               let putHost = putURL.host?.lowercased(),
               putHost.hasSuffix(".myqcloud.com") || putHost.hasSuffix(".tcloudbase.com") || putHost.hasSuffix(".tencentcloudapi.com")
         else { return nil }
 
-        // ② 直传 COS（PUT）：图片上传不走 BoundedHTTPClient 的 bytes 流（上传体已知大小），
-        // 但仍用 imageSession 保证统一超时；响应体很小，限制 64KB。
+        // ② 直传 COS（PUT）
         var putReq = URLRequest(url: putURL)
         putReq.httpMethod = "PUT"
         putReq.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
@@ -120,15 +131,20 @@ final class ImageService {
         return url
     }
 
-    /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
-    /// 其他厂商收到 reference 时退化为按新描述重新生成）。
-    /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    /// 10-24 路由契约：客户端只表达**业务意图**（taskKind / qualityTier / requestedCount），
-    /// 模型 ID 由服务端 selectImageRoute 决定。客户端传 model 在 hosted 模式下会被忽略。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
-        // 10-23 关键修复：hosted 模式必须用「会员 token」鉴权——服务端 bf-image 校验的是账号 token，
-        // 供应商 Key 只在服务端。旧实现第一行就 guard apiKey（hosted 下为空）→ 直接抛 missingKey，
-        // 模型收到工具失败后转述成"当前专家配置禁止使用 image_generate"（用户看到的错误结论）。
+    // MARK: - 请求构造（单图与组图共用，避免两套 body 漂移）
+
+    /// 组装生图请求。10-24 路由契约：客户端只表达**业务意图**
+    /// （taskKind / qualityTier / requestedCount），模型 ID 由服务端决定。
+    private func makeRequest(prompt: String,
+                             references: [Data],
+                             structured: [String: Any]?,
+                             requestId: String?,
+                             layerDecomposition: Bool,
+                             renderIntent: String?,
+                             aspectRatio: String?,
+                             taskKind: String?,
+                             qualityTier: String?,
+                             requestedCount: Int?) async throws -> URLRequest {
         let apiKey: String
         if profile.id == "hosted" {
             guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
@@ -137,9 +153,7 @@ final class ImageService {
             guard let k = apiKeyProvider(), !k.isEmpty else { throw ImageError.missingKey }
             apiKey = k
         }
-        // 10-19 关键修复：hosted 模式改走 bf-image 独立函数（/img/image）——
-        // 实测 /api/image 这条路径在网关层被特殊对待：同代码 /api/test-upstream 39s、/api/image >320s。
-        // 新路径 /img/image 实测 42s 稳定。
+
         let endpoint: String
         if profile.id == "hosted" {
             let hostBase = AppConfig.hostedAPIBase.replacingOccurrences(of: "/api", with: "/img")
@@ -150,30 +164,34 @@ final class ImageService {
         guard let url = URL(string: endpoint) else {
             throw ImageError.badResponse(400, "服务地址无效")
         }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // P0-64 超时云端可调（在线可修复）：管理台改 APP_IMAGE_TIMEOUT 即生效
-        request.timeoutInterval = HostedAccount.isHostedActive ? HostedAccount.cachedImageTimeout : 180
+        // 10-24：把 requestId 同时放进请求头 —— 服务端日志、幂等任务、账务事件共用同一个 ID，
+        // 排障时能一条链路串起来（P1-8）。
+        if let requestId, !requestId.isEmpty {
+            request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
+        }
+        let baseTimeout = HostedAccount.isHostedActive ? HostedAccount.cachedImageTimeout : 180
+        let count = max(1, requestedCount ?? 1)
+        // 组图是串行生成，超时必须按时长放大，否则客户端先超时、服务端还在跑（会重复扣费）
+        request.timeoutInterval = min(600, baseTimeout * Double(count))
 
         var body: [String: Any] = [
             "model": profile.model,
             "prompt": prompt,
         ]
-        // 10-21 结构化视觉字段：服务端按模板拼装成专业 prompt（信息可控、画面文字更准）
         if let structured, !structured.isEmpty {
             body["structured"] = structured
         }
-        // 10-22 幂等键：同一 requestId 在服务端 5 分钟内复用结果，避免"回填失败重试"重复生成/重复扣费
         if let requestId, !requestId.isEmpty {
             body["requestId"] = requestId
         }
-        // 10-23 图层拆分（Seedream 5.0 pro 原生）：仅 1 张图，返回底图 + 最多 16 个透明 PNG 图层
         if layerDecomposition {
             body["layer_decomposition"] = true
         }
-        // 10-23 出图意图契约：flat_artwork=可印刷平面稿（禁白底/样机）｜mockup=展示稿
         if let renderIntent, !renderIntent.isEmpty {
             body["render_intent"] = renderIntent
         }
@@ -184,84 +202,84 @@ final class ImageService {
         if let taskKind, !taskKind.isEmpty { body["task_kind"] = taskKind }
         if let qualityTier, !qualityTier.isEmpty { body["quality_tier"] = qualityTier }
         if let requestedCount, requestedCount > 1 { body["requested_count"] = requestedCount }
+
         switch profile.style {
         case .volc:
-            // 10-23：会员模式**不传 size**——尺寸由 bf-image 按云端 IMAGE_SIZE（默认 1.5K）决定。
-            // 此前客户端写死 2K，既与云端配置打架，又让每张图按最高价档计费。
+            // 会员模式不传 size：尺寸由 bf-image 按云端配置决定。
             // 自带 Key 直连上游、没有服务端配置可读，保持 2K 规格不变。
             if !HostedAccount.isHostedActive { body["size"] = "2K" }
             body["response_format"] = "b64_json"
             body["watermark"] = false
             if !references.isEmpty {
-                // P0-65 多图参考：Seedream 支持数组（[底图, 叠加元素] 顺序融合）——
-                // 修复「把用户上传的 Logo 加到 AI 上次生成的图上」这类双图场景（此前单图只能传一张，底图会搞错）
-                // 方案A（10-19）：hosted 模式下先把参考图直传云存储拿公网 URL——
-                // 云函数出网代理会 reset"带二进制图的请求"，只有传 URL 才能打通编辑链路。
                 var uris: [String] = []
                 for ref in references {
                     if profile.id == "hosted", let u = await Self.uploadForHosted(ref) {
                         uris.append(u)
                     } else {
-                        // BYOK 直连 / 上传失败：回退内联 base64（原有行为）
                         let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
                         uris.append("data:\(mime);base64,\(ref.base64EncodedString())")
                     }
                 }
-                body["image"] = uris.count == 1 ? uris[0] : uris   // 单图保持字符串（兼容），多图传数组
+                body["image"] = uris.count == 1 ? uris[0] : uris
             }
         case .zhipu:
             if !references.isEmpty { throw ImageError.unsupportedEdit }
-            // CogView：仅文生图，返回 URL
             break
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
 
+    /// 非 200 响应 → 结构化错误（hosted 模式解析信封；BYOK 脱敏展示）
+    private func error(from data: Data, response: HTTPURLResponse) -> ImageError {
+        let bodyText = String(data: data, encoding: .utf8) ?? ""
+        if profile.id == "hosted",
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let env = APIErrorEnvelope.parse(status: response.statusCode, json: obj) {
+                return .envelope(env)
+            }
+            if let message = obj["message"] as? String {
+                return .hosted(response.statusCode, (obj["error"] as? String) ?? "", message)
+            }
+        }
+        return .badResponse(
+            response.statusCode,
+            "服务商响应异常（\(response.statusCode)），请稍后重试。\(String(bodyText.suffix(200)))"
+        )
+    }
+
+    /// 下载单张图片：仅 https，校验状态码 + MIME + 体积上限
+    private static func downloadImage(_ urlString: String) async throws -> Data {
+        guard let url = URL(string: urlString), url.scheme == "https" else { throw ImageError.noImage }
+        let (img, resp) = try await BoundedHTTPClient.data(for: URLRequest(url: url),
+                                                          session: BoundedHTTPClient.imageSession,
+                                                          limit: 32 * 1024 * 1024)
+        guard resp.statusCode == 200, resp.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
+        return img
+    }
+
+    // MARK: - 单图（保持原契约，旧调用点零改动）
+
+    /// 生成图片；reference 非空时为参考图编辑。返回：图片二进制（PNG/JPEG）。
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
+        let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
+                                            requestId: requestId, layerDecomposition: layerDecomposition,
+                                            renderIntent: renderIntent, aspectRatio: aspectRatio,
+                                            taskKind: taskKind, qualityTier: qualityTier,
+                                            requestedCount: requestedCount)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
         if response.statusCode != 200 {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            // 云端会员模式：只透出服务端中文消息，不泄露上游细节；会话失效统一强制登出
-            if profile.id == "hosted",
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let message = obj["message"] as? String {
-                let code = (obj["error"] as? String) ?? ""
-                let hostedErr = ImageError.hosted(response.statusCode, code, message)
-                if hostedErr.isSessionFailure {
-                    await HostedAccount.shared.handleSessionFailure(message)
-                }
-                throw hostedErr
+            let err = error(from: data, response: response)
+            if err.isSessionFailure {
+                await HostedAccount.shared.handleSessionFailure(err.errorDescription ?? "")
             }
-            // 手动 Key 模式：脱敏展示
-            throw ImageError.badResponse(
-                response.statusCode,
-                "服务商响应异常（\(response.statusCode)），请稍后重试。\(String(bodyText.suffix(200)))"
-            )
+            throw err
         }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ImageError.noImage
         }
-        // 10-23 关键修复：bf-image（hosted 模式）返回的是扁平结构 { ok, url, cost, cached, retried }，
-        // 而这里此前只解析 OpenAI 的 { data: [ { url | b64_json } ] } ——
-        // 结果是「服务端已经出图并扣了 0.45、App 端却抛 noImage」，用户看到"无法出图"。
-        // 先认扁平 url，再回落到标准 data 数组。
-        // 10-24 组图：服务端编排器返回 { items: [{index, ok, url, ...}], succeeded, partial }，
-        // 顶层没有 url 字段。取第一张成功的先展示，多图展示留待后续版本。
-        if let items = json["items"] as? [[String: Any]] {
-            if let s = (items.first { ($0["ok"] as? Bool) == true })?["url"] as? String,
-               let u = URL(string: s), u.scheme == "https" {
-                let (img, resp) = try await BoundedHTTPClient.data(for: URLRequest(url: u),
-                                                                  session: BoundedHTTPClient.imageSession,
-                                                                  limit: 32 * 1024 * 1024)
-                guard resp.statusCode == 200, resp.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
-                return img
-            }
-            throw ImageError.noImage
-        }
-        if let urlString = json["url"] as? String, let url = URL(string: urlString), url.scheme == "https" {
-            let (img, response) = try await BoundedHTTPClient.data(for: URLRequest(url: url),
-                                                                 session: BoundedHTTPClient.imageSession,
-                                                                 limit: 32 * 1024 * 1024)
-            guard response.statusCode == 200, response.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
-            return img
+        if let urlString = json["url"] as? String {
+            return try await Self.downloadImage(urlString)
         }
         if let b64 = json["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
             return img
@@ -270,15 +288,203 @@ final class ImageService {
             throw ImageError.noImage
         }
         if let b64 = first["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
-            // b64 优先：数据已在手，省一次网络往返；32MB 上限防异常大图
             return img
         }
-        if let urlString = first["url"] as? String, let url = URL(string: urlString), url.scheme == "https" {
-            // URL 形态：仅接受 https，防明文下载被劫持
-            let (img, response) = try await BoundedHTTPClient.data(for: URLRequest(url: url), session: BoundedHTTPClient.imageSession, limit: 32 * 1024 * 1024)
-            guard response.statusCode == 200, response.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
-            return img
+        if let urlString = first["url"] as? String {
+            return try await Self.downloadImage(urlString)
         }
         throw ImageError.noImage
+    }
+
+    // MARK: - 组图（10-24 新增：N 张逐张下载，不再只取第一张）
+
+    /// 单张子任务的结果（成功或失败的**用户可见**信息）
+    struct SeriesItemResult: Equatable {
+        let index: Int
+        let ok: Bool
+        /// 已下载到本机的图片（ok=true 且下载成功时非空）
+        let imageData: Data?
+        let remoteURL: String
+        let model: String
+        let cost: Double
+        /// 失败的友好文案（成功时为空）
+        let message: String
+        /// 机器分类（仅用于日志/重试判断，不展示）
+        let errorCategory: String
+        /// 上游已出图但本地下载失败 —— 这种情况**不能重新生成**
+        let downloadFailed: Bool
+        let reused: Bool
+    }
+
+    /// 组图结果：请求 N 张时，成功几张、失败哪几张、花了多少，全部结构化。
+    struct SeriesOutcome: Equatable {
+        let requestId: String
+        let requested: Int
+        let items: [SeriesItemResult]
+        let pricedCny: Double
+        let committedCny: Double
+        let pendingCostCount: Int
+        let partial: Bool
+        let cached: Bool
+        let size: String
+        let qualityTier: String
+
+        var succeededItems: [SeriesItemResult] { items.filter { $0.imageData != nil } }
+        var failedIndices: [Int] { items.filter { !$0.ok }.map(\.index) }
+        var downloadFailedIndices: [Int] { items.filter { $0.downloadFailed }.map(\.index) }
+        var succeededCount: Int { succeededItems.count }
+        /// 上游确认成功（含下载失败的）张数
+        var upstreamSucceeded: Int { items.filter(\.ok).count }
+    }
+
+    /// 组图：服务端把它拆成 N 个单图子任务，逐张返回。
+    /// 每张单独校验 HTTPS/MIME/体积；单张下载失败只影响该张，不抛整组错误。
+    func generateSeries(prompt: String,
+                        requestId: String?,
+                        requestedCount: Int,
+                        qualityTier: String? = nil,
+                        aspectRatio: String? = nil,
+                        renderIntent: String? = nil,
+                        structured: [String: Any]? = nil,
+                        references: [Data] = []) async throws -> SeriesOutcome {
+        let n = max(2, min(4, requestedCount))
+        let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
+                                            requestId: requestId, layerDecomposition: false,
+                                            renderIntent: renderIntent, aspectRatio: aspectRatio,
+                                            taskKind: "series", qualityTier: qualityTier,
+                                            requestedCount: n)
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.imageSession,
+                                                                limit: 48 * 1024 * 1024)
+        if response.statusCode != 200 {
+            let err = error(from: data, response: response)
+            if err.isSessionFailure {
+                await HostedAccount.shared.handleSessionFailure(err.errorDescription ?? "")
+            }
+            throw err
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+
+        var items: [SeriesItemResult] = []
+        if let rawItems = json["items"] as? [[String: Any]] {
+            for (offset, raw) in rawItems.enumerated() {
+                let index = (raw["index"] as? Int) ?? (offset + 1)
+                let ok = (raw["ok"] as? Bool) ?? false
+                let remote = (raw["url"] as? String) ?? ""
+                let model = (raw["model"] as? String) ?? ""
+                let cost = (raw["cost"] as? Double) ?? Double((raw["cost"] as? NSNumber)?.doubleValue ?? 0)
+                let message = (raw["message"] as? String) ?? ""
+                let category = (raw["errorCategory"] as? String) ?? ""
+                let reused = (raw["reused"] as? Bool) ?? false
+
+                var imageData: Data?
+                var downloadFailed = false
+                if ok, !remote.isEmpty {
+                    do {
+                        imageData = try await Self.downloadImage(remote)
+                    } catch {
+                        // 上游已出图、只是本机没拿到：记录为"下载失败"，绝不重新生成
+                        downloadFailed = true
+                    }
+                }
+                items.append(SeriesItemResult(index: index, ok: ok, imageData: imageData,
+                                              remoteURL: remote, model: model, cost: cost,
+                                              message: ok ? "" : (message.isEmpty ? "这一张没有生成成功，可以单独重试。" : message),
+                                              errorCategory: category,
+                                              downloadFailed: downloadFailed, reused: reused))
+            }
+        } else if let url = json["url"] as? String {
+            // 服务端降级成单图结构（例如旧版本）：包成 1 张，保证不丢结果
+            let img = try? await Self.downloadImage(url)
+            items = [SeriesItemResult(index: 1, ok: true, imageData: img, remoteURL: url,
+                                      model: (json["model"] as? String) ?? "", cost: 0,
+                                      message: "", errorCategory: "",
+                                      downloadFailed: img == nil, reused: false)]
+        } else {
+            throw ImageError.noImage
+        }
+
+        let priced = (json["pricedCny"] as? Double) ?? (json["billedCny"] as? Double) ?? 0
+        let committed = (json["committedCny"] as? Double) ?? 0
+        let pending = (json["pendingCostCount"] as? Int) ?? 0
+        return SeriesOutcome(
+            requestId: (json["requestId"] as? String) ?? (requestId ?? ""),
+            requested: (json["requested"] as? Int) ?? n,
+            items: items.sorted { $0.index < $1.index },
+            pricedCny: priced,
+            committedCny: committed,
+            pendingCostCount: pending,
+            partial: (json["partial"] as? Bool) ?? false,
+            cached: (json["cached"] as? Bool) ?? false,
+            size: (json["size"] as? String) ?? "",
+            qualityTier: (json["quality_tier"] as? String) ?? (qualityTier ?? "")
+        )
+    }
+
+    /// 只重试失败的子图（服务端保证已成功的不会重跑、也不重复扣费）
+    func retryFailedSeries(parentRequestId: String, indices: [Int]) async throws -> SeriesOutcome {
+        guard let url = URL(string: AppConfig.hostedAPIBase.replacingOccurrences(of: "/api", with: "/img") + "/series/retry") else {
+            throw ImageError.badResponse(400, "服务地址无效")
+        }
+        guard let token = HostedAccount.currentToken, !token.isEmpty else { throw ImageError.missingKey }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(parentRequestId, forHTTPHeaderField: "X-Request-Id")
+        request.timeoutInterval = min(600, HostedAccount.cachedImageTimeout * Double(max(1, indices.count)) + 30)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "requestId": parentRequestId,
+            "indices": indices,
+        ])
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.imageSession,
+                                                                limit: 48 * 1024 * 1024)
+        if response.statusCode != 200 {
+            let err = error(from: data, response: response)
+            if err.isSessionFailure {
+                await HostedAccount.shared.handleSessionFailure(err.errorDescription ?? "")
+            }
+            throw err
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawItems = json["items"] as? [[String: Any]] else {
+            throw ImageError.noImage
+        }
+        var items: [SeriesItemResult] = []
+        for (offset, raw) in rawItems.enumerated() {
+            let index = (raw["index"] as? Int) ?? (offset + 1)
+            let ok = (raw["ok"] as? Bool) ?? false
+            let remote = (raw["url"] as? String) ?? ""
+            var imageData: Data?
+            var downloadFailed = false
+            if ok, !remote.isEmpty {
+                do { imageData = try await Self.downloadImage(remote) }
+                catch { downloadFailed = true }
+            }
+            items.append(SeriesItemResult(
+                index: index, ok: ok, imageData: imageData, remoteURL: remote,
+                model: (raw["model"] as? String) ?? "",
+                cost: (raw["cost"] as? Double) ?? Double((raw["cost"] as? NSNumber)?.doubleValue ?? 0),
+                message: ok ? "" : ((raw["message"] as? String) ?? "这一张仍然没有生成成功。"),
+                errorCategory: (raw["errorCategory"] as? String) ?? "",
+                downloadFailed: downloadFailed,
+                reused: (raw["reused"] as? Bool) ?? false
+            ))
+        }
+        return SeriesOutcome(
+            requestId: (json["requestId"] as? String) ?? parentRequestId,
+            requested: (json["requested"] as? Int) ?? items.count,
+            items: items.sorted { $0.index < $1.index },
+            pricedCny: (json["pricedCny"] as? Double) ?? 0,
+            committedCny: (json["committedCny"] as? Double) ?? 0,
+            pendingCostCount: (json["pendingCostCount"] as? Int) ?? 0,
+            partial: (json["partial"] as? Bool) ?? false,
+            cached: (json["cached"] as? Bool) ?? false,
+            size: (json["size"] as? String) ?? "",
+            qualityTier: (json["quality_tier"] as? String) ?? ""
+        )
     }
 }

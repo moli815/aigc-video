@@ -48,7 +48,36 @@ struct MessageRow: View {
     /// 按角色分流：user 右对齐气泡；AI 左侧头像 + 平铺内容
     /// 该消息是否"以文字开头"——决定头像是否需要光学微调
     private var startsWithText: Bool {
-        message.thumbnailData == nil && message.imageData == nil && files.isEmpty
+        message.thumbnailData == nil && message.imageData == nil
+            && message.extraImagesJSON == nil && files.isEmpty
+    }
+
+    /// 组图（10-24）：有元信息且有额外图片时走网格；单图/旧消息保持原渲染路径不变
+    private var isSeriesMessage: Bool {
+        // 只要带了组图元信息就走网格：1/2 成功时也要显示"已完成 1/2 · 失败 #2"
+        message.seriesMeta != nil
+    }
+
+    /// 图片区（单图 / 组图 / 缺原图占位）。
+    /// 抽成独立 @ViewBuilder：body 里再堆分支容易触发 SwiftUI 类型检查超时。
+    @ViewBuilder
+    private var imageSection: some View {
+        if isSeriesMessage, let meta = message.seriesMeta {
+            SeriesImageGrid(messageID: message.id,
+                            meta: meta,
+                            firstImage: message.imageData,
+                            extraImagesJSON: message.extraImagesJSON)
+        } else if let original = message.imageData {
+            MessageImageView(thumbnailData: message.thumbnailData,
+                             originalData: original,
+                             canRegenerate: onRegenerate != nil,
+                             onRegenerate: onRegenerate).equatable()
+        } else if message.thumbnailData != nil {
+            Text("原图未下载，无法放大/保存。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 8)
+        }
     }
 
     var body: some View {
@@ -85,17 +114,7 @@ struct MessageRow: View {
                     VStack(alignment: .leading, spacing: 8) {
                         // 10-23 P3：列表渲染用缩略图，全屏/保存/分享必须用原图，避免用户存下 400px 小图。
                         // 只有原图存在时才显示图片；原图缺失时显示"未下载原图"占位，不拿缩略图冒充原图。
-                        if let original = message.imageData {
-                            MessageImageView(thumbnailData: message.thumbnailData,
-                                             originalData: original,
-                                             canRegenerate: onRegenerate != nil,
-                                             onRegenerate: onRegenerate).equatable()
-                        } else if message.thumbnailData != nil {
-                            Text("原图未下载，无法放大/保存。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 8)
-                        }
+                        imageSection
                         ForEach(files, id: \.id) { file in
                             FileCardView(file: file) { onPreview(file) }
                         }
@@ -106,7 +125,7 @@ struct MessageRow: View {
                                                 streaming: streamingText != nil,
                                                 isLastAssistant: isLastAssistant,
                                                 onRegenerate: onRegenerate).equatable()
-                        } else if message.imageData == nil && files.isEmpty {
+                        } else if message.imageData == nil && message.extraImagesJSON == nil && files.isEmpty {
                             // 既无文本也无图片/文件：仅"活跃流式"才显示等待态。
                             // 10-23 P0：失败/完成后残留的空消息不再画光标（此前会一直闪）。
                             if isLive {

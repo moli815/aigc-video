@@ -48,7 +48,14 @@ enum FriendlyError {
     /// - 顺序沿用服务端给的顺序，服务端可以决定"再试一次"排在"修改描述"前面；
     /// - 文案由客户端维护（而不是服务端下发中文），避免同一动作在不同版本里措辞漂移。
     static func actions(from json: [String: Any]?) -> [(id: String, title: String)] {
-        guard let raw = json?["actions"] as? [String], !raw.isEmpty else { return [] }
+        guard let raw = json?["actions"] as? [String] else { return [] }
+        return actions(from: raw)
+    }
+
+    /// 10-24：直接吃信封里的 action ID 列表（APIErrorEnvelope.actions）。
+    /// 白名单之外一律丢弃 —— 服务端新增动作不能让旧 App 崩或出现空按钮。
+    static func actions(from raw: [String]) -> [(id: String, title: String)] {
+        guard !raw.isEmpty else { return [] }
         let titles: [String: String] = [
             "retry": "再试一次",
             "edit_request": "修改描述",

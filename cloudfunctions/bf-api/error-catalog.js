@@ -97,6 +97,36 @@ const CATALOG = {
     message: "当前额度已经用完，额度重置后可以继续使用。",
     actions: ["view_quota"],
   },
+  SERIES_ALL_FAILED: {
+    category: "upstream_error", retryable: true,
+    message: "这次几张都没有生成成功，可以再试一次；已经保存过的图片不会有任何变化。",
+    actions: ["retry", "edit_request"],
+  },
+  PLEASE_UPDATE: {
+    category: "capability", retryable: false,
+    message: "这个功能需要更新到最新版本才能使用。更新后原来的数据不会丢。",
+    actions: ["contact_support"],
+  },
+  QUOTA_CHECK_UNAVAILABLE: {
+    category: "billing", retryable: true,
+    message: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
+    actions: ["retry", "view_quota"],
+  },
+  QUOTA_INSUFFICIENT: {
+    category: "billing", retryable: false,
+    message: "剩余额度不足以完成这次的全部图片。可以先做一张，或续费后再试。",
+    actions: ["single_only", "renew", "cancel"],
+  },
+  SERIES_NOT_FOUND: {
+    category: "input", retryable: false,
+    message: "没有找到这次组图任务的记录，重新描述一次就能再生成。",
+    actions: ["edit_request"],
+  },
+  TASK_CANCELLED: {
+    category: "cancelled", retryable: false,
+    message: "这次任务已经取消，没有继续生成。",
+    actions: [],
+  },
   RATE_LIMITED: {
     category: "billing", retryable: true,
     message: "短时间内请求比较多，稍微等一下再试。",

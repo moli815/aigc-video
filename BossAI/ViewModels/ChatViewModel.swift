@@ -59,6 +59,14 @@ final class ChatViewModel: ObservableObject {
     @Published var isStreaming = false
     @Published var statusText: String?
     @Published var errorMessage: String?
+    /// 10-24：结构化错误信封（actions / requestId / retryable）。
+    /// 有值时 UI 渲染可点按钮；旧服务端没有这些字段时为 nil，行为与旧版一致。
+    @Published var errorEnvelope: APIErrorEnvelope?
+    /// 组图有失败项时的重试上下文（仅内存，不落库）：UI 点「重试剩余」用这个。
+    /// 存 requestId（= 父任务 ID，服务端据此找到完整结果）与失败序号。
+    @Published var pendingSeriesRetry: SeriesRetryContext?
+    /// 组图补画进行中（按钮 loading / 防重复点击）
+    @Published var isRetryingSeries = false
     /// 10-23 P0：部分成功提示。产物（图片/文档）已保存，但后续"最终说明"没生成完。
     /// 与 errorMessage 分开：不显示红色失败、不提供"重新生成"（避免重复生图扣费），
     /// 只给一个"让 AI 补充说明"的轻量入口。
@@ -343,6 +351,39 @@ final class ChatViewModel: ObservableObject {
                 guard retryable, attempt < limit else { throw error }
                 attempt += 1
                 try await Task.sleep(nanoseconds: 1_200_000_000)
+            }
+        }
+    }
+
+    /// 10-24 组图：与单图同构的重试策略（同一 requestId、可重试错误退避一次）。
+    /// 关键差异：组图**不按"整组重试"**，失败项由服务端在 /series/retry 里单独补画。
+    nonisolated static func generateSeriesWithRetry(prompt: String,
+                                                    references: [Data],
+                                                    service: ImageService,
+                                                    requestedCount: Int,
+                                                    structured: [String: Any]? = nil,
+                                                    renderIntent: String? = nil,
+                                                    aspectRatio: String? = nil,
+                                                    qualityTier: String? = nil) async throws -> ImageService.SeriesOutcome {
+        let idemKey = UUID().uuidString
+        let limit = HostedAccount.isHostedActive ? HostedAccount.cachedImageRetry : 1
+        var attempt = 0
+        while true {
+            do {
+                return try await service.generateSeries(prompt: prompt, requestId: idemKey,
+                                                        requestedCount: requestedCount,
+                                                        qualityTier: qualityTier,
+                                                        aspectRatio: aspectRatio,
+                                                        renderIntent: renderIntent,
+                                                        structured: structured,
+                                                        references: references)
+            } catch {
+                // 429/409（额度/进行中）不自动重试：重试只会再撞一次，交给用户决定
+                let retryable = (error as? URLError) != nil
+                    || ((error as? ImageService.ImageError)?.isRetryable ?? false)
+                guard retryable, attempt < limit else { throw error }
+                attempt += 1
+                try await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
     }
@@ -798,6 +839,15 @@ actor ImageDataURLCache {
 
 /// High-frequency deltas update only the active message, not the whole conversation VM.
 @MainActor
+/// 组图失败项的重试上下文（10-24）。
+/// 只保存"服务端能定位到这次任务"的最少信息：父任务 requestId + 失败序号。
+struct SeriesRetryContext: Equatable {
+    let requestId: String
+    let failedIndices: [Int]
+    /// 重试成功后要更新的历史消息（用于原地合并，而不是新增一条）
+    let messageID: UUID?
+}
+
 final class StreamingReplyBuffer: ObservableObject {
     @Published var text = ""
 }

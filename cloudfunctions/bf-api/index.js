@@ -101,7 +101,7 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL:        { type: "str", label: "作图模型 · 兼容别名（未配置下面两项时作为默认；建议逐步弃用）", def: () => process.env.IMAGE_MODEL || "doubao-seedream-5-0-flash-260915" },
   IMAGE_MODEL_FAST:   { type: "str", label: "作图模型 · 快速档（普通插画/配图/草稿，留空=用兼容别名）", def: () => process.env.IMAGE_MODEL_FAST || "" },
   IMAGE_MODEL_PRO:    { type: "str", label: "作图模型 · 高质量档（品牌主视觉/最终稿/精细改图）", def: () => process.env.IMAGE_MODEL_PRO || "doubao-seedream-5-0-pro-260628" },
-  IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（分镜/系列，须为支持组图的模型；留空=禁用组图）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
+  IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "1.5K" },
@@ -1517,10 +1517,24 @@ async function handleSyncPush(req, res) {
     const updatedAt = (Number.isFinite(rawTs) && rawTs > 0 && rawTs <= now + MAX_SKEW_MS) ? rawTs : now;
     const payload = typeof raw.payload === "string" ? raw.payload.slice(0, 400000) : JSON.stringify(raw.payload || {}).slice(0, 400000);
     try {
-      const exist = await db.collection(C.userData)
-        .where({ accountId: auth.sub, kind, refId }).limit(1).get();
-      const row = (exist.data || [])[0];
       const doc = { accountId: auth.sub, kind, refId, payload, updatedAt, deleted: !!raw.deleted, syncedAt: now };
+      // 10-24 P1-7：确定性 _id = sha256(accountId|kind|refId)。
+      // "先查后 add" 在并发下必然漏：两个请求同时查不到，各自 add 一条逻辑重复。
+      // 现在新记录一律用确定性 _id；add 撞车说明对方已建 → 读回按 LWW 处理。
+      const detId = crypto.createHash("sha256")
+        .update(String(auth.sub) + "|" + kind + "|" + refId)
+        .digest("hex").slice(0, 40);
+
+      let row = null;
+      const exact = await db.collection(C.userData).doc(detId).get().catch(() => null);
+      row = (exact && exact.data && exact.data[0]) || null;
+      if (!row) {
+        // 兼容历史随机 _id 的记录（迁移期：一旦命中，后续更新仍写回原文档）
+        const exist = await db.collection(C.userData)
+          .where({ accountId: auth.sub, kind, refId }).limit(1).get();
+        row = (exist.data || [])[0] || null;
+      }
+
       if (row) {
         // 最后写入者胜：本地更旧就不覆盖（防离线旧数据回滚云端新数据）
         if (Number(row.updatedAt || 0) <= updatedAt) {
@@ -1530,8 +1544,21 @@ async function handleSyncPush(req, res) {
           skippedIds.push(refId);
         }
       } else {
-        await db.collection(C.userData).add(doc);
-        acceptedIds.push(refId);
+        try {
+          await db.collection(C.userData).add(Object.assign({ _id: detId }, doc));
+          acceptedIds.push(refId);
+        } catch (eAdd) {
+          // 撞车：另一个并发请求刚建了同一条。读回并按 LWW 决定，绝不重复插入。
+          const back = await db.collection(C.userData).doc(detId).get().catch(() => null);
+          const d = (back && back.data && back.data[0]) || null;
+          if (!d) throw eAdd;
+          if (Number(d.updatedAt || 0) <= updatedAt) {
+            await db.collection(C.userData).doc(detId).update(doc);
+            acceptedIds.push(refId);
+          } else {
+            skippedIds.push(refId);
+          }
+        }
       }
     } catch (e) {
       failedItems.push({ refId, reason: String((e && e.message) || "写入失败").slice(0, 120) });
@@ -1580,43 +1607,78 @@ async function handleSyncPull(req, res, url) {
   }
   const out = [];
   let lastRow = null;
+  let ordering = "updatedAt+_id";
   try {
     const _ = db.command;
+    const sortRows = (arr) => arr.slice().sort((a, b) =>
+      (Number(a.updatedAt) - Number(b.updatedAt)) || String(a._id).localeCompare(String(b._id)));
+    const dedupe = (arr) => {
+      const seen = new Set();
+      const res = [];
+      for (const r of arr) {
+        const k = String(r._id);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        res.push(r);
+      }
+      return res;
+    };
+    const fetchLater = async (ts) => {
+      try {
+        return (await db.collection(C.userData)
+          .where({ accountId: auth.sub, updatedAt: _.gt(ts) })
+          .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get()).data || [];
+      } catch (e) {
+        // 环境不支持链式多字段排序：退回单字段，但**必须**靠下面的
+        // 「页尾毫秒组补齐」保证同一毫秒的记录不被页边界切断。
+        ordering = "updatedAt-only+ties";
+        console.log(JSON.stringify({ tag: "sync_pull_degraded", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+        return (await db.collection(C.userData)
+          .where({ accountId: auth.sub, updatedAt: _.gt(ts) })
+          .orderBy("updatedAt", "asc").limit(limit).get()).data || [];
+      }
+    };
+
     // 两段查询合并（避免依赖 or 的嵌套语法差异）：
-    //   ① updatedAt > cursorTs
-    //   ② updatedAt == cursorTs 且 _id > cursorId（同一毫秒内续页）
-    let rows = [];
+    //   ① updatedAt == cursorTs 且 _id > cursorId（同一毫秒内续页）
+    //   ② updatedAt > cursorTs
+    let raw = [];
     if (cursorId && cursorTs >= since) {
-      const laterQuery = () => db.collection(C.userData)
-        .where({ accountId: auth.sub, updatedAt: _.gt(cursorTs) })
-        .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get()
-        .catch(() => db.collection(C.userData)
-          .where({ accountId: auth.sub, updatedAt: _.gt(cursorTs) })
-          .orderBy("updatedAt", "asc").limit(limit).get());
-      const [later, sameTs] = await Promise.all([
-        laterQuery(),
+      const [sameTs, later] = await Promise.all([
         db.collection(C.userData)
           .where({ accountId: auth.sub, updatedAt: _.eq(cursorTs), _id: _.gt(cursorId) })
           .orderBy("_id", "asc").limit(limit).get(),
+        fetchLater(cursorTs),
       ]);
-      rows = (sameTs.data || []).concat(later.data || [])
-        .sort((a, b) => (a.updatedAt - b.updatedAt) || String(a._id).localeCompare(String(b._id)))
-        .slice(0, limit);
+      raw = (sameTs.data || []).concat(later);
     } else {
-      let r;
-      try {
-        r = await db.collection(C.userData)
-          .where({ accountId: auth.sub, updatedAt: _.gt(since) })
-          // 与续页保持同序：同一毫秒内按 _id 升序，否则游标的 tiebreaker 会错位
-          .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get();
-      } catch (e) {
-        // 兜底：个别环境/索引组合不接受链式多字段排序，退回单字段（顺序仍可用于游标）
-        r = await db.collection(C.userData)
-          .where({ accountId: auth.sub, updatedAt: _.gt(since) })
-          .orderBy("updatedAt", "asc").limit(limit).get();
-      }
-      rows = r.data || [];
+      raw = await fetchLater(since);
     }
+    let rows = dedupe(sortRows(raw)).slice(0, limit);
+
+    // 10-24 P1-6 关键修复：页边界绝不允许落在同一毫秒组的中间。
+    // 旧实现单字段降级后，页尾那一毫秒里没被返回的记录会永久错过——
+    // 下一页用 `> cursorTs` 直接跳过整组。现在把页尾毫秒组**补齐到完整**，
+    // 这样下一页从严格更大的时间戳开始，数学上不可能漏。
+    const TIE_TOTAL_CAP = 2000;
+    let tieGuard = 0;
+    while (rows.length && rows.length < TIE_TOTAL_CAP && tieGuard < 40) {
+      tieGuard++;
+      const last = rows[rows.length - 1];
+      const lastTs = Number(last.updatedAt);
+      let more = [];
+      try {
+        more = (await db.collection(C.userData)
+          .where({ accountId: auth.sub, updatedAt: _.eq(lastTs), _id: _.gt(String(last._id)) })
+          .orderBy("_id", "asc").limit(200).get()).data || [];
+      } catch (e) { break; }
+      if (!more.length) break;
+      const before = rows.length;
+      rows = dedupe(rows.concat(more)).slice(0, TIE_TOTAL_CAP);
+      if (rows.length === before) break;
+      if (more.length < 200) break;
+    }
+
     for (const d of rows) {
       out.push({ kind: d.kind, refId: d.refId, payload: d.payload, updatedAt: d.updatedAt, deleted: !!d.deleted });
     }
@@ -1639,7 +1701,7 @@ async function handleSyncPull(req, res, url) {
   } catch { /* 忽略 */ }
   sendJson(res, 200, {
     ok: true, items: out, serverTime: now, since,
-    hasMore, nextCursor, limit,
+    hasMore, nextCursor, limit, ordering,
   });
 }
 
@@ -2760,8 +2822,15 @@ async function handleImage(req, res) {
   const auth = await requireMember(req, res);
   if (!auth) return;
   // 10-19 图片服务已迁移到 bf-image 独立函数（/img/image）。/api/image 这条路径经实测在
-  // 网关层有特殊策略（同代码 39s vs >320s，连转发都被限），旧版 App 请升级到最新包。
-  return sendError(res, 503, "PLEASE_UPDATE", "图片服务已升级，请更新到最新版本后重试");
+  // 网关层有特殊策略（同代码 39s vs >320s），**不是**可用的兼容代理：
+  //   同一次生成走这里会被网关掐断，重试还会造成重复上游调用与重复计费。
+  //
+  // 10-24 交付口径（P1-11）：
+  //   · 最低兼容版本 = 使用 /img/image 的版本（当前 1.0/2026100901 及以后）；
+  //   · 更老的包在这里拿到 503 PLEASE_UPDATE，文案由 error-catalog 统一给；
+  //   · 版本门禁通过 /me 的 appUpdate.minVersion 下发（后台配置 MIN_APP_VERSION 即生效）。
+  //   不恢复旧代理是**有意为之**：恢复会引入双份计费与超时，代价大于收益。
+  return sendError(res, 503, "PLEASE_UPDATE");
 }
 /* eslint-disable */
 async function __legacyHandleImageDisabled(req, res) {

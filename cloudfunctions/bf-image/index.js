@@ -161,7 +161,10 @@ async function refreshRuntime() {
         if (v !== undefined && v !== null && v !== "") RT[k] = v;
       }
     }
-  } catch (e) { /* DB 异常：沿用当前值 */ }
+  } catch (e) {
+    // 10-24 P1-8：配置刷新失败不能静默 —— 意味着这一轮用的是旧模型/旧价格
+    logStage("runtime_refresh_failed", { err: String((e && e.message) || e).slice(0, 120) });
+  }
 }
 
 // 单价与官方成本对齐（2026-10-21 核实：1.5K 及以下 0.30/张，2K 0.60/张）
@@ -194,6 +197,127 @@ function priceForSize(size, model) {
   // 再判模型：Flash 单独一档
   if (/seedream-5-0-flash/i.test(mdl)) return Number(RT.IMAGE_PRICE_FAST);
   return Number(RT.IMAGE_PRICE_SMALL);
+}
+
+/**
+ * 10-24 组图编排器（计划 P0-8）。
+ *
+ * 现状：`sequential_image_generation` 是原生组图能力，只有 Lite 支持；当前环境未配置 Lite，
+ * 所以 series 请求原本直接 422。用户说"生成 4 张"得到"做不到"，体验不成立。
+ *
+ * 这里改成**服务端串行编排**：拆成 N 个独立单图子任务，每张有独立 requestId 与独立记账。
+ * 代价：风格一致性靠提示词约束，不如原生组图；N 上限 4（4×25s 仍在云函数超时内）。
+ * 收益：功能从"不可用"变成"可用且可部分成功"。
+ */
+const SERIES_MAX = 4;
+
+function seriesPrompt(base, index, total) {
+  const b = String(base || "").trim();
+  return b + `\n\n【系列图第 ${index}/${total} 张】` +
+    `同一组系列图必须保持统一的配色、光线、材质与视觉风格；` +
+    `但每张的构图要有明显差异（视角、主体位置、景别至少变一项），禁止重复构图。` +
+    (index === 1 ? `这一张作为整套的基准，请把风格定准。` : `请严格延续整套的统一风格。`);
+}
+
+/**
+ * 10-24 组图子任务执行器（首跑与「只重试失败项」共用同一条路径）。
+ *
+ * 契约（P0-1）：先 claim 再 generate 再 finish/abort。
+ * 旧实现跳过 claim 直接 finish —— 更新一个不存在的文档，异常被吞，
+ * 任务永远不是 done，flushJobs 永远扫不到，于是这一张既不进账本也不进账务。
+ */
+async function runSeriesChild(opts) {
+  const { parentRid, index, total, accountId, prompt, image, size, structured,
+          renderIntent, aspectRatio, qualityTier, resolved } = opts;
+  const subRid = parentRid + "::s" + index;
+  const claim = await claimIdem(subRid, accountId);
+
+  // 已成功的子任务直接复用：重试时绝不重新生成、也不重复扣费
+  if (claim.state === "done" && claim.url) {
+    return {
+      index, ok: true, url: claim.url, model: String(claim.model || ""),
+      cost: 0, reused: true, costState: "committed",
+    };
+  }
+  if (claim.state === "busy") {
+    return { index, ok: false, message: "这一张还在生成中，请稍后重试。", errorCategory: "in_progress" };
+  }
+
+  const r = await generate({
+    prompt: seriesPrompt(prompt, index, total),
+    image, size, structured, renderIntent, aspectRatio,
+    layerDecomposition: false,
+    taskKind: "generate",          // 子任务一律按单图生成，路由走 generate 规则
+    qualityTier,
+    requestedCount: 1,
+  });
+
+  if (!r.ok) {
+    await abortIdem(subRid, accountId, String(r.reason || "upstream").slice(0, 40));
+    logStage("series_item_failed", {
+      index, reason: String(r.reason || "").slice(0, 40), msg: String(r.msg || "").slice(0, 120),
+    });
+    // 用户文案固定；技术原因只进日志（P1-3）
+    return {
+      index, ok: false,
+      message: "这一张没有生成成功，可以单独重试。",
+      errorCategory: String(r.reason || "upstream").slice(0, 40),
+    };
+  }
+
+  const model = String(r.model || RT.IMAGE_MODEL || "");
+  const price = priceForSize(resolved, model);
+  const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
+    kind: "series_child", parentJobId: parentRid, index,
+  });
+  let costState = persisted ? "queued" : "pending";
+  if (!persisted) {
+    // 台账写不进去：直接走幂等账务事件（事件 ID 同样由 subRid 派生），避免漏账
+    const direct = await addImageCost(accountId, price, {
+      model, jobKey: subRid, kind: "series_child", parentJobId: parentRid, index,
+    });
+    costState = direct ? "committed" : "pending";
+  }
+  return { index, ok: true, url: r.url, model, cost: price, costState };
+}
+
+/** flushJobs 之后再读一次子任务，把 queued 更新成真实 committed —— 响应里的金额必须是账本状态 */
+async function refreshSeriesCostStates(parentRid, accountId, items) {
+  for (const it of items) {
+    if (!it || !it.ok || !(Number(it.cost) > 0)) continue;
+    const d = await readOne(JOB_COLL, idemKey(parentRid + "::s" + it.index, accountId));
+    it.costState = d && d.costCommitted ? "committed" : (d ? "queued" : "pending");
+  }
+  return items;
+}
+
+/** 组图响应体（首跑 / 重放 / 重试共用同一结构，客户端只需要一套解析） */
+function seriesPayload(items, requested, meta) {
+  const okItems = items.filter((x) => x && x.ok);
+  const failedIndices = items.filter((x) => x && !x.ok).map((x) => x.index);
+  const pricedCny = okItems.reduce((sum, x) => sum + Number(x.cost || 0), 0);
+  const committedCny = okItems.filter((x) => x.costState === "committed")
+    .reduce((sum, x) => sum + Number(x.cost || 0), 0);
+  const pendingCostCount = okItems.filter((x) => x.costState !== "committed").length;
+  return {
+    ok: okItems.length > 0,
+    task_kind: "series",
+    requestId: String(meta.requestId || ""),
+    requested,
+    succeeded: okItems.length,
+    failed: requested - okItems.length,
+    partial: okItems.length > 0 && okItems.length < requested,
+    failedIndices,
+    items,
+    // billedCny 保留字段名兼容旧客户端；语义是"已计价"，不等于"已入账"
+    billedCny: Number(pricedCny.toFixed(4)),
+    pricedCny: Number(pricedCny.toFixed(4)),
+    committedCny: Number(committedCny.toFixed(4)),
+    pendingCostCount,
+    size: meta.size || "",
+    quality_tier: meta.qualityTier || "",
+    ms: meta.ms || 0,
+  };
 }
 
 const C = { accounts: "bf_accounts", usage: "bf_usage_logs", config: "bf_config" };
@@ -330,39 +454,144 @@ async function claimRate(accountId) {
     if (n > limit) return `生图太频繁（本小时上限 ${limit} 张），请稍后再试`;
     return null;
   } catch (e) {
-    return null;   // 限流基础设施异常不阻断出图（可用性优先）
+    // 限流台账不可用时不阻断出图（可用性优先），但必须留痕：否则等于限流静默失效
+    logStage("rate_limit_unavailable", { err: String((e && e.message) || e).slice(0, 120) });
+    return null;
   }
 }
 
-// ── 记账（写 accounts 累计 + usage_logs 明细，与 bf-api 同表）──
+// ── 账务（10-24 重构：唯一账务事件 + 分阶段幂等）──
 /**
- * 10-24 账务修复：必须向调用方返回「是否真的记上了」。
- * 旧实现两个写入都吞异常且无返回值，flushJobs 无法判断成败，一律把任务标成
- * costCommitted=true —— 账号累计或 usage 写失败时这笔钱就永久丢了。
- * 现在只有两处都成功才返回 true；部分成功也算失败（下次重试会重复累加账户，
- * 但 usage 有唯一可识别行，可通过审计发现并补偿，优于静默丢失）。
+ * 账务事件 ID：由「账号 + 任务 key」派生，稳定且唯一。
+ * 同一张图无论重试多少次、被几个实例处理，都只会得到一个事件 ID。
+ */
+const BILLING_COLL = "bf_billing_events";
+
+function billingEventIdOf(accountId, jobKey) {
+  return crypto.createHash("sha256")
+    .update("bill:" + String(accountId) + ":" + String(jobKey))
+    .digest("hex").slice(0, 48);
+}
+
+async function readOne(coll, id) {
+  try {
+    const r = await getDb().collection(coll).doc(id).get();
+    return (r && r.data && r.data[0]) || null;
+  } catch (e) { return null; }
+}
+
+/**
+ * 10-24 账务幂等（P0-4）：
+ *   ① 用唯一 _id 领取账务事件 —— 重复提交必然失败，天然去重；
+ *   ② 账户累计用「CAS 标记 → inc」两步：先原子地把 accountApplied 从 false 改成 true，
+ *      只有抢到标记的那一次才执行 inc；inc 失败时回滚标记，下一轮可重试；
+ *   ③ 明细 bf_usage_logs 复用同一个 _id —— 重复写入直接失败，不可能出现两条流水。
+ *
+ * 残余风险（已在交付说明中标注）：CAS 成功后、inc 完成前进程被杀，这一笔会少计。
+ * 这里选择「宁可少收、不可重复扣用户」；对账可用事件表重算账户累计。
  */
 async function addImageCost(accountId, costCny, meta) {
-  let accountOk = false;
+  const cost = Math.max(0, Number(costCny) || 0);
+  const m = meta || {};
+  const jobKey = String(m.jobKey || m.jobId || "");
+  const eventId = billingEventIdOf(
+    accountId,
+    jobKey || ("anon-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8))
+  );
+  const col = getDb().collection(BILLING_COLL);
+
+  // ① 领取事件（_id 唯一 → 只有一个调用点能成功）
+  let isNew = false;
+  let ev = null;
   try {
-    await getDb().collection(C.accounts).doc(accountId).update({
-      imageUsedCny: getDb().command.inc(Math.max(0, costCny)),
-      dayUsedCny: getDb().command.inc(Math.max(0, costCny)),
-      weekUsedCny: getDb().command.inc(Math.max(0, costCny)),
+    await col.add({
+      _id: eventId, accountId, costCny: cost, model: m.model || "", kind: m.kind || "image",
+      jobId: jobKey, parentJobId: m.parentJobId || "",
+      index: Number.isFinite(Number(m.index)) ? Number(m.index) : null,
+      state: "pending", accountApplied: false, usageApplied: false, ts: new Date(),
     });
-    accountOk = true;
+    isNew = true;
   } catch (e) {
-    logStage("billing_account_failed", { accountId: String(accountId).slice(0, 24), costCny, err: String((e && e.message) || e).slice(0, 120) });
+    ev = await readOne(BILLING_COLL, eventId);
+    if (!ev) {
+      logStage("billing_event_read_failed", { eventId: eventId.slice(0, 16) });
+      return false;
+    }
+    if (ev.state === "committed") return true;   // 已完全提交：幂等命中
   }
-  const row = { accountId, kind: "image", costCny, ts: new Date(), model: meta.model, estimated: false, source: "bf-image" };
-  let usageOk = false;
-  try { await getDb().collection(C.usage).add(row); usageOk = true; }
-  catch (e) {
-    try { await getDb().collection(C.usage).add(row); usageOk = true; } catch (e2) {
-      logStage("billing_usage_failed", { accountId: String(accountId).slice(0, 24), costCny, err: String((e2 && e2.message) || e2).slice(0, 120) });
+
+  // ② 账户累计（CAS 抢占，避免重复 inc）
+  let accountOk = false;
+  if (!isNew && ev && ev.accountApplied) {
+    accountOk = true;                            // 上一轮已累加过，跳过
+  } else {
+    let grabbed = isNew;
+    if (!isNew) {
+      try {
+        const r = await col.where({ _id: eventId, accountApplied: false })
+          .update({ accountApplied: true, accountAppliedAt: Date.now() });
+        grabbed = Number((r && (r.updated !== undefined ? r.updated : r.updatedCount)) || 0) > 0;
+      } catch (e) {
+        // 环境不支持条件更新：退化为「先 inc 再标记」，并明确记录这条降级
+        logStage("billing_cas_unsupported", { eventId: eventId.slice(0, 16) });
+        grabbed = true;
+      }
+    }
+    if (grabbed) {
+      if (isNew) {
+        try { await col.doc(eventId).update({ accountApplied: true, accountAppliedAt: Date.now() }); }
+        catch (e) { /* 标记失败只影响重试效率，不影响本次金额 */ }
+      }
+      try {
+        await getDb().collection(C.accounts).doc(accountId).update({
+          imageUsedCny: getDb().command.inc(cost),
+          dayUsedCny: getDb().command.inc(cost),
+          weekUsedCny: getDb().command.inc(cost),
+        });
+        accountOk = true;
+      } catch (e) {
+        try { await col.doc(eventId).update({ accountApplied: false }); } catch (e2) { /* 忽略 */ }
+        logStage("billing_account_failed", {
+          accountId: String(accountId).slice(0, 24), costCny: cost,
+          err: String((e && e.message) || e).slice(0, 120),
+        });
+      }
+    } else {
+      logStage("billing_event_busy", { eventId: eventId.slice(0, 16) });
+      return false;                              // 交给下一轮 flush 重试
     }
   }
-  return accountOk && usageOk;
+
+  // ③ 明细：_id 复用事件 ID → 天然去重
+  let usageOk = !!(!isNew && ev && ev.usageApplied);
+  if (!usageOk) {
+    try {
+      await getDb().collection(C.usage).add({
+        _id: eventId, accountId, kind: "image", costCny: cost, ts: new Date(),
+        model: m.model || "unknown", estimated: false, source: "bf-image",
+        jobId: jobKey, parentJobId: m.parentJobId || "",
+      });
+      usageOk = true;
+    } catch (e) {
+      // 已存在说明上一轮写成功过（唯一 _id 冲突）→ 视为已应用
+      usageOk = !!(await readOne(C.usage, eventId));
+      if (!usageOk) {
+        logStage("billing_usage_failed", {
+          accountId: String(accountId).slice(0, 24), costCny: cost,
+          err: String((e && e.message) || e).slice(0, 120),
+        });
+      }
+    }
+  }
+
+  if (accountOk && usageOk) {
+    try {
+      await col.doc(eventId).update({ state: "committed", usageApplied: true, committedAt: Date.now() });
+    } catch (e) { /* 状态位失败不影响账务正确性 */ }
+    return true;
+  }
+  logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), accountOk, usageOk, costCny: cost });
+  return false;
 }
 
 // ── 幂等 + 任务台账（10-23 改为"原子占位"模型）──
@@ -381,34 +610,51 @@ function idemKey(rid, accountId) {
   return crypto.createHash("sha256").update(String(accountId) + ":" + String(rid)).digest("hex").slice(0, 48);
 }
 
+function normalizeRid(raw) {
+  const v = String(raw || "").trim().slice(0, 64);
+  // 10-24 P1-4：requestId 必须在**入口**生成一次并全程复用。
+  // 旧实现只在 claimIdem 内部给局部变量赋值，调用方的 rid 仍是空串 →
+  // finishIdem('') 直接 return，任务永远停在 processing，账也记不上。
+  if (v) return v;
+  return "srv-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex");
+}
+
 async function claimIdem(rid, accountId) {
-  // 10-24：缺 requestId 时不再返回 "none" 放行——那等于绕过整个任务台账与幂等。
-  // 由服务端生成一个，保证每次调用都有可追溯的任务记录。
-  if (!rid) rid = "srv-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
-  const key = idemKey(rid, accountId);
+  const id = normalizeRid(rid);
+  const key = idemKey(id, accountId);
   const col = getDb().collection(JOB_COLL);
   try {
-    await col.add({ _id: key, clientRequestId: String(rid).slice(0, 120), state: "processing", accountId, ts: Date.now() });
-    return { state: "new", key };
+    await col.add({
+      _id: key, clientRequestId: String(id).slice(0, 120), state: "processing",
+      accountId, ts: Date.now(), leanSec: Math.floor(Date.now() / 1000),
+    });
+    return { state: "new", key, rid: id };
   } catch (e) {
     try {
       const r = await col.doc(key).get();
       const d = (r && r.data && r.data[0]) || null;
       // 归属校验：即使 hash 碰撞或旧数据异常，也绝不把别人的结果交出去
       const sameOwner = !d || String(d.accountId || "") === String(accountId);
-      if (sameOwner && d && d.state === "done" && d.url && Date.now() - Number(d.ts || 0) < IDEM_TTL_MS) {
-        return { state: "done", url: d.url, key };
+      if (sameOwner && d && d.state === "done" && Date.now() - Number(d.ts || 0) < IDEM_TTL_MS) {
+        // 10-24 P0-3：组图重放必须返回**完整结果**，不能退化成"单图缓存"
+        return {
+          state: "done", url: d.url, key, rid: id,
+          kind: d.kind || "", result: d.result || null, model: d.model || "",
+        };
       }
       // 90 秒内仍是 processing：判为并发重复，不重复生成
       if (sameOwner && d && d.state === "processing" && Date.now() - Number(d.ts || 0) < 90 * 1000) {
-        return { state: "busy", key };
+        return { state: "busy", key, rid: id };
       }
       // 失败或超时：接管这条任务
-      await col.doc(key).set({ clientRequestId: String(rid).slice(0, 120), state: "processing", accountId, ts: Date.now(), retried: true });
-      return { state: "new", key };
+      await col.doc(key).set({
+        clientRequestId: String(id).slice(0, 120), state: "processing", accountId,
+        ts: Date.now(), retried: true,
+      });
+      return { state: "new", key, rid: id };
     } catch (e2) {
       // 台账不可用时仍允许出图（可用性），但不再声称"命中幂等"
-      return { state: "none", key };
+      return { state: "none", key, rid: id };
     }
   }
 }
@@ -421,34 +667,88 @@ async function claimIdem(rid, accountId) {
  *   · 90 秒后被"接管"→ 可能重复生成、重复扣费
  *   · state 不是 done → flushJobs 永远扫不到 → **这笔钱不计账**
  */
-async function finishIdem(rid, accountId, url, costCny, model) {
+async function finishIdem(rid, accountId, url, costCny, model, extra) {
+  if (!rid) {
+    logStage("idem_finish_no_rid", { accountId: String(accountId).slice(0, 24) });
+    return false;
+  }
+  const key = idemKey(rid, accountId);
+  const patch = {
+    state: "done", url: url || "", costCny, model, accountId,
+    ts: Date.now(), costCommitted: false,
+  };
+  const ex = extra || {};
+  if (ex.kind) patch.kind = String(ex.kind).slice(0, 24);
+  if (ex.result) patch.result = ex.result;
+  if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
+  if (ex.input) patch.input = ex.input;
+  if (Number.isFinite(Number(ex.index))) patch.index = Number(ex.index);
+  try {
+    const r = await getDb().collection(JOB_COLL).doc(key).update(patch);
+    const n = Number((r && (r.updated !== undefined ? r.updated : r.updatedCount)) || 0);
+    if (n > 0) return true;
+    // update 成功但没命中（文档不存在）：补建。绝不能"更新了不存在的文档"却当成功。
+    await getDb().collection(JOB_COLL).doc(key).set(Object.assign({
+      clientRequestId: String(rid).slice(0, 120), createdAt: Date.now(),
+    }, patch));
+    logStage("idem_finish_recreated", { key: key.slice(0, 16) });
+    return true;
+  } catch (e) {
+    logStage("idem_finish_failed", { key: key.slice(0, 16), err: String((e && e.message) || e).slice(0, 120) });
+    // 最后兜底：set 建文档。宁可覆盖状态位，也不能让这张图变成"账面不存在"。
+    try {
+      await getDb().collection(JOB_COLL).doc(key).set(Object.assign({
+        clientRequestId: String(rid).slice(0, 120),
+      }, patch));
+      logStage("idem_finish_recovered", { key: key.slice(0, 16) });
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+
+/** 续租：组图 4 张串行可能超过 90s，不续租会被重复请求判为"超时可接管"→ 重复生成 */
+async function touchIdem(rid, accountId) {
   if (!rid) return;
+  try {
+    await getDb().collection(JOB_COLL).doc(idemKey(rid, accountId)).update({ ts: Date.now() });
+  } catch (e) { /* 续租失败不影响本次执行 */ }
+}
+
+async function abortIdem(rid, accountId, reason) {
+  if (!rid) return false;
   const key = idemKey(rid, accountId);
   try {
     await getDb().collection(JOB_COLL).doc(key).update({
-      state: "done", url, costCny, model, accountId,
-      ts: Date.now(), costCommitted: false,
+      state: "failed", reason: String(reason || "").slice(0, 60), ts: Date.now(),
     });
-  } catch (e) { logStage("idem_finish_failed", { key: key.slice(0, 16), err: String((e && e.message) || e).slice(0, 120) }); }
-}
-async function abortIdem(rid, accountId, reason) {
-  if (!rid) return;
-  const key = idemKey(rid, accountId);
-  try { await getDb().collection(JOB_COLL).doc(key).update({ state: "failed", reason: String(reason || "").slice(0, 120), ts: Date.now() }); }
-  catch (e) { /* 忽略 */ }
+    return true;
+  } catch (e) {
+    logStage("idem_abort_failed", { key: key.slice(0, 16), err: String((e && e.message) || e).slice(0, 120) });
+    return false;
+  }
 }
 
 /// 记账补投（outbox）：已完成但未记账的任务，下次请求时补记，最多 3 条，避免长期漏账。
-async function flushJobs() {
+async function flushJobs(maxJobs) {
   try {
     const col = getDb().collection(JOB_COLL);
-    const r = await col.where({ state: "done", costCommitted: false }).limit(3).get();
+    // 10-24：组图一次会产生 N 条待提交任务，固定 3 条会让最后几张停在 queued。
+    // 调用方可按需放大本轮处理量（默认仍是 3，避免长尾拖慢单图请求）。
+    const take = Math.max(1, Math.min(20, Number(maxJobs) || 3));
+    const r = await col.where({ state: "done", costCommitted: false }).limit(take).get();
     for (const d of (r && r.data) || []) {
       const id = d._id || d.id;
       if (!id) continue;
       const cost = Number(d.costCny || 0);
-      // 零成本任务（命中缓存 / 管理员豁免）直接确认，不需要账本
-      const billed = cost <= 0 ? true : await addImageCost(d.accountId, cost, { model: d.model || "unknown" });
+      // 零成本任务（命中缓存 / 父任务 / 管理员豁免）直接确认，不需要账本
+      // jobKey 必须传：账务事件 ID 由它派生，传错等于每次 flush 都生成新事件（=重复扣费）
+      const billed = cost <= 0 ? true : await addImageCost(d.accountId, cost, {
+        model: d.model || "unknown",
+        jobKey: String(id),
+        kind: d.kind || "image",
+        parentJobId: d.parentJobId || "",
+        index: d.index,
+      });
       if (!billed) {
         // 记账失败：保留 costCommitted=false，下一轮重试；同时累加重试次数供告警
         const tries = Number(d.costTries || 0) + 1;
@@ -458,7 +758,10 @@ async function flushJobs() {
       }
       await col.doc(id).update({ costCommitted: true, committedAt: Date.now() }).catch(() => {});
     }
-  } catch (e) { /* outbox 失败不影响主流程 */ }
+  } catch (e) {
+    // outbox 自己挂了：下一轮请求会再试；这里必须留日志，否则"账一直没记上"无人知晓
+    logStage("billing_flush_failed", { err: String((e && e.message) || e).slice(0, 120) });
+  }
 }
 
 // ── 编辑结果廉价自检：像素级比对原图与结果图，抓「整图重绘」（0 token / <100ms）──
@@ -821,6 +1124,91 @@ const server = http.createServer(async (req, res) => {
     return send(200, { ok: true, fn: "bf-image" });
   }
 
+  // ── 10-24 新增：只重试失败的子图（P0-2/P1-5 的最小可用闭环）──
+  // 语义：成功的子任务保持不动（claim 命中 done 直接复用），失败的按原 input 重跑；
+  // 每张仍有独立 requestId 与独立账务事件，不会重复扣费。
+  if (req.method === "POST" && u.indexOf("/series/retry") >= 0) {
+    const tRetry = Date.now();
+    await refreshRuntime();
+    const auth = await requireMember(req);
+    if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
+    await flushJobs();
+    const q = await quotaExhausted(req);
+    if (q.unavailable) {
+      return send(503, {
+        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
+        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
+      });
+    }
+    if (q.exhausted) {
+      return send(429, {
+        ok: false, code: 429, error: "POOL_EXHAUSTED",
+        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
+      });
+    }
+    const body = (await readBody(req)) || {};
+    const parentRid = normalizeRid(body.requestId || body.parentRequestId);
+    const rec = await readOne(JOB_COLL, idemKey(parentRid, auth.sub));
+    const prev = rec && rec.result;
+    const input = rec && rec.input;
+    if (!prev || prev.task_kind !== "series" || !input) {
+      return send(404, {
+        ok: false, code: 404, error: "SERIES_NOT_FOUND",
+        msg: "没有找到这次组图任务的记录，请重新生成。",
+      });
+    }
+    if (input.hasImage) {
+      return send(422, {
+        ok: false, code: 422, error: "TASK_UNSUPPORTED",
+        msg: "这组图是基于参考图生成的，暂时无法单独补画。请重新生成整组。",
+        actions: ["retry", "cancel"],
+      });
+    }
+    const wanted = Array.isArray(body.indices) && body.indices.length
+      ? body.indices
+      : (prev.failedIndices || []);
+    const targets = Array.from(new Set(wanted
+      .map((x) => Number(x))
+      .filter((i) => Number.isInteger(i) && i >= 1 && i <= Number(prev.requested || 0))));
+    if (!targets.length) {
+      return send(200, Object.assign({}, prev, {
+        ok: true, retriedIndices: [], cached: true, cost: 0, ms: Date.now() - tRetry,
+      }));
+    }
+    const resolved = resolveSize(input.size, input.aspectRatio);
+    // 防御：历史/畸形 result 不能让整个接口 500
+    const prevItems = Array.isArray(prev.items) ? prev.items : [];
+    const byIndex = new Map(prevItems.map((it) => [Number(it.index), it]));
+    for (const i of targets) {
+      const item = await runSeriesChild({
+        parentRid, index: i, total: Number(prev.requested || targets.length),
+        accountId: auth.sub,
+        prompt: input.prompt, image: undefined, size: input.size,
+        structured: input.structured, renderIntent: input.renderIntent,
+        aspectRatio: input.aspectRatio, qualityTier: input.qualityTier, resolved,
+      });
+      // 重试成功后替换该项；重试仍失败保留最新的失败信息
+      byIndex.set(i, item);
+    }
+    await flushJobs(targets.length + 2);
+    const merged = Array.from(byIndex.values()).sort((a, b) => Number(a.index) - Number(b.index));
+    await refreshSeriesCostStates(parentRid, auth.sub, merged);
+    const requested = Number(prev.requested || merged.length);
+    const payload = seriesPayload(merged, requested, {
+      requestId: parentRid, size: resolved, qualityTier: input.qualityTier,
+      ms: Date.now() - tRetry,
+    });
+    payload.retriedIndices = targets;
+    // 重写父任务结果：下次重放拿到的是**合并后**的完整结果
+    await finishIdem(parentRid, auth.sub, (merged.find((x) => x.ok) || {}).url || "", 0, "series",
+      { kind: "series", result: payload, input });
+    logStage("series_retry_done", {
+      sub: auth.sub, parentRid, targets, okCount: payload.succeeded,
+      committedCny: payload.committedCny, ms: Date.now() - tRetry,
+    });
+    return send(200, payload);
+  }
+
   if (req.method === "POST" && u.indexOf("/image") >= 0) {
     const t0 = Date.now();
 
@@ -838,6 +1226,15 @@ const server = http.createServer(async (req, res) => {
     await flushJobs();
 
     const q = await quotaExhausted(req);
+    // 10-24 P1-2：不可用 ≠ 用完。服务故障时告诉用户"续费"是错误引导，
+    // 正确做法是 503 + 可重试文案，并且明确"这次没有生成、不会扣费"。
+    if (q.unavailable) {
+      logStage("quota_check_unavailable", { sub: auth.sub, reason: q.reason });
+      return send(503, {
+        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
+        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
+      });
+    }
     if (q.exhausted) {
       logStage("quota_exhausted", { sub: auth.sub });
       return send(429, { ok: false, code: 429, error: "POOL_EXHAUSTED", msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt });
@@ -851,15 +1248,28 @@ const server = http.createServer(async (req, res) => {
     const hasStructured = !!(body.structured && typeof body.structured === "object" && Object.keys(body.structured).length);
 
     // 幂等占位：add(_id=rid) 成功才拿到执行权；重复请求复用结果或返回"进行中"。
-    const rid = String(body.requestId || "").slice(0, 64);
+    // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
+    const rid = normalizeRid(body.requestId);
     const claim = await claimIdem(rid, auth.sub);
     if (claim.state === "done") {
-      logStage("idempotent_hit", { sub: auth.sub, rid });
-      return send(200, { ok: true, url: claim.url, cached: true, cost: 0, ms: Date.now() - tReq });
+      logStage("idempotent_hit", { sub: auth.sub, rid, kind: claim.kind || "image" });
+      // 10-24 P0-3：组图重放必须返回完整 items[]，不能退化成"单图缓存"
+      if (claim.result && claim.result.task_kind === "series") {
+        return send(200, Object.assign({}, claim.result, {
+          cached: true, cost: 0, ms: Date.now() - tReq, requestId: rid,
+        }));
+      }
+      return send(200, {
+        ok: true, url: claim.url, cached: true, cost: 0,
+        ms: Date.now() - tReq, requestId: rid,
+      });
     }
     if (claim.state === "busy") {
       logStage("idempotent_busy", { sub: auth.sub, rid });
-      return send(409, { ok: false, code: 409, error: "IN_PROGRESS", msg: "同一张图还在生成中，请稍候再试" });
+      return send(409, {
+        ok: false, code: 409, error: "IN_PROGRESS",
+        msg: "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
+      });
     }
     if (!prompt && !hasStructured) { await abortIdem(rid, auth.sub, "missing_prompt"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" }); }
     if (prompt.length > 1500) { await abortIdem(rid, auth.sub, "prompt_too_long"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "描述过长，请精简到 1500 字以内" }); }
@@ -878,6 +1288,89 @@ const server = http.createServer(async (req, res) => {
       || (body.layer_decomposition === true ? "decompose" : (body.image ? "edit" : "generate"));
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
     const requestedCount = Number(body.requested_count || body.requestedCount || 1);
+    // ── 组图：服务端编排（拆 N 个单图子任务，各自 claim / 记账 / 可部分成功）──
+    if (taskKind === "series") {
+      const n = Math.min(SERIES_MAX, Math.max(2, Math.floor(Number(requestedCount) || 2)));
+      const resolved = resolveSize(body.size, aspectRatio);
+      const models = modelsOf();
+      // 10-24 P1-12：先按最贵档估算，余额不足就不启动任何子图 ——
+      // 否则 4 张跑完才发现额度不够，用户拿到半套、账也乱。
+      const unitWorst = Math.max(
+        priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
+        priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
+      );
+      const cap = Number(q.capCny);
+      const used = Number(q.usedCny);
+      if (Number.isFinite(cap) && cap > 0 && Number.isFinite(used)) {
+        const remaining = cap - used;
+        if (remaining + 1e-6 < unitWorst * n) {
+          await abortIdem(rid, auth.sub, "quota_insufficient");
+          logStage("series_quota_short", { sub: auth.sub, n, remaining, need: unitWorst * n });
+          return send(402, {
+            ok: false, code: 402, error: "QUOTA_INSUFFICIENT",
+            msg: `本次要生成 ${n} 张，剩余额度不足以覆盖（约需 ¥${(unitWorst * n).toFixed(2)}）。可以先做 1 张，或续费后再试。`,
+            requested: n, remainingCny: Number(remaining.toFixed(4)),
+            needCny: Number((unitWorst * n).toFixed(4)),
+            actions: ["single_only", "renew", "cancel"],
+          });
+        }
+      }
+
+      const items = [];
+      const tSeries = Date.now();
+      for (let i = 1; i <= n; i++) {
+        // 每张开始前续租父任务（P1-5：90s lease 与 4 张串行时长不匹配）
+        if (i > 1) await touchIdem(rid, auth.sub);
+        const item = await runSeriesChild({
+          parentRid: rid, index: i, total: n, accountId: auth.sub,
+          prompt: body.prompt, image: body.image, size: body.size,
+          structured: body.structured, renderIntent, aspectRatio,
+          qualityTier, resolved,
+        });
+        items.push(item);
+      }
+      await flushJobs(n + 2);
+      await refreshSeriesCostStates(rid, auth.sub, items);
+
+      const okCount = items.filter((x) => x.ok).length;
+      const payloadBody = seriesPayload(items, n, {
+        requestId: rid, size: resolved, qualityTier, ms: Date.now() - t0,
+      });
+      // 全失败：不落 done（否则用户永远没法重试整组），abort 让下一次可以重新开始
+      if (okCount === 0) {
+        await abortIdem(rid, auth.sub, "series_all_failed");
+        logStage("series_failed", { sub: auth.sub, n, ms: Date.now() - tSeries });
+        const e = publicError("SERIES_ALL_FAILED", { requestId: rid, stage: "series" });
+        return send(502, Object.assign(e, payloadBody, { ok: false }));
+      }
+
+      // 父任务：costCny=0（钱记在子任务上，避免重复计费），但必须持久化**完整结果**
+      const parentSaved = await finishIdem(
+        rid, auth.sub, (items.find((x) => x.ok) || {}).url || "", 0, "series",
+        {
+          kind: "series",
+          result: payloadBody,
+          // 重试失败项需要原始输入。图片引用（data URL）不存：体积大且可能过期，
+          // 带参考图的组图在重试时会明确提示"需要重新生成整组"。
+          input: {
+            prompt: String(body.prompt || "").slice(0, 1600),
+            structured: body.structured || null,
+            size: String(body.size || ""),
+            renderIntent, aspectRatio, qualityTier,
+            hasImage: !!body.image,
+          },
+        }
+      );
+      if (!parentSaved) {
+        logStage("series_parent_persist_failed", { sub: auth.sub, n });
+      }
+      logStage("series_done", {
+        sub: auth.sub, n, okCount, pricedCny: payloadBody.pricedCny,
+        committedCny: payloadBody.committedCny, ms: Date.now() - tSeries,
+      });
+      return send(200, Object.assign(payloadBody, { parentPersisted: parentSaved }));
+    }
+
     let out = await generate({
       prompt: body.prompt, image: body.image, size: body.size, structured: body.structured,
       renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
@@ -935,7 +1428,7 @@ const server = http.createServer(async (req, res) => {
         cost: price, retried, size: resolveSize(body.size, aspectRatio),
         renderIntent: renderIntent || "default",
         model: usedModel, route_reason: out.routeReason || "",
-        task_kind: taskKind, quality_tier: qualityTier,
+        task_kind: taskKind, quality_tier: qualityTier, requestId: rid,
       });
     }
     await abortIdem(rid, auth.sub, out.msg);

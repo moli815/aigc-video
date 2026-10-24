@@ -69,6 +69,13 @@ final class Message {
     var createdAt: Date = Date()
     var conversation: Conversation?
     var conversationID: UUID? = nil   // P0-46 冗余字段：供 @Query 派生视图按会话过滤（轻量迁移自动加列）
+    // 10-24 组图（P0-2）：一条消息可以携带多张图。
+    // 第 1 张仍存 imageData（旧渲染路径零改动），第 2 张起存这里。
+    // 用 Data 包 JSON 数组而不是新增 [Data] 属性：Data 是已验证可持久化的类型，
+    // SwiftData 轻量迁移只需加一个可选列，不会因为复合类型触发 schema 迁移失败。
+    var extraImagesJSON: Data? = nil
+    /// 组图元信息（SeriesMeta 的 JSON 字符串）：请求/成功/失败序号/费用状态
+    var seriesMetaJSON: String = ""
 
     init(role: String, text: String, imageData: Data? = nil) {
         self.role = role
@@ -77,9 +84,113 @@ final class Message {
         self.createdAt = Date()
     }
 
+    /// 组图元信息解析（无组图时 nil）
+    var seriesMeta: SeriesMeta? {
+        guard !seriesMetaJSON.isEmpty, let d = seriesMetaJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SeriesMeta.self, from: d)
+    }
+
+    /// 第 2 张起的图片（按原顺序）
+    var extraImages: [Data] {
+        guard let d = extraImagesJSON,
+              let arr = try? JSONDecoder().decode([Data].self, from: d) else { return [] }
+        return arr
+    }
+
+    /// 这条消息携带的全部图片（第 1 张在前）
+    var allImages: [Data] {
+        var out: [Data] = []
+        if let imageData { out.append(imageData) }
+        out.append(contentsOf: extraImages)
+        return out
+    }
+
     /// 附件 ID 解析：逗号分隔字符串转数组，自动忽略空片段。
     var attachmentIdList: [String] {
         attachmentIds.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+    }
+}
+
+// MARK: - 组图元信息（10-24）
+
+/// 一条组图消息的元信息。**只存真实状态**：没有服务端权威数据时字段留空，
+/// 不在这里估算金额（费用只在服务端有账本数据时才可信）。
+struct SeriesMeta: Codable, Equatable {
+    var requestId: String = ""
+    var requested: Int = 0
+    var succeeded: Int = 0
+    var failedIndices: [Int] = []
+    var downloadFailedIndices: [Int] = []
+    var pricedCny: Double = 0
+    var committedCny: Double = 0
+    var pendingCostCount: Int = 0
+    var partial: Bool = false
+    var size: String = ""
+    var qualityTier: String = ""
+    var createdAt: Date = Date()
+
+    /// 一句话状态摘要（用于消息头部；只报真实数字，不虚构进度百分比）
+    var statusLine: String {
+        guard requested > 0 else { return "" }
+        if failedIndices.isEmpty {
+            return "已完成 \(succeeded)/\(requested) 张"
+        }
+        let failed = failedIndices.map { "#\($0)" }.joined(separator: "、")
+        return "已完成 \(succeeded)/\(requested) 张 · 失败 \(failed)"
+    }
+
+    /// 是否还有可重试的失败项（基于当前记录的状态；重试成功后由服务端结果覆盖）
+    var canRetryFailed: Bool { !failedIndices.isEmpty && !requestId.isEmpty }
+
+    /// 显式全参初始化（带默认值）。
+    /// 说明：一旦写了自定义 init(from:)，编译器就不再合成逐成员初始化器，
+    /// 所以这里必须自己提供一个，否则 `SeriesMeta(requestId:...)` 全部编译失败。
+    init(requestId: String = "",
+         requested: Int = 0,
+         succeeded: Int = 0,
+         failedIndices: [Int] = [],
+         downloadFailedIndices: [Int] = [],
+         pricedCny: Double = 0,
+         committedCny: Double = 0,
+         pendingCostCount: Int = 0,
+         partial: Bool = false,
+         size: String = "",
+         qualityTier: String = "",
+         createdAt: Date = Date()) {
+        self.requestId = requestId
+        self.requested = requested
+        self.succeeded = succeeded
+        self.failedIndices = failedIndices
+        self.downloadFailedIndices = downloadFailedIndices
+        self.pricedCny = pricedCny
+        self.committedCny = committedCny
+        self.pendingCostCount = pendingCostCount
+        self.partial = partial
+        self.size = size
+        self.qualityTier = qualityTier
+        self.createdAt = createdAt
+    }
+
+    /// 逐字段容错解码：未来新增字段时，旧消息仍能解析出已有信息
+    /// （否则整条元信息解码失败 → 组图退化回单图展示）。
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func str(_ k: CodingKeys, _ def: String = "") -> String {
+            (try? c.decodeIfPresent(String.self, forKey: k)) ?? def
+        }
+        requestId = str(.requestId)
+        requested = (try? c.decodeIfPresent(Int.self, forKey: .requested)) ?? 0
+        succeeded = (try? c.decodeIfPresent(Int.self, forKey: .succeeded)) ?? 0
+        failedIndices = (try? c.decodeIfPresent([Int].self, forKey: .failedIndices)) ?? []
+        downloadFailedIndices = (try? c.decodeIfPresent([Int].self, forKey: .downloadFailedIndices)) ?? []
+        pricedCny = (try? c.decodeIfPresent(Double.self, forKey: .pricedCny)) ?? 0
+        committedCny = (try? c.decodeIfPresent(Double.self, forKey: .committedCny)) ?? 0
+        pendingCostCount = (try? c.decodeIfPresent(Int.self, forKey: .pendingCostCount)) ?? 0
+        partial = (try? c.decodeIfPresent(Bool.self, forKey: .partial)) ?? false
+        size = str(.size)
+        qualityTier = str(.qualityTier)
+        createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date()
     }
 }
 
