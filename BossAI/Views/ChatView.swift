@@ -274,6 +274,9 @@ struct ChatView: View {
     let useLiveMessages: Bool
     // P0-4 编辑重发
     @State private var editTarget: Message?
+    /// 10-24：错误卡片里的「去续费 / 查看额度」需要本视图自己弹会员页
+    /// （ChatView 是独立 struct，拿不到 ChatContainerView 的 showMembership）
+    @State private var showMembership = false
 
     init(viewModel: ChatViewModel, liveMessages: [Message] = [], useLiveMessages: Bool = false,
          previewFile: Binding<StoredFile?>) {
@@ -324,6 +327,8 @@ struct ChatView: View {
                 viewModel.resendEdited(msg, newText: newText)
             }
         }
+        // 错误动作「去续费 / 查看额度」→ 直接在本视图弹会员页
+        .sheet(isPresented: $showMembership) { MembershipView() }
 
     }
 
