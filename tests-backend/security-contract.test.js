@@ -105,7 +105,10 @@ test("SEC-03 上传路径用账号摘要而非前缀切片", () => {
 test("AUTH-02 额度服务异常时拒绝出图，不再 fail-open", () => {
   const fn = IMAGE.slice(IMAGE.indexOf("async function quotaExhausted"));
   const body = fn.slice(0, fn.indexOf("\n// ──", 10));
-  assert.match(body, /if \(!r\.ok\)[\s\S]{0,220}exhausted: true/, "HTTP 非 2xx 未拒绝");
+  // 10-24：401/403 现在单独走 denied 分支（透传"会员到期/停用"），5xx 仍 fail-closed。
+  // 窗口放宽到 1200 字符，但两种分支都必须给出 exhausted: true —— 任何一条都不放行。
+  assert.match(body, /if \(!r\.ok\)[\s\S]{0,1200}exhausted: true/, "HTTP 非 2xx 未拒绝");
+  assert.match(body, /r\.status === 401 \|\| r\.status === 403[\s\S]{0,200}denied: r\.status/, "401/403 未单独处理");
   assert.match(body, /catch \(e\)[\s\S]{0,260}exhausted: true/, "异常路径未拒绝");
   assert.match(body, /unavailable: true/, "未区分『超额』与『无法确认』");
   assert.doesNotMatch(body, /exhausted: false \};?\s*\} finally/, "仍是旧的放行写法");

@@ -571,8 +571,22 @@ async function quotaExhausted(req) {
     // 10-24 安全修复：授权/额度检查必须 fail-closed。
     // 旧实现 catch 里返回 exhausted:false —— /me 挂掉时所有人都能免费出图（成本敞口）。
     if (!r.ok) {
-      logStage("quota_check_http", { status: r.status });
-      // 401/403：会话失效，直接拒绝；5xx：服务不可用，也无法确认额度，一律拒绝
+      // 10-24 修复：401/403 是"会员侧明确拒绝"（到期/停用/掉登录），不是"额度查不到"。
+      // 旧实现把两者混成 unavailable → 用户到期来画图，看到的是"暂时无法确认额度"，
+      // 客服也无从判断。现在把 bf-api 的错误码与文案原样透传。
+      let errBody = null;
+      try { errBody = await r.json(); } catch (e) { errBody = null; }
+      const errCode = String((errBody && errBody.error) || "");
+      logStage("quota_check_http", { status: r.status, code: errCode });
+      if (r.status === 401 || r.status === 403) {
+        return {
+          exhausted: true, unavailable: false, denied: r.status,
+          code: errCode || (r.status === 401 ? "UNAUTHORIZED" : "MEMBERSHIP_EXPIRED"),
+          message: String((errBody && errBody.message) || ""),
+          reason: "denied-" + (errCode || r.status),
+        };
+      }
+      // 5xx：服务不可用，无法确认授权与额度，一律拒绝（fail-closed）
       return { exhausted: true, unavailable: true, reason: "auth-unavailable", resetAt: null };
     }
     const j = await r.json().catch(() => null);
@@ -605,6 +619,21 @@ async function quotaExhausted(req) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** 会员侧拒绝（401/403）原样转出：文案与错误码跟 bf-api 保持一致，不要改写成"额度不可用" */
+function sendDenied(q, send) {
+  const code = q.code || (q.denied === 401 ? "UNAUTHORIZED" : "MEMBERSHIP_EXPIRED");
+  const fallback = code === "ACCOUNT_SUSPENDED" ? "该账号已停用，请联系客服"
+    : code === "MEMBERSHIP_EXPIRED" ? "会员已到期，请联系续费"
+    : "登录状态已失效，请重新登录";
+  const msg = q.message || fallback;
+  logStage("quota_denied", { status: q.denied, code });
+  return send(q.denied, {
+    ok: false, code: q.denied, error: code, msg, message: msg,
+    actions: q.denied === 401 ? ["relogin"] : ["renew"],
+    requestId: currentRequestId(),
+  });
 }
 
 // ── 限流（10-23 改为"先原子自增再判超限"）──
@@ -1353,6 +1382,7 @@ const server = http.createServer(async (req, res) => {
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
 
     const q = await quotaExhausted(req);
+    if (q.denied) return sendDenied(q, send);
     if (q.unavailable) {
       return send(503, {
         ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
@@ -1554,6 +1584,7 @@ const server = http.createServer(async (req, res) => {
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
     await flushJobs();
     const q = await quotaExhausted(req);
+    if (q.denied) return sendDenied(q, send);
     if (q.unavailable) {
       return send(503, {
         ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
@@ -1648,6 +1679,7 @@ const server = http.createServer(async (req, res) => {
     const q = await quotaExhausted(req);
     // 10-24 P1-2：不可用 ≠ 用完。服务故障时告诉用户"续费"是错误引导，
     // 正确做法是 503 + 可重试文案，并且明确"这次没有生成、不会扣费"。
+    if (q.denied) return sendDenied(q, send);
     if (q.unavailable) {
       logStage("quota_check_unavailable", { sub: auth.sub, reason: q.reason });
       return send(503, {

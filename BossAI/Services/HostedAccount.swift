@@ -81,7 +81,8 @@ final class HostedAccount: ObservableObject {
     /// 服务端时间统一是 ISO8601 **带毫秒**（如 2026-11-15T02:53:29.994Z）。
     /// 默认 ISO8601DateFormatter 不接受小数秒，`date(from:)` 会直接返回 nil ——
     /// 后果是会员到期日永远为空、侧栏把"没同步到"显示成"已过期"。这里带毫秒/不带毫秒都收。
-    static func parseISO(_ raw: String) -> Date? {
+    /// nonisolated：下面 `nonisolated static var cachedXxx` 也要用它，不能被 @MainActor 圈住
+    nonisolated static func parseISO(_ raw: String) -> Date? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let withMS = ISO8601DateFormatter()
@@ -93,7 +94,7 @@ final class HostedAccount: ObservableObject {
     }
 
     /// 档位 key → 展示名。登录响应只回 tier（没有 tierName），靠它先把徽章显示对。
-    static func displayName(forTier key: String) -> String {
+    nonisolated static func displayName(forTier key: String) -> String {
         switch key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "ultra": return "Ultra 旗舰版"
         case "pro":   return "Pro 专业版"
