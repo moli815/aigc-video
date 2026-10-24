@@ -76,7 +76,12 @@ const C = {
 const EXPERTS_SEED = require("./experts.json");
 // 10-23 配置中心：分组/标题/控件/范围/校验统一由 settings-schema 提供，前端只渲染
 const { SECTIONS, describeSettings, validateValue } = require("./settings-schema");
-const EXPERTS_SEED_VERSION = 2;   // 内置目录升级时 +1；DB 版本落后会自动用种子覆盖（emoji/ui v2）
+// 内置目录升级时 +1；DB 版本落后会自动用种子覆盖（v3：新增 short_video 短视频脚本专家）
+const EXPERTS_SEED_VERSION = 4;
+// 种子指纹：内容变了但版本没变（或部署包混版）也能被发现，见 handleGetExperts 的注释
+const EXPERTS_SEED_HASH = crypto.createHash("sha256")
+  .update(JSON.stringify([EXPERTS_SEED.experts, EXPERTS_SEED.starters, EXPERTS_SEED.ui || null]))
+  .digest("hex").slice(0, 16);
 
 // 对外承诺的服务时段（账号开通功能开放时间）；P0-24 起可在线修改
 let SERVICE_START_HOUR = 8;
@@ -4186,11 +4191,20 @@ async function handleGetExperts(req, res) {
     const r = await db.collection(C.config).doc("experts").get();
     doc = (r.data || [])[0] || null;
   } catch { /* 读失败走默认 */ }
-  const stale = !doc || !Array.isArray(doc.experts) || !doc.experts.length || (doc.version || 0) < EXPERTS_SEED_VERSION;
+  /**
+   * 10-24 事故修复：只看版本号判断"是否落后"会踩到一个死锁——
+   * 部署瞬间若旧实例先拿到「新 index.js + 旧 experts.json」，它会把 version=新版本 写进 DB，
+   * 之后所有新实例都认为"已是最新"，于是新专家永远上不了线（实测就是这样丢了 short_video）。
+   * 现在同时比对**种子指纹**：版本相同但内容哈希不符 → 仍然重刷。
+   * 管理员在线编辑会自增 version（> 种子版本），因此不会被这里覆盖。
+   */
+  const seedMismatch = !!doc && Number(doc.version || 0) === EXPERTS_SEED_VERSION && doc.seedHash !== EXPERTS_SEED_HASH;
+  const stale = !doc || !Array.isArray(doc.experts) || !doc.experts.length
+    || (doc.version || 0) < EXPERTS_SEED_VERSION || seedMismatch;
   if (stale) {
     // 落后于内置种子（如 v1 无 emoji/ui）→ 升级到种子版本；管理员此后仍可在线覆盖
     try {
-      const payload = { version: EXPERTS_SEED_VERSION, experts: EXPERTS_SEED.experts, starters: EXPERTS_SEED.starters, ui: EXPERTS_SEED.ui || null, updatedAt: new Date() };
+      const payload = { version: EXPERTS_SEED_VERSION, seedHash: EXPERTS_SEED_HASH, experts: EXPERTS_SEED.experts, starters: EXPERTS_SEED.starters, ui: EXPERTS_SEED.ui || null, updatedAt: new Date() };
       if (doc) await db.collection(C.config).doc("experts").update(payload);
       else await db.collection(C.config).add({ _id: "experts", ...payload });
       doc = payload;
