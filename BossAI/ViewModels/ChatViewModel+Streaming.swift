@@ -560,7 +560,8 @@ extension ChatViewModel {
                                 if !requirement.isEmpty,
                                    let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
                                    !check.ok {
-                                    let fixPrompt = prompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
+                                    // 10-25：重试必须沿用规划后的提示词，否则比例/禁画字/保留原图这些约束会丢
+                                    let fixPrompt = planPrompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
                                     if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: planAspect) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费

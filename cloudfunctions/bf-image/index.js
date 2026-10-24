@@ -113,15 +113,32 @@ function modelsOf() {
  * 服务端唯一的模型选择入口。App 不传 model ID，只传 task_kind / quality_tier。
  * 能力限制优先于"快/贵"偏好：series 只有 series 模型能做，decompose 只有 layers 模型能做。
  */
+/**
+ * 质量档位归一化（10-25 契约修复）。
+ *
+ * 事故背景：客户端规划器历史上发的是 "pro"，而这里只认 "high"/"fast"。
+ * "pro" 既不是 auto 也不是 high → 一路走到 inferQualityTier 兜底 → **高质量任务被悄悄降级成 Flash**，
+ * 账面上看不出来，用户只知道"海报变糊了"。档位是契约，必须先归一化再比较。
+ *
+ * 合法输出只有三个：auto / fast / high。未知值一律当 auto（交回服务端推断），不硬猜。
+ */
+const TIER_ALIASES = {
+  high: "high", pro: "high", quality: "high", best: "high", hd: "high", "2k": "high",
+  fast: "fast", flash: "fast", draft: "fast", quick: "fast", low: "fast",
+  auto: "auto", balanced: "auto", "": "auto",
+};
+function normalizeTier(value) {
+  const key = String(value || "").trim().toLowerCase();
+  return TIER_ALIASES[key] || "auto";
+}
+
 function selectImageRoute({ taskKind, qualityTier, prompt, renderIntent }) {
   const m = modelsOf();
   const mode = String(RT.IMAGE_ROUTING_MODE || "auto").trim();
   const kind = String(taskKind || "generate").trim();
-  const rawTier = String(qualityTier || "").trim();
-  // 10-24：区分"用户/App 明确指定"与"没说"。只有没说时才走智能推断，
-  // 否则会覆盖掉 App 已经判断好的意图。
-  const explicit = rawTier && rawTier !== "auto" && rawTier !== "balanced";
-  const tier = explicit ? rawTier : "auto";
+  // 10-25：先用别名表归一化，再判断。pro/hd/quality 都会落到 high，
+  // 避免"客户端指定了高质量、服务端却按 auto 推断成 Flash"的静默降级。
+  const tier = normalizeTier(qualityTier);
 
   // 运维强制档：用于止损（比如 Pro 故障时全量切 Flash）
   if (mode === "flash_only") return { model: m.fast, reason: "routing=flash_only" };
@@ -1233,6 +1250,16 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const selectedModel = String(route.model || "").trim() || String(RT.IMAGE_MODEL || "").trim();
   if (!selectedModel) return { ok: false, code: 503, msg: "未配置生图模型" };
   const caps = capsOf(selectedModel);
+  // 10-25 P0：把"最终用了哪个模型、为什么"写进日志。
+  // 只打模型 id 与原因码，不打提示词正文（含用户内容），排查够用且不落隐私。
+  logStage("image_route", {
+    kind: String(taskKind || "generate"),
+    tier: normalizeTier(qualityTier),
+    model: selectedModel,
+    reason: String(route.reason || ""),
+    edit: !!image,
+    count: Number(requestedCount) > 1 ? Number(requestedCount) : 1,
+  });
 
   // 能力前置拦截：发出去必然失败的请求，不发。
   if (layerDecomposition === true && !caps.layers) {

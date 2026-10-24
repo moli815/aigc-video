@@ -26,7 +26,7 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertEqual(plan.taskType, .edit)
         XCTAssertTrue(plan.preserveOriginal, "编辑任务必须保留原图约束")
         XCTAssertTrue(plan.negativeConstraints.contains { $0.contains("不要改变人物面部特征") })
-        XCTAssertEqual(plan.qualityTier, "pro", "编辑走高质量档")
+        XCTAssertEqual(plan.qualityTier, "high", "编辑走高质量档")
     }
 
     func testReferenceStyleTransfer() {
@@ -39,7 +39,7 @@ final class ImageTaskPlannerTests: XCTestCase {
         let plan = ImageTaskPlanner.plan(userText: "做一张 AI 职业培训宣传海报，价格 2999 元")
         XCTAssertEqual(plan.taskType, .poster)
         XCTAssertEqual(plan.textPolicy, .programmatic, "海报文字必须程序排版")
-        XCTAssertEqual(plan.qualityTier, "pro")
+        XCTAssertEqual(plan.qualityTier, "high")
         XCTAssertEqual(plan.aspectRatio, "3:4")
         XCTAssertTrue(plan.prompt.contains("不要绘制任何文字"), "海报提示词必须禁止模型画字")
     }
@@ -112,5 +112,24 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertEqual(ImageService.taskKind(for: .series), "series")
         XCTAssertEqual(ImageService.taskKind(for: .reference), "generate", "参考图生成走普通生成")
         XCTAssertEqual(ImageService.taskKind(for: .poster), "generate", "海报底图仍走生成，文字由排版层负责")
+    }
+
+    // MARK: - 质量档位契约（10-25 修复：服务端只认 auto/fast/high）
+
+    func testQualityTierNormalization() {
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier("pro"), "high", "历史 'pro' 必须映射成 high")
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier("HD"), "high")
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier("flash"), "fast")
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier("auto"), "auto")
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier("随便"), "auto", "未知档位不能硬猜")
+        XCTAssertEqual(ImageTaskPlanner.normalizeQualityTier(nil), "auto")
+    }
+
+    func testPlannerNeverEmitsPro() {
+        for text in ["做一张海报", "把这张图改成海边", "画一只猫", "生成四张封面"] {
+            let plan = ImageTaskPlanner.plan(userText: text, referenceCount: text.contains("这张") ? 1 : 0)
+            XCTAssertTrue(["auto", "fast", "high"].contains(plan.qualityTier),
+                          "规划器只能输出 auto/fast/high，实际：\(plan.qualityTier)（\(text)）")
+        }
     }
 }

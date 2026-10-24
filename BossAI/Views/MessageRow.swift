@@ -399,6 +399,9 @@ private struct MessageImageView: View, Equatable {
     /// 取值的理由：低于 320 时名片/海报上的字看不清，高于 360 时 iPad 竖屏一屏放不下前后文。
     /// 只做「上限」不做固定高度——小图仍按原始比例显示，不会被拉伸。
     private static let maxInlineHeight: CGFloat = 340
+    /// 内联图片最大宽度：iPhone 上气泡本来就窄，这个值不生效；
+    /// iPad 横屏消息区可到 760pt，不加限制会让一张图横铺满屏（10-25 审查 §4.2）。
+    private static let maxInlineWidth: CGFloat = 520
 
     var body: some View {
         Group {
@@ -408,7 +411,7 @@ private struct MessageImageView: View, Equatable {
                 // 现在改为「限宽 + 限高」：等比缩放到 maxInlineHeight 以内，仍用 scaledToFit
                 // （绝不 scaledToFill 裁切，否则名片文字/Logo/海报边缘会被切掉）；点图进全屏看原图。
                 Image(uiImage: thumbnail).resizable().scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: Self.maxInlineHeight, alignment: .leading)
+                    .frame(maxWidth: Self.maxInlineWidth, maxHeight: Self.maxInlineHeight, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onTapGesture { fullscreen = true }
                     .contextMenu {

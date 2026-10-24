@@ -297,7 +297,11 @@ test("定价按模型分档，Flash 与 Pro 不同价", () => {
 test("智能分配只在未显式指定时生效", () => {
   const fn = IMAGE.slice(IMAGE.indexOf("function selectImageRoute"));
   const body = fn.slice(0, fn.indexOf("let _rtLoadedAt"));
-  assert.match(body, /const explicit = rawTier && rawTier !== "auto"/, "未区分显式指定与 auto");
-  assert.match(body, /inferQualityTier\(prompt, renderIntent\)/, "未做 prompt 推断");
+  // 10-25：原来靠 `rawTier !== "auto"` 判显式，pro/hd 这类别名会漏判并静默降级；
+  // 现在统一先 normalizeTier() 归一化，再比较 high/fast，语义不变但覆盖所有别名。
+  assert.match(body, /const tier = normalizeTier\(qualityTier\)/, "未先归一化档位");
+  assert.match(body, /if \(tier === "high"\) return \{ model: m\.pro/, "high 未走 Pro");
+  assert.match(body, /if \(tier === "fast"\) return \{ model: m\.fast/, "fast 未走 Flash");
+  assert.match(body, /inferQualityTier\(prompt, renderIntent\)/, "未做 prompt 推断（auto 分支）");
   assert.match(body, /inferred === "high"[\s\S]{0,80}m\.pro/, "推断 high 未走 Pro");
 });

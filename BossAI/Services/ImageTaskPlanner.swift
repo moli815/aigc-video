@@ -55,7 +55,7 @@ struct ImageTaskPlan: Equatable {
     let referenceCount: Int
     /// 目标比例，如 "1:1" / "3:4" / "16:9"
     let aspectRatio: String
-    /// 质量档位："auto"（交给服务端推断）/ "fast" / "pro"
+    /// 质量档位："auto"（交给服务端推断）/ "fast" / "high"（历史别名 pro 会归一为 high）
     let qualityTier: String
     /// 目标张数（1...4）
     let outputCount: Int
@@ -87,7 +87,7 @@ enum ImageTaskPlanner {
     ///   - referenceCount: 附带参考图数量（0 = 纯文字）
     ///   - requestedCount: 调用方已指定的张数（nil 表示未指定，由规划器推断）
     ///   - aspectRatio: 调用方已指定比例（nil 表示未指定）
-    ///   - qualityTier: 调用方已指定档位（"auto"/"fast"/"pro"）
+    ///   - qualityTier: 调用方已指定档位（"auto"/"fast"/"high"，pro/hd 会归一化）
     static func plan(userText: String,
                      referenceCount: Int = 0,
                      requestedCount: Int? = nil,
@@ -175,6 +175,20 @@ enum ImageTaskPlanner {
         return min(4, max(1, parsed))
     }
 
+    /// 质量档位归一化（10-25 契约修复）。
+    ///
+    /// 服务端只认 auto / fast / high；客户端历史上发的是 "pro"，导致"指定了高质量、
+    /// 服务端却按 auto 推断成 Flash"的静默降级——海报变糊就是这么来的。
+    /// 合法输出只有三个值，未知值一律回 auto（交回服务端判断），不硬猜。
+    static func normalizeQualityTier(_ raw: String?) -> String {
+        guard let raw else { return "auto" }
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "high", "pro", "quality", "best", "hd", "2k": return "high"
+        case "fast", "flash", "draft", "quick", "low": return "fast"
+        default: return "auto"
+        }
+    }
+
     /// 归一化调用方传入的比例："3:4" / "3x4" / "3：4" 都接受
     static func normalizeAspect(_ raw: String?) -> String? {
         guard let raw else { return nil }
@@ -222,10 +236,12 @@ enum ImageTaskPlanner {
     }
 
     private static func resolveTier(explicit: String?, type: ImageTaskType) -> String {
-        if let explicit, explicit != "auto", !explicit.isEmpty { return explicit }
+        if let normalized = explicit.map(normalizeQualityTier), normalized != "auto" {
+            return normalized
+        }
         switch type {
-        case .poster: return "pro"       // 商业物料，视觉质量优先
-        case .edit: return "pro"         // 编辑要尽量保真，走高质量档
+        case .poster: return "high"      // 商业物料，视觉质量优先
+        case .edit: return "high"        // 编辑要尽量保真，走高质量档
         case .series: return "auto"      // 组图由服务端的 series 模型决定
         default: return "auto"
         }

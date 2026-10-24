@@ -58,3 +58,27 @@ test("MODELS-05 路由失败不能把整个端点打挂", () => {
   const body = IMG.slice(start, start + 2600);
   assert.match(body, /catch \(e\) \{[\s\S]{0,160}route-error/, "单个探针异常没有兜底");
 });
+
+test("MODELS-06 质量档位必须归一化：pro/hd/quality → high（10-25 契约修复）", () => {
+  const start = IMG.indexOf("const TIER_ALIASES");
+  assert.ok(start > 0, "缺少档位别名表");
+  const body = IMG.slice(start, start + 700);
+  assert.match(body, /pro: "high"/, "pro 未映射到 high（会静默降级成 Flash）");
+  assert.match(body, /fast: "fast", flash: "fast"/, "fast/flash 映射缺失");
+  assert.match(body, /function normalizeTier/, "缺少 normalizeTier()");
+  // 路由内部必须用归一化后的值比较，不能直接拿原始字符串比
+  const routeStart = IMG.indexOf("function selectImageRoute");
+  const routeBody = IMG.slice(routeStart, routeStart + 900);
+  assert.match(routeBody, /const tier = normalizeTier\(qualityTier\)/, "路由没有使用归一化档位");
+  assert.doesNotMatch(routeBody, /tier === "pro"/, "仍在按未归一化的 pro 判断");
+});
+
+test("MODELS-07 每次真实路由都要留下可解释日志（不打提示词正文）", () => {
+  const start = IMG.indexOf('logStage("image_route"');
+  assert.ok(start > 0, "缺少 image_route 日志");
+  const body = IMG.slice(start, start + 420);
+  for (const key of ["kind", "tier", "model", "reason"]) {
+    assert.ok(body.includes(key + ":"), `路由日志缺少 ${key}`);
+  }
+  assert.doesNotMatch(body, /prompt:/, "路由日志不应记录提示词正文（含用户内容）");
+});
