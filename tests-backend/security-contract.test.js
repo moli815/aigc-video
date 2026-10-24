@@ -154,9 +154,13 @@ test("BILL-02 记账按唯一事件分阶段提交，flushJobs 只在成功时�
 
 test("BIZ-01 续费只执行一次 accounts.update", () => {
   const start = API.indexOf("const renewPatch = {");
-  const seg = API.slice(start, start + 1200);
-  const updates = seg.match(/db\.collection\(C\.accounts\)\.doc\(reqDoc\.accountId\)\.update\(renewPatch\)/g) || [];
-  assert.strictEqual(updates.length, 1, `renewPatch 写入次数应为 1，实际 ${updates.length}`);
+  const seg = API.slice(start, start + 4000);
+  // 10-25 C2.2-FIX：续费写入从"doc().update(renewPatch)"改为带条件的 where().update()，
+  // 目的不只是"只写一次"，而是"同一次写里同时校验幂等键与到期日版本"。
+  const unconditional = seg.match(/db\.collection\(C\.accounts\)\.doc\(reqDoc\.accountId\)\.update\(renewPatch\)/g) || [];
+  assert.strictEqual(unconditional.length, 0, "仍存在无条件的整包写入（会覆盖并发续费）");
+  const conditional = seg.match(/where\(\{[\s\S]{0,160}renewedRequestIds: _\.nin/g) || [];
+  assert.ok(conditional.length >= 1, "续费未使用条件更新（缺幂等键）");
 });
 
 // ─────────────────────────────────────────────────────────────

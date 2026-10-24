@@ -3503,24 +3503,59 @@ async function doApprove(reqDoc, staff, auto) {
       renewPatch.tier = reqDoc.tier;
       renewPatch.planPriceCny = TIERS[reqDoc.tier].priceCny;
     }
-    // 10-24 修复：这里原来连续执行了两次 accounts.update(renewPatch)。
-    // 第一次成功、第二次失败时，外层会认为审批失败，但会员到期时间与额度已经改了——
-    // 重试会再次续期。只保留一次写入。
-    await db.collection(C.accounts).doc(reqDoc.accountId).update(renewPatch);
+    // ── 10-25 C2.2-FIX：R1 续费重复顺延 / R3 不同申请并发覆盖 ──
+    // 一次条件更新同时完成三件事：校验"这条申请没生效过"、改到期日、记下申请 ID。
+    // 条件是 renewedRequestIds 不含本申请 + expiresAt 仍是刚才读到的值：
+    //   · R1：同一申请重跑 → 条件不命中 → updated=0 → 视为已完成（幂等，不再顺延）
+    //   · R3：另一条申请抢先改了 expiresAt → 条件不命中 → 重读新值重算 → 两次延期累计
+    // 绝不能再拆成"先 update 再 addToSet"两次写：中间失败就会留下"改了期限但没标记"的窗口。
+    const _ = db.command;
+    let renewApplied = false;
+    let renewTo = to;
+    for (let attempt = 0; attempt < 3 && !renewApplied; attempt++) {
+      const fresh = await db.collection(C.accounts).doc(reqDoc.accountId).get();
+      const acc2 = (fresh.data || [])[0];
+      if (!acc2) throw new Error("ACCOUNT_NOT_FOUND");
+      const appliedIds = Array.isArray(acc2.renewedRequestIds) ? acc2.renewedRequestIds : [];
+      if (appliedIds.indexOf(reqDoc._id) >= 0) {
+        return { type: "renew", to: acc2.expiresAt, idempotent: true };
+      }
+      // 每轮都按"最新到期日"重算，避免用旧值覆盖别人的续费
+      const base2 = isUpgrade ? now : (acc2.expiresAt && new Date(acc2.expiresAt).getTime() > now.getTime()
+        ? new Date(acc2.expiresAt) : now);
+      const computed = new Date(base2);
+      computed.setMonth(computed.getMonth() + MEMBER_MONTHS);
+      if (isUpgrade && bonusDays > 0) computed.setDate(computed.getDate() + bonusDays);
+      renewTo = computed;
+
+      const claim = await db.collection(C.accounts)
+        .where({
+          _id: reqDoc.accountId,
+          expiresAt: acc2.expiresAt,
+          renewedRequestIds: _.nin([reqDoc._id]),
+        })
+        .update(Object.assign({}, renewPatch, {
+          expiresAt: computed,
+          renewedRequestIds: _.push(reqDoc._id),
+        }));
+      if (claim && claim.updated) { renewApplied = true; }
+      // updated=0 → 被并发抢先，进入下一轮重算（最多 3 次）
+    }
+    if (!renewApplied) throw new Error("RENEW_CONFLICT_RETRY");
     await db.collection(C.requests).doc(reqDoc._id).update({
       status: "approved", reviewedAt: now, reviewedBy, autoApproved: !!auto,
-      renewFrom: from, renewTo: to,
+      renewFrom: from, renewTo: renewTo, fulfillmentState: "done",
     });
     await db.collection(C.notifications).add({
       toStaffId: reqDoc.submittedBy,
       type: "renew_ready",
       title: "续费已完成",
-      body: `「${reqDoc.customerName}」的会员已续期至 ${to.toISOString().slice(0, 10)}`,
+      body: `「${reqDoc.customerName}」的会员已续期至 ${renewTo.toISOString().slice(0, 10)}`,
       refRequestId: reqDoc._id,
       read: false,
       createdAt: now,
     });
-    return { type: "renew", to };
+    return { type: "renew", to: renewTo };
   }
 
   // 开通：生成账号 + 落存档 + 通知提交人（优先使用员工自定义的登录名/密码）
@@ -3529,7 +3564,15 @@ async function doApprove(reqDoc, staff, auto) {
   const expiresAt = new Date(now);
   expiresAt.setMonth(expiresAt.getMonth() + MEMBER_MONTHS);
 
-  const addedAccount = await db.collection(C.accounts).add({
+  // ── 10-25 C2.2-FIX：R2 重复开通 ──
+  // 账号 _id 由申请 ID 派生：同一条申请永远对应同一个账号文档。
+  // 重试时 add 必然撞主键 → 识别为"已经建过"，直接复用，不会再生成第二个用户名。
+  const accountDocId = "acct_" + reqDoc._id;
+  let addedAccount = null;
+  let accountReused = false;
+  try {
+    addedAccount = await db.collection(C.accounts).add({
+    _id: accountDocId,
     username,
     passwordHash: hashPassword(password),
     displayName: reqDoc.customerName,
@@ -3547,7 +3590,17 @@ async function doApprove(reqDoc, staff, auto) {
     note: "",
   });
 
+  } catch (e) {
+    if (!isDuplicateKeyError(e)) throw e;
+    // 已经建过：读回原账号复用（这才是"重试找到原账号"而不是再造一个）
+    const ex = await db.collection(C.accounts).doc(accountDocId).get();
+    addedAccount = (ex.data || [])[0] || null;
+    accountReused = true;
+    if (!addedAccount) throw new Error("ACCOUNT_CREATE_FAILED");
+  }
+
   const delivery = await db.collection(C.deliveries).add({
+    _id: "dlv_" + reqDoc._id,          // 发放记录同样按申请绑定，重试不会写第二条
     chargedAt: reqDoc.createdAt,
     username,
     passwordCipher: encryptPwd(password),

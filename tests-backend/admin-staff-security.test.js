@@ -199,3 +199,50 @@ test("IDEM-06 前端必须发送 operationId，并在网络错误时去查真实
   assert.ok(ADMIN.includes("if(isNetworkish(e)){ afterUnknownResult(); }"), "网络错误未走确认流程");
   assert.ok(ADMIN.includes("CUR.op=null;"), "成功后未清空操作标识");
 });
+
+// ── C2.2-FIX：履约幂等（R1 重复顺延 / R2 重复建号 / R3 并发覆盖）──────────────
+
+test("FUL-01 续费：幂等键与到期日更新必须在同一次条件更新里", () => {
+  const start = API.indexOf("RENEW_CONFLICT_RETRY");
+  assert.ok(start > 0, "缺少冲突重试标记");
+  const body = API.slice(start - 2200, start);
+  assert.ok(body.includes("renewedRequestIds: _.nin([reqDoc._id])"), "条件里没有幂等键检查");
+  assert.ok(body.includes("renewedRequestIds: _.push(reqDoc._id)"), "同一次更新里没有写入申请 ID");
+  assert.ok(/where\(\{[\s\S]{0,200}expiresAt: acc2\.expiresAt/.test(body), "条件里没有到期日版本校验（R3 会覆盖）");
+  // 不能拆成两次独立写
+  assert.ok(!/update\(renewPatch\);\s*\n\s*await db\.collection\(C\.accounts\)\.doc\(reqDoc\.accountId\)\.update\(\{\s*renewedRequestIds/.test(body),
+    "仍然拆成了两次写");
+});
+
+test("FUL-02 续费：已生效的申请直接返回 idempotent，不再顺延", () => {
+  const start = API.indexOf("RENEW_CONFLICT_RETRY");
+  const body = API.slice(start - 2200, start);
+  assert.ok(body.includes("appliedIds.indexOf(reqDoc._id) >= 0"), "没有识别已生效的申请");
+  assert.ok(body.includes("idempotent: true"), "重复执行未返回幂等标记");
+});
+
+test("FUL-03 续费：并发冲突要重读重算并限次（R3 累计而不是覆盖）", () => {
+  const start = API.indexOf("RENEW_CONFLICT_RETRY");
+  const body = API.slice(start - 2200, start);
+  assert.ok(body.includes("attempt < 3"), "没有重试上限");
+  assert.ok(body.includes("const fresh = await db.collection(C.accounts).doc(reqDoc.accountId).get()"),
+    "冲突后没有重读最新到期日");
+});
+
+test("FUL-04 开通：账号 _id 绑定申请，重复创建复用原账号（R2）", () => {
+  const start = API.indexOf("R2 重复开通");
+  assert.ok(start > 0, "缺少 R2 修复标记");
+  const body = API.slice(start, start + 1800);
+  assert.ok(body.includes('const accountDocId = "acct_" + reqDoc._id'), "账号 ID 未绑定申请");
+  assert.ok(body.includes("_id: accountDocId"), "add 时未使用绑定 ID");
+  assert.ok(body.includes("isDuplicateKeyError(e)"), "未识别重复创建");
+  assert.ok(body.includes("accountReused = true"), "未标记复用");
+});
+
+test("FUL-05 开通：发放记录也按申请绑定，重试不写第二条", () => {
+  assert.ok(API.includes('_id: "dlv_" + reqDoc._id'), "发放记录未绑定申请 ID");
+});
+
+test("FUL-06 审核成功要落履约状态，供管理端区分审核与履约", () => {
+  assert.ok(API.includes('fulfillmentState: "done"'), "续费未写履约状态");
+});
