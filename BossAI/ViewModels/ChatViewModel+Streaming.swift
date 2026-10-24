@@ -430,10 +430,9 @@ extension ChatViewModel {
                                     continue
                                 }
 } else if toolName == "image_series" {
-                                // 10-23 官方核实：5.0 Pro 不支持组图（传 auto 会直接报错）
-                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": ToolPipeline.failureNote(pluginID: "image_series", reason: "当前使用的 Seedream 5.0 Pro 不支持组图（官方能力表标注暂不支持）。请如实告诉用户：可以一次生成一张，或改用 5.0 Lite 模型。")])
-                                continue
+                                // 10-24：不再在客户端硬拦截。服务端已有组图编排器，
+                                // 会拆成 N 个单图子任务并各自记账，支持部分成功。
+                                // 这里让流程继续走到下面的 generate（带 task_kind=series）。
                             } else if toolName == "image_generate" {
                                 // 纯文生图：契约上就不带参考图
                             } else {
@@ -446,7 +445,18 @@ extension ChatViewModel {
                             // 10-23 出图意图：flat_artwork 直接出可印刷平面稿，避免名片/海报被画成"白底展示稿"
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
-                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: aspectRatio)
+                            // 10-24 任务类型显式传给服务端（服务端也做兜底推断，但显式更准）
+                            let imageTaskKind: String = {
+                                switch toolName {
+                                case "image_edit": return "edit"
+                                case "image_decompose": return "decompose"
+                                case "image_series": return "series"
+                                default: return "generate"
+                                }
+                            }()
+                            let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
+                            let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
+                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: imageTaskKind, qualityTier: qualityTier, requestedCount: requestedCount > 1 ? requestedCount : nil)
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
                             // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。

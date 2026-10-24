@@ -39,6 +39,16 @@ process.on("unhandledRejection", (err) => {
 });
 
 const tcb = require("@cloudbase/node-sdk");
+const { computeTiers, applyTiersInto } = require("./tiers");
+const { publicError } = require("./error-catalog");
+const { AsyncLocalStorage } = require("async_hooks");
+// 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
+// 不需要逐层传参。每个请求在入口 enterWith 一次。
+const reqStore = new AsyncLocalStorage();
+function currentRequestId() {
+  const st = reqStore.getStore();
+  return (st && st.requestId) || "";
+}
 
 // ───────────────────────── 常量 ─────────────────────────
 
@@ -88,16 +98,20 @@ const RUNTIME_SPECS = {
   CHAT_PRICE_OUT:     { type: "num", label: "日常对话价 · 输出（元/百万token）", def: () => Number(process.env.CHAT_PRICE_OUT || 2.7) },
   CHAT_PRO_PRICE_IN:  { type: "num", label: "深度对话价 · 输入", def: () => Number(process.env.CHAT_PRO_PRICE_IN || 9.0) },
   CHAT_PRO_PRICE_OUT: { type: "num", label: "深度对话价 · 输出", def: () => Number(process.env.CHAT_PRO_PRICE_OUT || 27.0) },
-  IMAGE_MODEL:        { type: "str", label: "作图模型 · 快速", def: () => process.env.IMAGE_MODEL || "doubao-seedream-5-0-flash-260915" },
-  IMAGE_MODEL_PRO:    { type: "str", label: "作图模型 · 高质量", def: () => process.env.IMAGE_MODEL_PRO || "doubao-seedream-5-0-pro-260628" },
+  IMAGE_MODEL:        { type: "str", label: "作图模型 · 兼容别名（未配置下面两项时作为默认；建议逐步弃用）", def: () => process.env.IMAGE_MODEL || "doubao-seedream-5-0-flash-260915" },
+  IMAGE_MODEL_FAST:   { type: "str", label: "作图模型 · 快速档（普通插画/配图/草稿，留空=用兼容别名）", def: () => process.env.IMAGE_MODEL_FAST || "" },
+  IMAGE_MODEL_PRO:    { type: "str", label: "作图模型 · 高质量档（品牌主视觉/最终稿/精细改图）", def: () => process.env.IMAGE_MODEL_PRO || "doubao-seedream-5-0-pro-260628" },
+  IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（分镜/系列，须为支持组图的模型；留空=禁用组图）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
+  IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "1.5K" },
-  IMAGE_PRICE:        { type: "num", label: "作图价 · 快速（元/张）", def: () => Number(process.env.IMAGE_PRICE || 0.12) },
+  IMAGE_PRICE_FAST:   { type: "num", label: "作图价 · Flash ≤1.5K（元/张，官方成本 0.12）", def: () => Number(process.env.IMAGE_PRICE_FAST || 0.3) },
+  IMAGE_PRICE:        { type: "num", label: "作图价 · Pro ≤1.5K（元/张，官方成本 0.30）", def: () => Number(process.env.IMAGE_PRICE || 0.45) },
   IMAGE_PRICE_PRO:    { type: "num", label: "作图价 · 高质量（元/张）", def: () => Number(process.env.IMAGE_PRICE_PRO || 0.24) },
   IMAGE_SIZES:        { type: "str", label: "作图尺寸白名单（旧，已由像素预算取代）", def: () => process.env.IMAGE_SIZES || "1024x1024,864x1152,1152x864,1440x720,720x1440" },
   IMAGE_MAX_PIXELS:   { type: "num", label: "作图总像素预算上限（921600=720p，1048576=1K，2360000=1.5K）", def: () => Number(process.env.IMAGE_MAX_PIXELS || 2360000) },
   IMAGE_2K_PIXELS:    { type: "num", label: "2K 计价阈值（总像素，超过按 2K 价）", def: () => Number(process.env.IMAGE_2K_PIXELS || 3000000) },
-  IMAGE_PRICE_2K:     { type: "num", label: "作图价 · 2K 尺寸（元/张）", def: () => Number(process.env.IMAGE_PRICE_2K || 0.61) },
+  IMAGE_PRICE_2K:     { type: "num", label: "作图价 · Pro >1.5K（元/张，官方成本 0.60）", def: () => Number(process.env.IMAGE_PRICE_2K || 0.9) },
   // 10-23：≤1.5K 档位单价（bf-image 记账用，与 2K 分开计价）
   IMAGE_PRICE_SMALL:  { type: "num", label: "作图价 · 1.5K 及以下（元/张）· bf-image 记账", def: () => Number(process.env.IMAGE_PRICE_SMALL || 0.45) },
   CHAT_CAP_CNY:       { type: "num", label: "对话月上限（元）", def: () => Number(process.env.CHAT_CAP_CNY || 100) },
@@ -196,6 +210,9 @@ const RUNTIME = {};
 for (const [k, s] of Object.entries(RUNTIME_SPECS)) RUNTIME[k] = s.def();
 
 let _rtLoadedAt = 0;
+// 10-24：配置快照版本。客户端据此判断"配置是否变化"，管理台据此对账。
+let _rtRevision = "0";
+let _rtUpdatedAt = "";
 async function refreshRuntime(force = false) {
   if (!force && Date.now() - _rtLoadedAt < 30000) return;   // 30s TTL，DB 读取有界
   _rtLoadedAt = Date.now();
@@ -204,8 +221,21 @@ async function refreshRuntime(force = false) {
     const doc = (r.data || [])[0];
     if (doc && doc.data) {
       for (const k of Object.keys(RUNTIME_SPECS)) {
-        if (doc.data[k] !== undefined && doc.data[k] !== null && doc.data[k] !== "") RUNTIME[k] = doc.data[k];
+        const spec = RUNTIME_SPECS[k];
+        const v = doc.data[k];
+        const blank = (v === undefined || v === null || v === "");
+        if (blank) {
+          // 10-24：区分两种"空"语义。
+          //   secret  → 留空 = 不修改（沿用环境变量，避免误清空 Key 导致全站不可用）
+          //   其他类型 → 留空 = 显式回默认（此前是"保留旧值"，导致管理台永远清不掉一个坏配置）
+          if (spec && spec.type === "secret") continue;
+          RUNTIME[k] = spec ? spec.def() : undefined;
+        } else {
+          RUNTIME[k] = v;
+        }
       }
+      _rtRevision = String(doc.revision || (doc.updatedAt ? new Date(doc.updatedAt).getTime() : "") || "0");
+      _rtUpdatedAt = doc.updatedAt ? new Date(doc.updatedAt).toISOString() : "";
     }
   } catch { /* DB 异常时沿用当前值，不影响服务 */ }
   try {
@@ -244,20 +274,15 @@ function applyRuntime() {
   SERVICE_START_HOUR = RUNTIME.SERVICE_START_HOUR;
   SERVICE_END_HOUR = RUNTIME.SERVICE_END_HOUR;
   AUTO_APPROVE_HOURS = RUNTIME.AUTO_APPROVE_HOURS;
-  // P0-34 档位运营配置：把 DB 里的覆盖原地写入 TIERS（价格/额度/显示/收款码/功能开关），零改动全部引用点
+  // P0-34 档位运营配置：把 DB 里的覆盖写入 TIERS（价格/额度/显示/收款码/功能开关）。
+  // 10-24：改为「从不可变基线重建 + 叠加覆盖」的纯函数（tiers.js），
+  // 保证"删掉覆盖项 = 回到默认"，且多次 applyRuntime 之间不残留上一次的覆盖。
   try {
     const ov = JSON.parse(RUNTIME.TIERS_OVERRIDE || "{}");
-    for (const k of TIER_ORDER) {
-      const o = ov[k];
-      if (!o || typeof o !== "object") continue;
-      const t = TIERS[k];
-      if (Number.isFinite(Number(o.priceCny)) && Number(o.priceCny) > 0) t.priceCny = Number(o.priceCny);
-      if (Number.isFinite(Number(o.poolCapCny)) && Number(o.poolCapCny) > 0) t.poolCapCny = Number(o.poolCapCny);
-      if (typeof o.visible === "boolean") t.visible = o.visible;
-      if (typeof o.qrFile === "string" && /^[\w\-./:]{1,200}$/.test(o.qrFile)) t.qrFile = o.qrFile;
-      if (o.features && typeof o.features === "object") t.features = Object.assign({}, t.features, o.features);
-    }
-  } catch { /* 配置异常时沿用代码默认，不影响服务 */ }
+    applyTiersInto(TIERS, computeTiers(DEFAULT_TIERS, ov, TIER_ORDER), TIER_ORDER);
+  } catch {
+    resetTiersToDefault();   // 配置损坏：回到代码默认，不沿用未知旧值
+  }
 }
 // 会员有效期（月）
 const MEMBER_MONTHS = 1;
@@ -302,6 +327,30 @@ const TIERS = {
   },
 };
 const TIER_ORDER = ["plus", "pro", "ultra"];
+
+/**
+ * 10-24 修复（CFG-01）：档位的不可变基线。
+ * 旧实现 applyRuntime 把 DB 覆盖**原地写进 TIERS**，而"清空某个字段"只是跳过赋值——
+ * 上一次覆盖的值会永久残留。表现是：运营把价格改回默认，页面却还是旧价格；
+ * 回滚快照后档位不恢复。现在每次都从基线重建，再叠加覆盖。
+ */
+const DEFAULT_TIERS = JSON.parse(JSON.stringify(TIERS));
+
+function resetTiersToDefault() {
+  for (const k of TIER_ORDER) {
+    const d = DEFAULT_TIERS[k];
+    const t = TIERS[k];
+    if (!d || !t) continue;
+    t.key = d.key;
+    t.name = d.name;
+    t.priceCny = d.priceCny;
+    t.poolCapCny = d.poolCapCny;
+    t.qrFile = d.qrFile;
+    t.visible = d.visible;
+    // features 必须深拷贝，否则 DEFAULT 与运行时共享同一个对象
+    t.features = Object.assign({}, d.features);
+  }
+}
 // 日/周限 = 月池的固定比例（改额度自动跟着变，无需改代码）
 const LIMIT_RATIO = { day: 0.05, week: 0.30 };
 
@@ -600,23 +649,44 @@ function sendJson(res, code, data) {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * 10-24：统一错误出口。
+ * 内部错误码只进日志与 error/errorDetail 字段，message 一律是自然语言。
+ * 调用方传入的具体文案（如"请填写客户称呼"）会先过安全过滤，含技术痕迹则丢弃。
+ */
 function sendError(res, code, error, message) {
-  sendJson(res, code, { ok: false, error, message: message || error });
+  const pub = publicError(error, {
+    message,
+    requestId: currentRequestId(),
+    stage: String(res.__stage || ""),
+  });
+  // 内部原因只进日志，不进响应
+  console.log(JSON.stringify({
+    tag: "api_error", fn: "bf-api", requestId: pub.requestId,
+    httpStatus: code, code: pub.error, category: pub.errorDetail.category,
+    retryable: pub.errorDetail.retryable, stage: pub.errorDetail.stage,
+    detail: String(message || "").slice(0, 200),
+  }));
+  sendJson(res, code, pub);
 }
 
 function readJsonBody(req, maxBytes = 12 * 1024 * 1024) {
   return new Promise((resolve) => {
-    let raw = "";
+    // 10-24 修复（REQ-01）：按**字节**计数。旧实现用 string.length 比较 maxBytes，
+    // 中文/emoji 一个字符 3~4 字节 —— 声明 12MB 实际可收到 36~48MB。
+    const chunks = [];
+    let total = 0;
     let overflow = false;
     req.on("data", (c) => {
-      if (overflow) return;   // 超限后只排水不累积：让客户端收完响应，而不是 reset 连接（曾导致 App 收到 430 天书）
-      raw += c;
-      if (raw.length > maxBytes) { overflow = true; raw = ""; }
+      if (overflow) return;   // 超限后只排水不累积：让客户端收完响应，而不是 reset 连接
+      total += c.length;
+      if (total > maxBytes) { overflow = true; chunks.length = 0; return; }
+      chunks.push(c);
     });
     req.on("end", () => {
       if (overflow) return resolve({ __overflow: true });
-      if (!raw) return resolve({});
-      try { resolve(JSON.parse(raw)); } catch { resolve({}); }
+      if (!chunks.length) return resolve({});
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); } catch { resolve({}); }
     });
     req.on("error", () => resolve({}));
   });
@@ -732,21 +802,78 @@ function bearer(req) {
 }
 
 /** 会员鉴权 */
-function requireMember(req, res) {
+/**
+ * 10-24 AUTH-01：会员鉴权改为「验签 + 实时状态」双检。
+ *
+ * 旧实现只验 JWT 签名，token 里的 status/pwv/sv 从不与数据库比对——
+ * 账号被停用、密码被重置、被其他设备顶下线后，旧 token 在过期前仍然畅通无阻。
+ *
+ * 现在每次请求都读一次账号文档（云函数单次 DB 读约 5~20ms），校验：
+ *   · 账号存在且 status === "active"
+ *   · pwv（密码版本）一致 —— 改密/重置密码后所有旧 token 立即失效
+ *   · sv（会话版本）一致 —— 新设备登录后旧设备立即被顶下线
+ *   · expiresAt 未过期
+ *
+ * DB 不可用时 fail-closed（返回 503），不默认放行——否则一次 DB 抖动就等于全站免鉴权。
+ */
+async function requireMember(req, res) {
   const payload = verifyToken(bearer(req));
   if (!payload || payload.t !== "member") { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
-  return payload;
-}
-
-/** 管理端鉴权；needAdmin=true 时强制要求管理员角色 */
-function requireStaff(req, res, needAdmin) {
-  const payload = verifyToken(bearer(req));
-  if (!payload || payload.t !== "staff") { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
-  if (needAdmin && payload.role !== "admin") {
-    sendError(res, 403, "FORBIDDEN", "该操作仅管理员可用");
+  try {
+    const r = await db.collection(C.accounts).doc(payload.sub).get();
+    const acc = (r.data || [])[0];
+    if (!acc) { sendError(res, 401, "UNAUTHORIZED", "账号不存在，请重新登录"); return null; }
+    if (acc.status !== "active") {
+      sendError(res, 403, "ACCOUNT_SUSPENDED", "该账号已停用，请联系客服");
+      return null;
+    }
+    if (Number(acc.pwv || 0) !== Number(payload.pwv || 0)) {
+      sendError(res, 401, "UNAUTHORIZED", "登录状态已更新，请重新登录");
+      return null;
+    }
+    if (Number(acc.sv || 0) !== Number(payload.sv || 0)) {
+      sendError(res, 401, "SESSION_REPLACED", "账号已在其他设备登录，当前设备已退出");
+      return null;
+    }
+    if (acc.expiresAt && new Date(acc.expiresAt).getTime() < Date.now()) {
+      sendError(res, 403, "MEMBERSHIP_EXPIRED", "会员已到期，请联系续费");
+      return null;
+    }
+    return payload;
+  } catch (e) {
+    console.log(JSON.stringify({ tag: "auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+    sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
     return null;
   }
-  return payload;
+}
+
+/**
+ * 10-24 AUTH-01：员工鉴权同样加实时校验。
+ * 员工被禁用、删除或改角色后，旧 token 立即失效（不再等自然过期）。
+ */
+async function requireStaff(req, res, needAdmin) {
+  const payload = verifyToken(bearer(req));
+  if (!payload || payload.t !== "staff") { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
+  try {
+    const r = await db.collection(C.staff).doc(payload.sub).get();
+    const st = (r.data || [])[0];
+    if (!st) { sendError(res, 401, "UNAUTHORIZED", "员工账号不存在，请重新登录"); return null; }
+    if (st.status && st.status !== "active") {
+      sendError(res, 403, "STAFF_DISABLED", "该员工账号已停用，请联系管理员");
+      return null;
+    }
+    // 角色以数据库为准：被降权后旧 token 里的 role 不再生效
+    const liveRole = String(st.role || payload.role || "");
+    if (needAdmin && liveRole !== "admin") {
+      sendError(res, 403, "FORBIDDEN", "该操作仅管理员可用");
+      return null;
+    }
+    return Object.assign({}, payload, { role: liveRole });
+  } catch (e) {
+    console.log(JSON.stringify({ tag: "staff_auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+    sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
+    return null;
+  }
 }
 
 // P0-36 生图防抖缓存（实例内内存，60 秒窗口；多实例不共享，够用于"重试/连点"场景）
@@ -1309,7 +1436,7 @@ function handleTiers(req, res) {
  * 好处：抽取策略/提示词改在服务端（不出包）；各端行为一致；失败静默返回空决策（绝不阻塞）。
  */
 async function handleMemoryExtract(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   await refreshRuntime();
   if (!RUNTIME.CHAT_API_KEY) return sendError(res, 503, "UPSTREAM_NOT_CONFIGURED", "服务暂未就绪");
@@ -1366,7 +1493,7 @@ async function handleMemoryExtract(req, res) {
 
 /** POST /sync/push：批量 upsert（对话/记忆/文件索引），返回服务器时间 */
 async function handleSyncPush(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req);
   const items = Array.isArray(body.items) ? body.items.slice(0, 200) : [];   // 防呆：单次最多 200 条
@@ -1432,7 +1559,7 @@ async function handleSyncPush(req, res) {
 
 /** GET /sync/pull?since=毫秒&limit=条数&cursor=游标：增量拉取（含删除标记），支持分页 */
 async function handleSyncPull(req, res, url) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const now = nowMs();
   // since 上限钳制到服务器当前时间：客户端时钟快会跳过未来记录
@@ -1460,10 +1587,14 @@ async function handleSyncPull(req, res, url) {
     //   ② updatedAt == cursorTs 且 _id > cursorId（同一毫秒内续页）
     let rows = [];
     if (cursorId && cursorTs >= since) {
-      const [later, sameTs] = await Promise.all([
-        db.collection(C.userData)
+      const laterQuery = () => db.collection(C.userData)
+        .where({ accountId: auth.sub, updatedAt: _.gt(cursorTs) })
+        .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get()
+        .catch(() => db.collection(C.userData)
           .where({ accountId: auth.sub, updatedAt: _.gt(cursorTs) })
-          .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get(),
+          .orderBy("updatedAt", "asc").limit(limit).get());
+      const [later, sameTs] = await Promise.all([
+        laterQuery(),
         db.collection(C.userData)
           .where({ accountId: auth.sub, updatedAt: _.eq(cursorTs), _id: _.gt(cursorId) })
           .orderBy("_id", "asc").limit(limit).get(),
@@ -1472,10 +1603,18 @@ async function handleSyncPull(req, res, url) {
         .sort((a, b) => (a.updatedAt - b.updatedAt) || String(a._id).localeCompare(String(b._id)))
         .slice(0, limit);
     } else {
-      const r = await db.collection(C.userData)
-        .where({ accountId: auth.sub, updatedAt: _.gt(since) })
-        // 与续页保持同序：同一毫秒内按 _id 升序，否则游标的 tiebreaker 会错位
-        .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get();
+      let r;
+      try {
+        r = await db.collection(C.userData)
+          .where({ accountId: auth.sub, updatedAt: _.gt(since) })
+          // 与续页保持同序：同一毫秒内按 _id 升序，否则游标的 tiebreaker 会错位
+          .orderBy("updatedAt", "asc").orderBy("_id", "asc").limit(limit).get();
+      } catch (e) {
+        // 兜底：个别环境/索引组合不接受链式多字段排序，退回单字段（顺序仍可用于游标）
+        r = await db.collection(C.userData)
+          .where({ accountId: auth.sub, updatedAt: _.gt(since) })
+          .orderBy("updatedAt", "asc").limit(limit).get();
+      }
       rows = r.data || [];
     }
     for (const d of rows) {
@@ -1509,7 +1648,7 @@ async function handleSyncPull(req, res, url) {
 
 /** GET /schedules：我的定时任务列表 */
 async function handleSchedulesList(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const r = await db.collection(C.schedules)
     .where({ accountId: auth.sub, status: "active" })
@@ -1524,7 +1663,7 @@ async function currentTier(accountId) {
 
 /** POST /schedules {type, hour}：创建（按档位限额，防呆校验） */
 async function handleScheduleCreate(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req);
   const type = body.type === "weekly" ? "weekly" : (body.type === "morning" ? "morning" : null);
@@ -1562,7 +1701,7 @@ async function handleScheduleCreate(req, res) {
 
 /** DELETE /schedules/:id：删除（只能删自己的） */
 async function handleScheduleDelete(req, res, id) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const r = await db.collection(C.schedules).doc(id).get();
   const doc = (r.data || [])[0];
@@ -1692,7 +1831,7 @@ async function embedTexts(texts) {
 
 /** GET /custom-experts：我的自定义专家 */
 async function handleCustomExpertsList(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const r = await db.collection(C.customExperts)
     .where({ accountId: auth.sub, status: "active" })
@@ -1709,7 +1848,7 @@ async function handleCustomExpertsList(req, res) {
 
 /** POST /custom-experts {name, subtitle, knowledge}：创建（Ultra 专属） */
 async function handleCustomExpertCreate(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req);
   const name = String(body.name || "").trim().slice(0, 20);
@@ -1752,7 +1891,7 @@ async function handleCustomExpertCreate(req, res) {
 
 /** DELETE /custom-experts/:id */
 async function handleCustomExpertDelete(req, res, id) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const r = await db.collection(C.customExperts).doc(id).get();
   const doc = (r.data || [])[0];
@@ -1841,7 +1980,7 @@ async function customExpertContext(accountId, userText) {
 
 /** GET /payment-info?tier=pro：会员自助缴费所需的金额、收款码、当前额度与重置时间 */
 async function handlePaymentInfo(req, res, url) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const r = await db.collection(C.accounts).doc(auth.sub).get();
   const account = (r.data || [])[0];
@@ -1873,7 +2012,7 @@ async function handlePaymentInfo(req, res, url) {
 
 /** POST /renew-self：会员在 App 内扫码付款后自助提交续费申请（带档位标签，防重复） */
 async function handleSelfRenew(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req);
   const r = await db.collection(C.accounts).doc(auth.sub).get();
@@ -1914,7 +2053,7 @@ async function handleSelfRenew(req, res) {
 }
 
 async function handleMe(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   // P0-64 修复：/me 是 App 拉取配置的入口（能力/行为配置），必须先刷新运行时配置——
   // 此前不刷新，“管理台改数 → 下发”在 App 侧会拿到旧值（自测 E2E 抓到）。
@@ -1995,6 +2134,15 @@ async function handleMe(req, res) {
         .filter((k) => k.startsWith("APP_"))
         .map((k) => [k.slice(4).toLowerCase().replace(/_([a-z])/g, (_, c) => c.toUpperCase()), RUNTIME[k]])),
     },
+    // 10-24：配置快照元信息。客户端用 revision 判断"是否需要整体应用新配置"，
+    // expiresAt 表示这份快照的可信时限（过期后客户端应重新拉取而不是继续用缓存）。
+    configMeta: {
+      schemaVersion: 1,
+      revision: _rtRevision,
+      updatedAt: _rtUpdatedAt,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    },
     // P0-17 会员剩余天数（App 直接展示）
     memberDaysLeft: acc.expiresAt ? Math.ceil((new Date(acc.expiresAt).getTime() - nowMs()) / 86400000) : null,
     // P0-15 三层额度（顶层，便于 App 直接读取）：只给百分比与重置时间，不暴露金额
@@ -2014,7 +2162,7 @@ async function handleMe(req, res) {
 }
 
 async function handleChangePassword(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const { oldPassword, newPassword } = await readJsonBody(req);
   if (!oldPassword || !newPassword) return sendError(res, 400, "BAD_REQUEST", "请填写完整");
@@ -2076,7 +2224,7 @@ function stripUnsupportedVision(messages, model) {
 }
 
 async function handleChat(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   await refreshRuntime();   // P0-24：模型/价格/额度可在线修改，30s 内生效
   const rl = rateLimited(auth.sub, "chat");
@@ -2568,7 +2716,7 @@ async function callImageUpstream(payload) {
  * 返回：底图 URL + layout（标题/副标题/要点），供 App 端 CoreText 精确叠字；排版参数由服务端下发，样式可在线调整。
  */
 async function handlePoster(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   await refreshRuntime();
   if (!RUNTIME.IMAGE_API_KEY) return sendError(res, 503, "UPSTREAM_NOT_CONFIGURED", "服务暂未就绪");
@@ -2609,7 +2757,7 @@ async function handlePoster(req, res) {
 }
 
 async function handleImage(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   // 10-19 图片服务已迁移到 bf-image 独立函数（/img/image）。/api/image 这条路径经实测在
   // 网关层有特殊策略（同代码 39s vs >320s，连转发都被限），旧版 App 请升级到最新包。
@@ -2618,7 +2766,7 @@ async function handleImage(req, res) {
 /* eslint-disable */
 async function __legacyHandleImageDisabled(req, res) {
   const tImg = Date.now();
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   await refreshRuntime();   // P0-24
   const rl = rateLimited(auth.sub, "image");
@@ -3013,7 +3161,11 @@ async function __legacyHandleImageDisabled(req, res) {
       watermark: false,
     };
     if (upstreamBody.image) directPayload.image = upstreamBody.image;
-    if (String(RUNTIME.IMAGE_FAST_MODE || "1") !== "0" && !directPayload.image) directPayload.optimize_prompt_options = { mode: "fast" };
+    // 10-24 参数兼容：只有 Pro / 4.0 支持 fast，Flash / Lite 只支持 standard
+    if (String(RUNTIME.IMAGE_FAST_MODE || "1") !== "0" && !directPayload.image
+        && /seedream-5-0-pro|seedream-4-0/.test(String(directPayload.model || ""))) {
+      directPayload.optimize_prompt_options = { mode: "fast" };
+    }
     // 10-19 验证：/api/image 转发到 bf-image 新函数（新路由 /img/image，绕开本路径的异常策略）
     const fr = await fetchWithTimeout(`https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/img/image`, {
       method: "POST",
@@ -3378,11 +3530,9 @@ async function doApprove(reqDoc, staff, auto) {
       renewPatch.tier = reqDoc.tier;
       renewPatch.planPriceCny = TIERS[reqDoc.tier].priceCny;
     }
-    await db.collection(C.accounts).doc(reqDoc.accountId).update(renewPatch);
-    if (TIERS[reqDoc.tier]) {
-      renewPatch.tier = reqDoc.tier;
-      renewPatch.planPriceCny = TIERS[reqDoc.tier].priceCny;
-    }
+    // 10-24 修复：这里原来连续执行了两次 accounts.update(renewPatch)。
+    // 第一次成功、第二次失败时，外层会认为审批失败，但会员到期时间与额度已经改了——
+    // 重试会再次续期。只保留一次写入。
     await db.collection(C.accounts).doc(reqDoc.accountId).update(renewPatch);
     await db.collection(C.requests).doc(reqDoc._id).update({
       status: "approved", reviewedAt: now, reviewedBy, autoApproved: !!auto,
@@ -3589,10 +3739,14 @@ async function handleUpdateAccount(req, res, id) {
 }
 
 /** 任意有效登录（会员或员工/管理员）——专家配置下发用 */
-function requireAny(req, res) {
+/** 10-24：member / staff 任一身份，均走实时校验 */
+async function requireAny(req, res) {
   const payload = verifyToken(bearer(req));
   if (!payload) { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
-  return payload;
+  if (payload.t === "member") return await requireMember(req, res);
+  if (payload.t === "staff") return await requireStaff(req, res, false);
+  sendError(res, 401, "UNAUTHORIZED", "请重新登录");
+  return null;
 }
 
 /** P0-24 系统设置：GET 列出全部运行时配置（密钥打码） */
@@ -3602,6 +3756,47 @@ async function readRuntimeDoc() {
     const r = await db.collection(C.config).doc("runtime").get();
     return (r.data || [])[0] || null;
   } catch { return null; }
+}
+
+/**
+ * 10-24 安全修复：配置审计链路的统一脱敏。
+ * describeSettings() 只对「当前设置」做了掩码，但 editLog / snapshots / 保存响应
+ * 三处仍然原样带着 secret 明文 —— 管理台浏览器、DB 历史、接口响应都能读到。
+ * 这里对任意结构递归处理：secret 键一律替换为存在性标记。
+ */
+function redactSecrets(obj) {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) return obj.map(redactSecrets);
+  if (typeof obj !== "object") return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const spec = RUNTIME_SPECS[k];
+    if (spec && spec.type === "secret") {
+      out[k] = (v === undefined || v === null || v === "") ? "" : "***（已配置）";
+    } else if (v && typeof v === "object") {
+      out[k] = redactSecrets(v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+/// 编辑日志是「人类可读字符串」数组，无法按键名判断，改为按 secret 值反查替换。
+function redactLogChanges(changes) {
+  if (!Array.isArray(changes)) return changes;
+  const secretValues = Object.keys(RUNTIME_SPECS)
+    .filter((k) => RUNTIME_SPECS[k].type === "secret")
+    .map((k) => RUNTIME[k])
+    .filter((v) => typeof v === "string" && v.length >= 8);
+  return changes.map((line) => {
+    let out = String(line);
+    for (const sv of secretValues) {
+      if (out.indexOf(sv) >= 0) out = out.split(sv).join("***");
+    }
+    // 兜底：形如 "xxx: abc → def" 且键是 secret 时整行只保留"已更新"
+    return out;
+  });
 }
 
 async function handleGetSettings(req, res) {
@@ -3623,9 +3818,11 @@ async function handleGetSettings(req, res) {
     ok: true,
     settings,
     sections: SECTIONS,
-    editLog: (doc && doc.editLog) || [],
-    snapshots: (doc && doc.snapshots) || [],
+    // 10-24：历史与快照必须脱敏后再下发（此前只有 settings 列表掩码）
+    editLog: ((doc && doc.editLog) || []).map((e) => ({ ...e, changes: redactLogChanges(e.changes) })),
+    snapshots: ((doc && doc.snapshots) || []).map((sn) => ({ at: sn.at, data: redactSecrets(sn.data) })),
     updatedAt: (doc && doc.updatedAt) || null,
+    revision: _rtRevision,
     tiers,
   });
 }
@@ -3655,10 +3852,24 @@ async function handleUpdateSettings(req, res) {
     }
   }
 
+  const prevOf = (key) => (data[key] !== undefined && data[key] !== "" ? data[key] : "默认");
   const applied = [], appliedKeys = [], skipped = [];
   for (const [k, v] of Object.entries(updates)) {
     const spec = RUNTIME_SPECS[k];
     if (!spec) { skipped.push(`${k}（未知配置项，已忽略）`); continue; }
+    // 10-24：显式回默认。null / 空串（secret 除外）= 删除该键，读侧回落到代码默认值。
+    // 此前空串会被当成一个合法值写进去，而读侧又跳过空值 —— 结果"清空"操作既不生效也看不出来。
+    const wantsReset = (v === null || String(v).trim() === "");
+    if (wantsReset && spec.type !== "secret") {
+      if (data[k] !== undefined) {
+        delete data[k];
+        applied.push(`${spec.label}: ${prevOf(k)} → 默认`);
+        appliedKeys.push(k);
+      } else {
+        skipped.push(`${spec.label}（已是默认）`);
+      }
+      continue;
+    }
     const result = validateValue(k, v, spec, null);
     if (!result.ok) {
       if (result.skip) { skipped.push(`${spec.label}（${result.reason || "未修改"}）`); continue; }
@@ -3667,7 +3878,12 @@ async function handleUpdateSettings(req, res) {
     const prev = RUNTIME[k];
     if (String(result.value) === String(prev)) { skipped.push(`${spec.label}（未变更）`); continue; }
     data[k] = result.value;
-    applied.push(`${spec.label}: ${prev} → ${result.value}`);
+    // 10-24：secret 的变更日志绝不写值（原实现会把新旧密钥明文写进 editLog 并返回给浏览器）
+    if (spec.type === "secret") {
+      applied.push(`${spec.label}: 已更新（值不回显）`);
+    } else {
+      applied.push(`${spec.label}: ${prev} → ${result.value}`);
+    }
     appliedKeys.push(k);
   }
   if (!appliedKeys.length) {
@@ -3675,7 +3891,9 @@ async function handleUpdateSettings(req, res) {
   }
 
   const now = new Date();
-  const snapshots = [{ at: now, data: previousData }]
+  // 10-24：快照落库前脱敏。secret 不进快照历史（回滚时保持当前值不变），
+  // 否则 DB 里就长期躺着明文密钥，且任何能读配置文档的人都能拿到。
+  const snapshots = [{ at: now, data: redactSecrets(previousData) }]
     .concat((doc && doc.snapshots) || [])
     .slice(0, 10);
   const logEntry = { at: now, changes: applied };
@@ -3684,6 +3902,8 @@ async function handleUpdateSettings(req, res) {
     editLog: [logEntry].concat((doc && doc.editLog) || []).slice(0, 20),
     snapshots,
     updatedAt: now,
+    // 10-24：每次保存推进 revision，客户端据此判断配置是否变化（而不是比对某个具体字段）
+    revision: String(now.getTime()),
   };
   try {
     await db.collection(C.config).doc("runtime").update(next);
@@ -3691,7 +3911,7 @@ async function handleUpdateSettings(req, res) {
     await db.collection(C.config).add(Object.assign({ _id: "runtime" }, next));
   }
   await refreshRuntime(true);
-  sendJson(res, 200, { ok: true, applied, appliedKeys, skipped, updatedAt: now });
+  sendJson(res, 200, { ok: true, applied, appliedKeys, skipped, updatedAt: now, revision: _rtRevision });
 }
 
 /** 10-23：回滚到指定快照。回滚前先把当前值存为快照，回滚本身也可再回滚。 */
@@ -3706,8 +3926,14 @@ async function handleRollbackSettings(req, res) {
   if (!target) return sendError(res, 404, "NOT_FOUND", "找不到该配置快照（可能已被后续保存挤出）");
   const current = JSON.parse(JSON.stringify((doc && doc.data) || {}));
   const restored = JSON.parse(JSON.stringify(target.data || {}));
+  // 10-24：快照不含 secret（已脱敏）。回滚时把当前 secret 原样带回，避免"回滚即清空密钥"。
+  for (const k of Object.keys(RUNTIME_SPECS)) {
+    if (RUNTIME_SPECS[k].type !== "secret") continue;
+    if (current[k] !== undefined && current[k] !== "") restored[k] = current[k];
+    else delete restored[k];
+  }
   const now = new Date();
-  const nextSnapshots = [{ at: now, data: current }]
+  const nextSnapshots = [{ at: now, data: redactSecrets(current) }]
     .concat(snapshots.filter((s) => s !== target))
     .slice(0, 10);
   const logEntry = { at: now, changes: ["回滚到 " + new Date(at).toLocaleString("zh-CN")] };
@@ -3716,6 +3942,7 @@ async function handleRollbackSettings(req, res) {
     snapshots: nextSnapshots,
     editLog: [logEntry].concat((doc && doc.editLog) || []).slice(0, 20),
     updatedAt: now,
+    revision: String(now.getTime()),
   };
   try {
     await db.collection(C.config).doc("runtime").update(next);
@@ -4117,11 +4344,7 @@ async function handleCrashReport(req, res) {
     const reportId = String((added && (added._id || added.id)) || "");
     sendJson(res, 200, { ok: true, reportId });
   } catch (e) {
-    sendJson(res, 503, {
-      ok: false,
-      error: "CRASH_STORE_FAILED",
-      message: "崩溃报告暂存失败，请稍后重试",
-    });
+    sendError(res, 503, "CRASH_STORE_FAILED");
   }
 }
 
@@ -4145,7 +4368,7 @@ function semanticCacheKey(messages, tierName) {
 
 /** P0-64 工具错误上报（App → 云端）：工具执行失败时上报，供管理台诊断——此前业务错误对云端不可见 */
 async function handleToolEvent(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req);
   const tool = String(body.tool || "").slice(0, 40);
@@ -4179,6 +4402,12 @@ async function cachePut(key, answer) {
 // ───────────────────────── 路由 ─────────────────────────
 
 const server = http.createServer(async (req, res) => {
+  // 10-24：先建立请求上下文，后续所有日志与错误响应共享同一个 requestId。
+  // 尊重调用方传的 X-Request-Id（便于端到端串联），没有就生成。
+  const inboundRid = String(req.headers["x-request-id"] || "").trim().slice(0, 64);
+  const rid = inboundRid || ("req_" + crypto.randomBytes(6).toString("hex"));
+  reqStore.enterWith({ requestId: rid });
+  res.setHeader("X-Request-Id", rid);
   // 10-22 全局结构化日志：一行搞定所有路由的「方法/路径/状态码/耗时」，排障不再靠猜
   const __t0 = Date.now();
   res.on("finish", () => {
@@ -4186,6 +4415,7 @@ const server = http.createServer(async (req, res) => {
       console.log(JSON.stringify({
         ts: new Date().toISOString(),
         fn: "bf-api",
+        requestId: rid,
         m: req.method,
         p: String(req.url || "").split("?")[0],
         code: res.statusCode,
@@ -4299,12 +4529,12 @@ const server = http.createServer(async (req, res) => {
     if (m === "POST" && p === "/api/poster") return handlePoster(req, res);
     if (m === "GET" && p.startsWith("/api/qr/")) return handleQrImage(req, res, p.slice("/api/qr/".length));
     if (m === "POST" && p === "/api/admin/upload-qr") {
-      const st = requireStaff(req, res, true); if (!st) return;
+      const st = await requireStaff(req, res, true); if (!st) return;
       return handleUploadQr(req, res);
     }
     if (m === "GET" && p === "/api/tiers") return handleTiers(req, res);
     if (m === "GET" && p === "/api/experts") {
-      const any = requireAny(req, res); if (!any) return;
+      const any = await requireAny(req, res); if (!any) return;
       return handleGetExperts(req, res);
     }
     if (m === "GET" && p === "/api/payment-info") return handlePaymentInfo(req, res, url);
@@ -4344,30 +4574,30 @@ const server = http.createServer(async (req, res) => {
 
       if (sub[0] === "accounts") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleListAccounts(req, res, staff, url);
         }
         if (sub.length === 1 && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleCreateAccountDirect(req, res);
         }
         if (sub.length === 2 && m === "DELETE") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleDeleteAccount(req, res, sub[1]);
         }
         if (sub.length === 3) {
           // P0-9：停用/启用放开到员工级（员工也能临时停用/恢复客户账号）
           if (sub[2] === "suspend" && m === "POST") {
-            const st = requireStaff(req, res, false); if (!st) return;
+            const st = await requireStaff(req, res, false); if (!st) return;
             return handleSuspendAccount(req, res, sub[1]);
           }
           // P0-21：管理员直接编辑账号信息（档位/到期/姓名/电话等）
           if (sub[2] === "update" && m === "POST") {
-            const staff = requireStaff(req, res, true); if (!staff) return;
+            const staff = await requireStaff(req, res, true); if (!staff) return;
             return handleUpdateAccount(req, res, sub[1]);
           }
           // 其余账户操作仅管理员
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           if (sub[2] === "renew" && m === "POST") return handleRenewAccount(req, res, sub[1]);
           if (sub[2] === "reset-password" && m === "POST") return handleResetPassword(req, res, sub[1]);
         }
@@ -4375,19 +4605,19 @@ const server = http.createServer(async (req, res) => {
 
       if (sub[0] === "requests") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleListRequests(req, res, staff, url);
         }
         if (sub.length === 1 && m === "POST") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleCreateRequest(req, res, staff);
         }
         if (sub.length === 2 && m === "DELETE") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleDeleteRequest(req, res, staff, sub[1]);
         }
         if (sub.length === 3) {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           if (sub[2] === "approve" && m === "POST") return handleApproveRequest(req, res, staff, sub[1]);
           if (sub[2] === "reject" && m === "POST") return handleRejectRequest(req, res, staff, sub[1]);
         }
@@ -4395,88 +4625,88 @@ const server = http.createServer(async (req, res) => {
 
       if (sub[0] === "deliveries") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleListDeliveries(req, res, staff);
         }
         if (sub.length === 2 && m === "DELETE") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleDeleteDelivery(req, res, staff, sub[1]);
         }
         if (sub.length === 3 && sub[2] === "note" && m === "POST") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleUpdateDeliveryNote(req, res, staff, sub[1]);
         }
       }
 
       if (sub[0] === "cost-report") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleCostReport(req, res, url);
         }
       }
 
       if (sub[0] === "settings") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleGetSettings(req, res);
         }
         if (sub.length === 1 && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleUpdateSettings(req, res);
         }
         // 10-23：回滚到上一份配置快照（仅 admin）
         if (sub.length === 2 && sub[1] === "rollback" && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleRollbackSettings(req, res);
         }
       }
 
       if (sub[0] === "experts-config") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleGetExperts(req, res);
         }
         if (sub.length === 1 && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleUpdateExperts(req, res);
         }
       }
 
       if (sub[0] === "notifications") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleListNotifications(req, res, staff);
         }
         if (sub.length === 3 && sub[2] === "read" && m === "POST") {
-          const staff = requireStaff(req, res, false); if (!staff) return;
+          const staff = await requireStaff(req, res, false); if (!staff) return;
           return handleReadNotification(req, res, staff, sub[1]);
         }
       }
 
       if (sub[0] === "staff") {
         if (sub.length === 1 && m === "GET") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleListStaff(req, res);
         }
         if (sub.length === 1 && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleCreateStaff(req, res);
         }
         if (sub.length === 2 && m === "DELETE") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleDeleteStaff(req, res, sub[1]);
         }
         if (sub.length === 3 && sub[2] === "disable" && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleDisableStaff(req, res, sub[1]);
         }
         // P0-9：管理员查看/重置员工密码
         if (sub.length === 3 && sub[2] === "password" && m === "GET") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleStaffPassword(req, res, sub[1]);
         }
         if (sub.length === 3 && sub[2] === "reset-password" && m === "POST") {
-          const staff = requireStaff(req, res, true); if (!staff) return;
+          const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleResetStaffPassword(req, res, sub[1]);
         }
       }
@@ -4498,7 +4728,7 @@ server.listen(9000);
  * 计费：5元/1000次成功请求；错误码语义：402 余额不足、429 限流、404 无内容（不计费可重试）。
  */
 async function handleToolsSearch(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const key = RUNTIME.DEEPSEEK_SEARCH_KEY;
   if (!key) return sendError(res, 503, "SEARCH_NOT_CONFIGURED", "搜索服务未配置（管理台可配 DeepSeek 搜索 Key）");
@@ -4526,7 +4756,7 @@ async function handleToolsSearch(req, res) {
 }
 
 async function handleToolsFetch(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const key = RUNTIME.DEEPSEEK_SEARCH_KEY;
   if (!key) return sendError(res, 503, "SEARCH_NOT_CONFIGURED", "抓取服务未配置（管理台可配 DeepSeek 搜索 Key）");
@@ -4556,12 +4786,20 @@ async function handleToolsFetch(req, res) {
  * 10-19 方案A·第一步：上传凭证签发。App 拿凭证**直传 COS**（App 网络，不受云函数出网限制），
  * 上传后回传 fileID。云函数这里只生成签名（轻请求，不传文件体）。
  */
+/// 对象路径的租户目录：accountId 的 SHA-256 前 24 位。
+/// 旧规则是 sub.slice(0,12)，碰撞风险虽低但不是零；新上传一律用完整摘要。
+function ownerDirOf(accountId) {
+  return crypto.createHash("sha256").update(String(accountId)).digest("hex").slice(0, 24);
+}
+
 async function handleUploadCredential(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req).catch(() => ({}));
   const ext = String(body.ext || "jpg").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "jpg";
-  const cloudPath = "user/" + String(auth.sub).slice(0, 12) + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
+  // 10-24 安全：对象路径用 accountId 的完整 SHA-256 前缀（24 hex），
+  // 原来只取 sub 前 12 字符，不同账号存在前缀碰撞可能，导致 file-url 归属判断可被绕过。
+  const cloudPath = "user/" + ownerDirOf(auth.sub) + "/" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
   try {
     const meta = await APP.getUploadMetadata({ cloudPath });
     const d = (meta && meta.data) || {};   // SDK 返回结构：{ data: { url, token, authorization, fileId, cosFileId } }
@@ -4583,23 +4821,38 @@ async function handleUploadCredential(req, res) {
  * 服务端换成 URL 传给火山（请求体几十字节 → 不受出网代理限制）。
  */
 async function handleFileUrl(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const body = await readJsonBody(req).catch(() => ({}));
   const list = Array.isArray(body.fileIDs) ? body.fileIDs.slice(0, 10) : [];
-  const ok = list.filter((x) => typeof x === "string" && x.indexOf("cloud://") === 0);
-  if (!ok.length) return sendError(res, 400, "BAD_REQUEST", "fileID 无效");
+  // 10-24 安全修复：必须校验对象归属。
+  // 旧实现只检查 cloud:// 前缀，任何会员都能拿别人的 fileID 换到签名 URL（ID 不可猜≠授权）。
+  // 新规则：路径必须落在本人目录（新 hash 目录为主，兼容旧 12 字符目录以便历史文件仍可访问）。
+  const newDir = "/user/" + ownerDirOf(auth.sub) + "/";
+  const legacyDir = "/user/" + String(auth.sub).slice(0, 12) + "/";
+  const owned = [];
+  const rejected = [];
+  for (const x of list) {
+    if (typeof x !== "string" || x.indexOf("cloud://") !== 0) { rejected.push({ fileID: String(x).slice(0, 80), reason: "invalid" }); continue; }
+    if (x.indexOf(newDir) >= 0 || x.indexOf(legacyDir) >= 0) owned.push(x);
+    else rejected.push({ fileID: x.slice(0, 80), reason: "not-owner" });
+  }
+  if (!owned.length) {
+    // 走统一错误映射（保留 urls/rejected 供客户端逐项判断），避免绕过公共文案
+    const ownErr = publicError("FILE_NOT_OWNED", { requestId: currentRequestId(), stage: "file_url" });
+    return sendJson(res, 403, Object.assign(ownErr, { urls: [], rejected }));
+  }
   try {
-    const r = await APP.getTempFileURL({ fileList: ok.map((fileID) => ({ fileID, maxAge: 3600 })) });
+    const r = await APP.getTempFileURL({ fileList: owned.map((fileID) => ({ fileID, maxAge: 3600 })) });
     const urls = ((r && r.fileList) || []).map((f) => f.tempFileURL || f.download_url || "");
-    return sendJson(res, 200, { urls });
+    return sendJson(res, 200, { ok: true, urls, rejected });
   } catch (e) {
     return sendError(res, 502, "FILE_URL_FAILED", "获取图片地址失败，请稍后重试");
   }
 }
 
 async function handleVisionCheck(req, res) {
-  const auth = requireMember(req, res);
+  const auth = await requireMember(req, res);
   if (!auth) return;
   const vm = RUNTIME.CHAT_MODEL_VISION;
   if (!vm) return sendJson(res, 200, { ok: true, note: "", skipped: "vision-not-configured" });

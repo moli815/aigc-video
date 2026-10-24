@@ -123,7 +123,9 @@ final class ImageService {
     /// 生成图片；reference 非空时为参考图编辑（仅火山 Seedream 支持，
     /// 其他厂商收到 reference 时退化为按新描述重新生成）。
     /// 返回：图片二进制（PNG/JPEG）。失败抛 ImageError。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil) async throws -> Data {
+    /// 10-24 路由契约：客户端只表达**业务意图**（taskKind / qualityTier / requestedCount），
+    /// 模型 ID 由服务端 selectImageRoute 决定。客户端传 model 在 hosted 模式下会被忽略。
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
         // 10-23 关键修复：hosted 模式必须用「会员 token」鉴权——服务端 bf-image 校验的是账号 token，
         // 供应商 Key 只在服务端。旧实现第一行就 guard apiKey（hosted 下为空）→ 直接抛 missingKey，
         // 模型收到工具失败后转述成"当前专家配置禁止使用 image_generate"（用户看到的错误结论）。
@@ -178,6 +180,10 @@ final class ImageService {
         if let aspectRatio, !aspectRatio.isEmpty {
             body["aspect_ratio"] = aspectRatio
         }
+        // 10-24 混合路由：任务类型 + 质量偏好交给服务端判断，客户端不指定模型
+        if let taskKind, !taskKind.isEmpty { body["task_kind"] = taskKind }
+        if let qualityTier, !qualityTier.isEmpty { body["quality_tier"] = qualityTier }
+        if let requestedCount, requestedCount > 1 { body["requested_count"] = requestedCount }
         switch profile.style {
         case .volc:
             // 10-23：会员模式**不传 size**——尺寸由 bf-image 按云端 IMAGE_SIZE（默认 1.5K）决定。
@@ -237,6 +243,19 @@ final class ImageService {
         // 而这里此前只解析 OpenAI 的 { data: [ { url | b64_json } ] } ——
         // 结果是「服务端已经出图并扣了 0.45、App 端却抛 noImage」，用户看到"无法出图"。
         // 先认扁平 url，再回落到标准 data 数组。
+        // 10-24 组图：服务端编排器返回 { items: [{index, ok, url, ...}], succeeded, partial }，
+        // 顶层没有 url 字段。取第一张成功的先展示，多图展示留待后续版本。
+        if let items = json["items"] as? [[String: Any]] {
+            if let s = (items.first { ($0["ok"] as? Bool) == true })?["url"] as? String,
+               let u = URL(string: s), u.scheme == "https" {
+                let (img, resp) = try await BoundedHTTPClient.data(for: URLRequest(url: u),
+                                                                  session: BoundedHTTPClient.imageSession,
+                                                                  limit: 32 * 1024 * 1024)
+                guard resp.statusCode == 200, resp.mimeType?.hasPrefix("image/") == true else { throw ImageError.noImage }
+                return img
+            }
+            throw ImageError.noImage
+        }
         if let urlString = json["url"] as? String, let url = URL(string: urlString), url.scheme == "https" {
             let (img, response) = try await BoundedHTTPClient.data(for: URLRequest(url: url),
                                                                  session: BoundedHTTPClient.imageSession,

@@ -41,6 +41,47 @@ enum FriendlyError {
     /// 把任意 Error 转成一句可以直接展示给客户的中文文案。
     /// 匹配顺序：URLError 错误码 → DecodingError → 错误描述中的 HTTP 状态码
     /// → 按场景兜底；绝不透出技术细节
+    /// 10-24：把服务端下发的受控动作转成可直接渲染的按钮。
+    ///
+    /// 设计要点：
+    /// - 客户端只认识白名单里的动作，**未知 id 静默忽略** —— 服务端新增动作不能让旧 App 崩或出现空按钮；
+    /// - 顺序沿用服务端给的顺序，服务端可以决定"再试一次"排在"修改描述"前面；
+    /// - 文案由客户端维护（而不是服务端下发中文），避免同一动作在不同版本里措辞漂移。
+    static func actions(from json: [String: Any]?) -> [(id: String, title: String)] {
+        guard let raw = json?["actions"] as? [String], !raw.isEmpty else { return [] }
+        let titles: [String: String] = [
+            "retry": "再试一次",
+            "edit_request": "修改描述",
+            "cancel": "取消",
+            "relogin": "重新登录",
+            "renew": "去续费",
+            "view_quota": "查看额度",
+            "contact_support": "联系客服",
+            "feedback": "反馈问题",
+            "single_only": "先生成一张",
+        ]
+        var seen = Set<String>()
+        var out: [(id: String, title: String)] = []
+        for id in raw {
+            guard let title = titles[id], !seen.contains(id) else { continue }
+            seen.insert(id)
+            out.append((id: id, title: title))
+        }
+        return out
+    }
+
+    /// 10-24：错误是否可由用户原样重试（服务端 errorDetail.retryable）。
+    /// 旧服务端没有这个字段时返回 false —— 宁可少给一个按钮，也不要误导用户反复重试不可恢复的错误。
+    static func isRetryable(_ json: [String: Any]?) -> Bool {
+        guard let detail = json?["errorDetail"] as? [String: Any] else { return false }
+        return (detail["retryable"] as? Bool) ?? false
+    }
+
+    /// 10-24：取服务端请求编号，供"反馈问题"时贴给客服。
+    static func requestId(from json: [String: Any]?) -> String {
+        (json?["requestId"] as? String) ?? ""
+    }
+
     static func message(for error: Error, scene: Scene = .generic) -> String {
         // 第一层：网络类错误按 URLError 细分，给最贴切的行动建议
         if let urlError = error as? URLError {

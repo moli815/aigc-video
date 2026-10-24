@@ -577,6 +577,12 @@ final class ChatService {
                     "type": "string",
                     "description": "画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1（横版名片）。用户没指定可不填。",
                 ],
+                // 10-24 混合路由：让模型按意图选档；不传则由服务端按关键词保守推断
+                "quality_tier": [
+                    "type": "string",
+                    "enum": ["fast", "high"],
+                    "description": "画质档位。fast=更快更省，适合图标/插画/普通海报/封面/示意图（默认）；high=更精细，适合印刷物料、logo/标志/商标、名片、包装、画册、展架、需要大量文字或复杂场景。**用户没明确要求高质量时不要传**，交给服务端判断。",
+                ],
                 "structured": [
                     "type": "object",
                     "description": "结构化视觉字段（推荐）：每字段用完整短句描述，每段独立成句。内容必须来自用户需求，禁止套用示例的具体主体/场景，禁止编造用户未给的店名/地址/电话/价格。",
@@ -614,6 +620,12 @@ final class ChatService {
                     "type": "string",
                     "description": "目标画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1。不填则沿用原图比例。",
                 ],
+                // 10-24 混合路由：让模型按意图选档；不传则由服务端按关键词保守推断
+                "quality_tier": [
+                    "type": "string",
+                    "enum": ["fast", "high"],
+                    "description": "画质档位。fast=更快更省，适合图标/插画/普通海报/封面/示意图（默认）；high=更精细，适合印刷物料、logo/标志/商标、名片、包装、画册、展架、需要大量文字或复杂场景。**用户没明确要求高质量时不要传**，交给服务端判断。",
+                ],
                 "source": [
                     "type": "string",
                     "enum": ["last", "attached", "both"],
@@ -638,15 +650,20 @@ final class ChatService {
         ],
     ]
 
-    /// ④ 组图（多张关联图）：仅 Seedream 5.0 Lite 支持（Pro 传参直接 400）
+    /// ④ 组图（多张关联图）：服务端编排器拆成 N 个单图子任务（10-24）
     static let imageSeriesFunction: [String: Any] = [
         "name": "image_series",
-        "description": "组图生成：一次生成多张内容关联的图片（漫画分镜、品牌视觉系列）。用户说「生成一组/一套/N张/分镜」时使用。注意：需模型支持组图能力，当前若不可用会返回明确提示。",
+        "description": "组图生成：一次生成多张内容关联的图片（漫画分镜、品牌视觉系列、一套物料）。用户说「生成一组/一套/N张/分镜」时使用。服务端会拆成 N 张单图依次生成，**可能出现部分失败**，返回已成功的张数与失败张数；失败的那几张可以单独重试。一次最多 4 张。",
         "parameters": [
             "type": "object",
             "properties": [
                 "prompt": ["type": "string", "description": "整组图的统一描述（各图差异点写清楚）"],
-                "count": ["type": "integer", "description": "生成张数（1-4）"],
+                "count": ["type": "integer", "description": "生成张数（2-4）"],
+                "quality_tier": [
+                    "type": "string",
+                    "enum": ["fast", "high"],
+                    "description": "画质档位。组图默认 fast（更快更省）；整套是印刷级物料时才用 high。",
+                ],
             ],
             "required": ["prompt"],
         ],
