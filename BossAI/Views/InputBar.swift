@@ -37,6 +37,10 @@ struct InputBar: View {
     @State private var showCamera = false
     /// 相册多选的临时载体，选择完成后立即清空（防重复触发 onChange）。
     @State private var photoItems: [PhotosPickerItem] = []
+    /// 键盘焦点变化回调（10-24）：交给 ChatView 在键盘弹出/收起后校正滚动位置。
+    /// 焦点状态本身留在 InputBar 内（避免把 @FocusState 提升到父视图引发整页重绘），只把事件抛出去。
+    var onFocusChanged: ((Bool) -> Void)? = nil
+
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -105,6 +109,7 @@ struct InputBar: View {
                     .accessibilityIdentifier("task-input")
                     .lineLimit(1...6)
                     .focused($focused)
+                    .onChange(of: focused) { _, isFocused in onFocusChanged?(isFocused) }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)
                     // 输入框做成独立玻璃胶囊，交互指向更明确

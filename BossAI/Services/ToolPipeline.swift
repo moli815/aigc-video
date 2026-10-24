@@ -61,11 +61,19 @@ enum ToolPipeline {
         context.insert(msg)
         do {
             try context.save()
-            return msg
         } catch {
             context.delete(msg)
             throw error
         }
+        // 10-24：图片产物同时写入资料库。此前只挂会话消息，资料库里永远只有文档。
+        // 放在 context.save() 之后：消息已确定落库，写库失败不影响这张图的展示与计费。
+        if let imageData {
+            LibraryImageWriter.save(imageData: imageData,
+                                    conversationId: conversation.id,
+                                    prompt: text,
+                                    context: context)
+        }
+        return msg
     }
 
     /// 10-24 组图落库（P0-2）：多张图 + 元信息写进**同一条**消息。
@@ -92,11 +100,18 @@ enum ToolPipeline {
         context.insert(msg)
         do {
             try context.save()
-            return msg
         } catch {
             context.delete(msg)
             throw error
         }
+        // 10-24：组图的**每一张**都要进资料库（去重按内容哈希，重试合并不会重复存）
+        for data in images {
+            LibraryImageWriter.save(imageData: data,
+                                    conversationId: conversation.id,
+                                    prompt: text,
+                                    context: context)
+        }
+        return msg
     }
 
     /// 10-24 组图结果更新（重试失败项后合并）：
@@ -106,6 +121,13 @@ enum ToolPipeline {
                                      images: [Data],
                                      meta: SeriesMeta,
                                      context: ModelContext) throws {
+        // 重试后补上的图同样要进资料库（已存在的按指纹跳过）
+        for data in images {
+            LibraryImageWriter.save(imageData: data,
+                                    conversationId: message.conversationID ?? "",
+                                    prompt: message.text,
+                                    context: context)
+        }
         if let first = images.first {
             message.imageData = first
             message.thumbnailData = makeThumbnail(first)

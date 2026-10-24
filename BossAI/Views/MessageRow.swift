@@ -395,14 +395,20 @@ private struct MessageImageView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.thumbnailData == rhs.thumbnailData && lhs.originalData == rhs.originalData && lhs.canRegenerate == rhs.canRegenerate
     }
+    /// 单图在对话气泡里的最大高度：340pt。
+    /// 取值的理由：低于 320 时名片/海报上的字看不清，高于 360 时 iPad 竖屏一屏放不下前后文。
+    /// 只做「上限」不做固定高度——小图仍按原始比例显示，不会被拉伸。
+    private static let maxInlineHeight: CGFloat = 340
+
     var body: some View {
         Group {
             if let thumbnail {
-                // 10-23：去掉固定 420pt 上限。iPad 横向时 420 只占消息区一半，观感像"图片缩在角落"。
-                // 改为吃满父容器宽度（父层已有 theme.messageWidth 限制）+ scaledToFit 保比例，
-                // 不用 scaledToFill——否则会裁掉名片文字、Logo 或海报边缘。
+                // 10-23：去掉固定 420pt 宽度上限（iPad 横向时图片缩在角落）。
+                // 10-24 真机反馈：只限宽不限高 → iPad 竖屏的 3:4 海报直接占满整屏，把对话挤没。
+                // 现在改为「限宽 + 限高」：等比缩放到 maxInlineHeight 以内，仍用 scaledToFit
+                // （绝不 scaledToFill 裁切，否则名片文字/Logo/海报边缘会被切掉）；点图进全屏看原图。
                 Image(uiImage: thumbnail).resizable().scaledToFit()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: Self.maxInlineHeight, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .onTapGesture { fullscreen = true }
                     .contextMenu {

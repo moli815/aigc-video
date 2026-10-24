@@ -266,6 +266,8 @@ struct ChatView: View {
     @State private var pendingScrollAnimated = false
     @State private var scrollClock = ScrollClock()
     private final class ScrollClock { var lastTime: TimeInterval = 0; var pending: Task<Void, Never>? }
+    /// 键盘焦点变化后的滚动校正任务（10-24）：同一时刻只保留一个，避免连点输入框叠出多次 scrollTo
+    @State private var focusScrollTask: Task<Void, Never>?
     @ObservedObject var viewModel: ChatViewModel
     @Binding var previewFile: StoredFile?
     // P0-46 @Query 派生视图：已有会话时用 SwiftData 响应式消息源（自动刷新），
@@ -292,6 +294,22 @@ struct ChatView: View {
     }
 
     /// 一次性贴底请求：写入末条消息 id，由 ScrollViewReader 消费后立即清空（关键：不做持久锚定）。
+    /// 键盘弹出/收起后校正滚动位置（10-24 真机问题：iPad 长对话里键盘顶起视口，
+    /// 内容被推到上方并留下大片空白）。
+    /// 三条约束：
+    ///   ① 只在「跟随最新」状态下校正，用户正在翻历史时绝不抢滚动；
+    ///   ② 等键盘动画落定（弹出 ~0.38s / 收起 ~0.28s）再滚，否则按动画中途的高度算会跳空；
+    ///   ③ 同一时刻只留一个任务，连点输入框不会叠出多次滚动。
+    private func handleInputFocusChange(_ focused: Bool) {
+        focusScrollTask?.cancel()
+        guard followOutput else { return }
+        focusScrollTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: focused ? 380_000_000 : 280_000_000)
+            guard !Task.isCancelled, followOutput else { return }
+            requestScrollToBottom(animated: true)
+        }
+    }
+
     private func requestScrollToBottom(animated: Bool = false, delay: TimeInterval = 0) {
         // 10-23 修复：滚到底部锚点，而不是"最后一条消息"——
         // 消息之后还可能渲染生图占位、追问建议、状态提示，滚到最后一条并不等于滚到内容末尾。
@@ -318,7 +336,8 @@ struct ChatView: View {
         // ② 滚动区加 defaultScrollAnchor(.bottom) → 键盘引起的视口变化由系统自动贴底；
         // ③ 不再监听键盘通知做滚动，避免与系统动画互相打架。
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            InputBar(viewModel: viewModel)
+            // 10-24：把输入框焦点变化抛给本页，用于键盘顶起视口后校正滚动位置
+            InputBar(viewModel: viewModel, onFocusChanged: handleInputFocusChange)
         }
         .background(Color.clear)
         // P0-4 编辑重发
@@ -510,7 +529,10 @@ struct ChatView: View {
                     requestScrollToBottom()
                 }
             }
-            .onDisappear { scrollClock.pending?.cancel(); scrollClock.pending = nil }
+            .onDisappear {
+                scrollClock.pending?.cancel(); scrollClock.pending = nil
+                focusScrollTask?.cancel(); focusScrollTask = nil
+            }
         }
             .overlay(alignment: .bottomTrailing) {
                 if !followOutput {
