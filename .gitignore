@@ -13,3 +13,6 @@ Payload/
 .swiftpm/
 TestArtifacts/
 *.xcresult
+
+# 构建产物
+BossAI.zip

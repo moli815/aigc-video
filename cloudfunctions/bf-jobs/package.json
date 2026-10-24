@@ -1,0 +1,10 @@
+{
+  "name": "bf-jobs",
+  "version": "1.0.0",
+  "description": "每日数据清理定时任务（组图任务/额度预留/幂等台账/限流/缓存/崩溃上报）",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@cloudbase/node-sdk": "^3.5.0"
+  }
+}

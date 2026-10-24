@@ -30,12 +30,15 @@
 
 const http = require("http");
 const crypto = require("crypto");
+// 10-24 P1：日志 PII 打码。所有日志统一走 logSafe/scrub —— 手机号/邮箱/证件/卡号/密钥形态打码，
+// 账号 ID 转稳定短哈希，用户原文只留长度+哈希，上游原文直接丢弃。
+const { logSafe, maskText, scrub, tagId } = require("./log-safe");
 // 10-19 全局异常监听：进程级崩溃时至少留下日志（此前 Process exited unexpectedly 无任何输出）
 process.on("uncaughtException", (err) => {
-  try { console.error("[FATAL] uncaughtException:", err && (err.stack || err.message || err)); } catch (e) {}
+  try { logSafe({ tag: "fatal", kind: "uncaughtException", err: (err && (err.stack || err.message || err)) || "unknown" }, "error"); } catch (e) {}
 });
 process.on("unhandledRejection", (err) => {
-  try { console.error("[FATAL] unhandledRejection:", err && (err.stack || err.message || err)); } catch (e) {}
+  try { logSafe({ tag: "fatal", kind: "unhandledRejection", err: (err && (err.stack || err.message || err)) || "unknown" }, "error"); } catch (e) {}
 });
 
 const tcb = require("@cloudbase/node-sdk");
@@ -660,13 +663,13 @@ function sendError(res, code, error, message) {
     requestId: currentRequestId(),
     stage: String(res.__stage || ""),
   });
-  // 内部原因只进日志，不进响应
-  console.log(JSON.stringify({
+  // 内部原因只进日志，不进响应（日志侧再做一次 PII 打码并截断）
+  logSafe({
     tag: "api_error", fn: "bf-api", requestId: pub.requestId,
     httpStatus: code, code: pub.error, category: pub.errorDetail.category,
     retryable: pub.errorDetail.retryable, stage: pub.errorDetail.stage,
     detail: String(message || "").slice(0, 200),
-  }));
+  });
   sendJson(res, code, pub);
 }
 
@@ -841,7 +844,7 @@ async function requireMember(req, res) {
     }
     return payload;
   } catch (e) {
-    console.log(JSON.stringify({ tag: "auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+    logSafe({ tag: "auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
     sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
     return null;
   }
@@ -870,7 +873,7 @@ async function requireStaff(req, res, needAdmin) {
     }
     return Object.assign({}, payload, { role: liveRole });
   } catch (e) {
-    console.log(JSON.stringify({ tag: "staff_auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+    logSafe({ tag: "staff_auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
     sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
     return null;
   }
@@ -1211,7 +1214,7 @@ async function compactMessages(messages) {
     if (!summary) return messages;   // 摘要失败：不压缩（安全冗余）
 
     PerformanceTrace && {};
-    console.log(JSON.stringify({ tag: "ctx_compact", oldCount: old.length, keep: keep.length, totalTokens }));
+    logSafe({ tag: "ctx_compact", oldCount: old.length, keep: keep.length, totalTokens });
     const summaryMsg = {
       role: "system",
       content: "【早期对话摘要】以下为更早轮次的压缩摘要（原文已省略以节省上下文；如用户追问细节，可请其复述关键信息）：\n" + summary,
@@ -1590,25 +1593,58 @@ async function handleSyncPush(req, res) {
  * 背景（P1-7）：新写入已经用确定性 _id，但历史记录是随机 _id，同一逻辑记录可能有多条。
  * 建唯一索引前必须先清掉重复，否则建索引会失败。这里提供**默认只读**的盘点 + 显式执行。
  *
+ * 10-24 修复（关键）：旧实现 `orderBy(accountId).limit(limit)` 只取第一页，
+ *   集合超过 limit 条时后面的重复永远看不见 —— 盘点报「0 组重复」，
+ *   建唯一索引却照样失败，而且查不出原因。现在改为 skip 分页全量扫描。
+ *
  * 安全设计：
- *   · dryRun 默认 true —— 不带参数调用只会返回报告，不会删任何东西；
- *   · 每组保留 updatedAt 最大的一条，其余删除；
+ *   · dryRun 默认 true —— 不带参数调用只返回报告，不删任何东西；
+ *   · 每组优先保留「已经是确定性 _id」的那条；否则保留 updatedAt 最大的一条，其余删除；
  *   · _id 迁移用「先写新文档、再删旧文档」，写失败时旧数据仍在；
- *   · 单次最多扫描 2000 条，避免一次请求跑太久。
+ *   · 扫描条数有上限（maxScan 默认 20000），超出时 truncated=true，提示分批跑；
+ *   · 返回 readyForUniqueIndex，明确告诉调用方「现在能不能建唯一索引」。
  */
 async function handleSyncDedupe(req, res) {
   const auth = await requireStaff(req, res, true);
   if (!auth) return;
   const body = await readJsonBody(req);
   const dryRun = body.dryRun !== false;
-  const limit = Math.min(2000, Math.max(1, Number(body.limit) || 500));
+  // pageSize 兼容旧参数名 limit
+  const pageSize = Math.min(500, Math.max(20, Number(body.pageSize || body.limit) || 200));
+  const maxScan = Math.min(50000, Math.max(pageSize, Number(body.maxScan) || 20000));
+  const onlyAccount = String(body.accountId || "").trim();
 
-  let rows = [];
-  try {
-    const r = await db.collection(C.userData).orderBy("accountId", "asc").limit(limit).get();
-    rows = r.data || [];
-  } catch (e) {
-    return sendError(res, 500, "SYNC_FAILED", "读取同步数据失败，请稍后重试");
+  const detIdOf = (accountId, kind, refId) => crypto.createHash("sha256")
+    .update(accountId + "|" + kind + "|" + refId).digest("hex").slice(0, 40);
+
+  // ── 全量分页扫描 ──
+  const rows = [];
+  let truncated = false, order = "accountId+id";
+  for (let offset = 0; ; offset += pageSize) {
+    if (rows.length >= maxScan) { truncated = true; break; }
+    let page = [];
+    try {
+      let q = db.collection(C.userData);
+      if (onlyAccount) q = q.where({ accountId: onlyAccount });
+      try {
+        // 双字段排序保证 skip 分页稳定
+        const r = await q.orderBy("accountId", "asc").orderBy("_id", "asc").skip(offset).limit(pageSize).get();
+        page = r.data || [];
+      } catch (e) {
+        // 老环境不支持 _id 排序：退化为单字段（仍能扫全，仅同账号内顺序不稳）
+        order = "accountId-only";
+        let q2 = db.collection(C.userData);
+        if (onlyAccount) q2 = q2.where({ accountId: onlyAccount });
+        const r2 = await q2.orderBy("accountId", "asc").skip(offset).limit(pageSize).get();
+        page = r2.data || [];
+      }
+    } catch (e) {
+      logSafe({ tag: "sync_dedupe_scan_failed", fn: "bf-api", offset, err: String((e && e.message) || e).slice(0, 120) }, "error");
+      if (!rows.length) return sendError(res, 500, "SYNC_FAILED", "读取同步数据失败，请稍后重试");
+      truncated = true; break;    // 已扫到一部分：宁可少扫也不整体失败
+    }
+    rows.push(...page);
+    if (page.length < pageSize) break;
   }
 
   const groups = new Map();
@@ -1620,25 +1656,49 @@ async function handleSyncDedupe(req, res) {
 
   const plan = [];
   for (const [key, list] of groups) {
-    if (list.length < 2) continue;
-    const sorted = list.slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    const parts = key.split("|");
+    const detId = detIdOf(parts[0], parts[1], parts[2]);
+    const byNewest = list.slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    const alreadyDet = list.find((d) => String(d._id) === detId);
+    const keep = alreadyDet || byNewest[0];
+    const remove = list.filter((d) => String(d._id) !== String(keep._id));
+    if (!remove.length && String(keep._id) === detId) continue;   // 干净且已是确定性 _id：跳过
     plan.push({
       key,
-      keep: sorted[0]._id,
-      remove: sorted.slice(1).map((d) => d._id),
-      updatedAt: sorted[0].updatedAt,
+      keep: keep._id,
+      remove: remove.map((d) => d._id),
+      updatedAt: keep.updatedAt,
+      needMigrate: String(keep._id) !== detId,   // 保留下来的这条是否还需要搬到确定性 _id
+      detId,
     });
   }
 
+  const summary = {
+    scanned: rows.length,
+    accounts: new Set(rows.map((r) => r.accountId || "")).size,
+    order,
+    truncated,
+    duplicateGroups: plan.filter((p) => p.remove.length > 0).length,
+    removable: plan.reduce((n, x) => n + x.remove.length, 0),
+    migratable: plan.filter((p) => p.needMigrate).length,
+  };
+
   if (dryRun) {
-    return sendJson(res, 200, {
-      ok: true, dryRun: true,
-      scanned: rows.length,
-      duplicateGroups: plan.length,
-      removable: plan.reduce((n, x) => n + x.remove.length, 0),
-      // 只回前 50 组，避免响应过大
-      plan: plan.slice(0, 50),
-    });
+    return sendJson(res, 200, Object.assign({ ok: true, dryRun: true }, summary, {
+      readyForUniqueIndex: summary.removable === 0,
+      // 只回前 50 组；账号 ID 脱敏后再展示
+      plan: plan.slice(0, 50).map((p) => {
+        const parts = p.key.split("|");
+        return {
+          account: tagId(parts[0], "acct"),
+          kind: parts[1],
+          refId: maskText(parts[2] || "", 40),
+          keep: String(p.keep).slice(0, 12),
+          removeCount: p.remove.length,
+          needMigrate: p.needMigrate,
+        };
+      }),
+    }));
   }
 
   let removed = 0, migrated = 0, failed = 0;
@@ -1647,30 +1707,32 @@ async function handleSyncDedupe(req, res) {
       try { await db.collection(C.userData).doc(id).remove(); removed++; }
       catch (e) { failed++; }
     }
-    const [accountId, kind, refId] = item.key.split("|");
-    const detId = crypto.createHash("sha256")
-      .update(accountId + "|" + kind + "|" + refId).digest("hex").slice(0, 40);
-    if (item.keep === detId) continue;
+    if (!item.needMigrate) continue;
     try {
       const cur = await db.collection(C.userData).doc(item.keep).get();
       const row = (cur.data || [])[0];
       if (!row) continue;
       const copy = Object.assign({}, row);
       delete copy._id;
-      await db.collection(C.userData).add(Object.assign({ _id: detId }, copy));
+      await db.collection(C.userData).add(Object.assign({ _id: item.detId }, copy));
       await db.collection(C.userData).doc(item.keep).remove();
       migrated++;
     } catch (e) {
       // 迁移失败：旧记录仍在，下次再试（不阻断其它组）
       failed++;
-      console.log(JSON.stringify({ tag: "sync_dedupe_migrate_failed", fn: "bf-api", key: item.key, err: String((e && e.message) || e).slice(0, 120) }));
+      const parts = item.key.split("|");
+      logSafe({
+        tag: "sync_dedupe_migrate_failed", fn: "bf-api",
+        account: tagId(parts[0], "acct"), kind: parts[1],
+        err: String((e && e.message) || e).slice(0, 120),
+      });
     }
   }
-  console.log(JSON.stringify({ tag: "sync_dedupe_done", fn: "bf-api", scanned: rows.length, removed, migrated, failed }));
-  return sendJson(res, 200, {
-    ok: true, dryRun: false,
-    scanned: rows.length, duplicateGroups: plan.length, removed, migrated, failed,
-  });
+  logSafe(Object.assign({ tag: "sync_dedupe_done", fn: "bf-api", removed, migrated, failed }, summary));
+  return sendJson(res, 200, Object.assign({ ok: true, dryRun: false }, summary, {
+    removed, migrated, failed,
+    readyForUniqueIndex: failed === 0 && !truncated,
+  }));
 }
 
 /** GET /sync/pull?since=毫秒&limit=条数&cursor=游标：增量拉取（含删除标记），支持分页 */
@@ -1721,7 +1783,7 @@ async function handleSyncPull(req, res, url) {
         // 环境不支持链式多字段排序：退回单字段，但**必须**靠下面的
         // 「页尾毫秒组补齐」保证同一毫秒的记录不被页边界切断。
         ordering = "updatedAt-only+ties";
-        console.log(JSON.stringify({ tag: "sync_pull_degraded", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) }));
+        logSafe({ tag: "sync_pull_degraded", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
         return (await db.collection(C.userData)
           .where({ accountId: auth.sub, updatedAt: _.gt(ts) })
           .orderBy("updatedAt", "asc").limit(limit).get()).data || [];
@@ -1951,8 +2013,14 @@ async function embedTexts(texts) {
         body: JSON.stringify({ model, input }),
       }, 8000);
       if (!r.ok) {
+        // 10-24 P1：不再打印上游原文（可能回显 prompt/知识库片段/内部 ID）。
+        // 只留「状态码 + 长度 + 内容哈希」，需要时用哈希比对上游工单，而不是把原文写进日志。
         const errBody = await r.text().catch(() => "");
-        console.error(`[embedTexts] HTTP ${r.status} endpoint=${endpoint} model=${model} body=${errBody.slice(0, 300)}`);
+        logSafe({
+          tag: "embed_http_error", fn: "bf-api", status: r.status,
+          endpoint, model, bodyLen: errBody.length,
+          bodySha: require("crypto").createHash("sha256").update(errBody || "").digest("hex").slice(0, 12),
+        }, "error");
         return null;
       }
       const j = await r.json().catch(() => null);
@@ -1962,12 +2030,12 @@ async function embedTexts(texts) {
         ? raw
         : raw && Array.isArray(raw.embedding) ? [raw] : null;
       if (!data || data.length !== batch.length) {
-        console.error(`[embedTexts] 异常响应结构 model=${model} keys=${j ? Object.keys(j) : "null"}`);
+        logSafe({ tag: "embed_bad_shape", fn: "bf-api", model, keys: j ? Object.keys(j) : null }, "error");
         return null;
       }
       for (const d of data) {
         if (!Array.isArray(d.embedding) || !d.embedding.length) {
-          console.error(`[embedTexts] embedding 字段缺失 model=${model}`);
+          logSafe({ tag: "embed_missing_field", fn: "bf-api", model }, "error");
           return null;
         }
         out.push(d.embedding);
@@ -1975,7 +2043,7 @@ async function embedTexts(texts) {
     }
     return out;
   } catch (e) {
-    console.error(`[embedTexts] 异常: ${e && e.message}`);
+    logSafe({ tag: "embed_exception", fn: "bf-api", err: String((e && e.message) || e) }, "error");
     return null;
   }
 }
@@ -4570,15 +4638,16 @@ const server = http.createServer(async (req, res) => {
   const __t0 = Date.now();
   res.on("finish", () => {
     try {
-      console.log(JSON.stringify({
+      logSafe({
         ts: new Date().toISOString(),
         fn: "bf-api",
         requestId: rid,
         m: req.method,
-        p: String(req.url || "").split("?")[0],
+        // 只留 path：query 里可能有一次性票据/邮箱；path 本身再过一次文本打码
+        p: maskText(String(req.url || "").split("?")[0], 160),
         code: res.statusCode,
         ms: Date.now() - __t0,
-      }));
+      });
     } catch (e) { /* 日志失败不影响响应 */ }
   });
 

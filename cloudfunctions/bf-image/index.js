@@ -9,6 +9,9 @@
  */
 const http = require("http");
 const crypto = require("crypto");
+// 10-24 P1：日志 PII 打码（与 bf-api 同一份 log-safe.js）。所有日志先过 scrub 再输出：
+// 账号 ID → 稳定短哈希；手机号/邮箱/证件/卡号/密钥 → 打码；用户 prompt 原文 → 只留长度+哈希。
+const { logSafe, maskText, scrub } = require("./log-safe");
 const tcb = require("@cloudbase/node-sdk");
 const jpeg = require("jpeg-js");
 const { PNG } = require("pngjs");
@@ -547,9 +550,11 @@ async function requireMember(req) {
 }
 
 // ── 结构化日志：每次请求一条可检索的 JSON，排障不再靠猜 ──
+// 10-24 P1：出口统一脱敏。sub → acct:xxxxxxxx（稳定可关联），err/detail 的 PII 形态打码，
+// prompt/content 只留 {len,sha}，上游原文（raw/body）直接丢弃。
 function logStage(stage, extra) {
   try {
-    console.log(JSON.stringify(Object.assign({ ts: new Date().toISOString(), fn: "bf-image", stage }, extra || {})));
+    logSafe(Object.assign({ ts: new Date().toISOString(), fn: "bf-image", stage }, extra || {}));
   } catch (e) { /* 日志失败不影响主流程 */ }
 }
 
@@ -1320,11 +1325,11 @@ const server = http.createServer(async (req, res) => {
       delete body.detail;
       if (typeof body.status === "number") delete body.status;
       delete body.raw;
-      console.log(JSON.stringify({
+      logSafe({
         tag: "image_error", fn: "bf-image", requestId: rid,
         httpStatus: code, code: pub.error, category: pub.errorDetail.category,
         retryable: pub.errorDetail.retryable, detail: String(obj.msg || "").slice(0, 200),
-      }));
+      });
     }
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(body));

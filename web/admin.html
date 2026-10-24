@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>中防AI 管理台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ═══════════════════════════════════════════════════════════════
+     中防AI 管理台 · 视觉系统 v2（工业实用方向 Industrial）
+     设计决策（frontend-design 方法论）：
+     · 基座：暖调近黑（去蓝紫 AI 渐变，单一青色强调色 teal 只在关键动作出现）
+     · 字体：数字/键名/金额用 JetBrains Mono（仪表盘感），中文正文系统黑体
+     · 层次：实底面板 + 发丝边框（去大面积毛玻璃），8pt 间距栅格
+     · 状态：颜色 + 文字双通道（不只靠颜色传达状态）
+     ═══════════════════════════════════════════════════════════════ */
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0B0D10; --surface:#14171C; --surface-2:#1A1E25; --surface-3:#20252E;
+    --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+    --t1:#E9EEF5; --t2:#93A1B5; --t3:#5E6C80;
+    --accent:#2DD4BF; --accent-ink:#04211D; --accent-dim:rgba(45,212,191,.13); --accent-line:rgba(45,212,191,.35);
+    --rd:#F87171; --gn:#34D399; --am:#FBBF24;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+    --sp1:4px; --sp2:8px; --sp3:16px; --sp4:24px; --sp5:40px;
+    --sh1:0 2px 8px rgba(0,0,0,.28); --sh2:0 10px 30px rgba(0,0,0,.38);
+    --ease:cubic-bezier(.16,1,.3,1); --dur:200ms;
+    /* 兼容旧变量名（既有行内样式引用） */
+    --cy:var(--accent); --bl:var(--accent); --ok:var(--gn);
+  }
+  html,body{min-height:100%}
+  body{font:14.5px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--t1);
+    padding:26px 16px 80px;-webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(900px 360px at 12% -6%, rgba(45,212,191,.07), transparent 60%),
+      linear-gradient(180deg,#0A0C0F,#0C0F14 60%,#0A0C10);
+    background-attachment:fixed}
+  .wrap{max-width:1080px;margin:0 auto}
+  .glass{position:relative;background:linear-gradient(180deg,var(--surface),#12151A);
+    border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--sh2), inset 0 1px 0 rgba(255,255,255,.05)}
+  .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+    background:linear-gradient(160deg,rgba(255,255,255,.05),transparent 40%)}
+  .hide{display:none!important}
+
+  #login{max-width:390px;margin:9vh auto 0;padding:30px 28px}
+  #login .logo{font-size:20px;font-weight:800;text-align:center}
+  #login .logo i{font-style:normal;color:var(--accent)}
+  #login .sub{text-align:center;font-size:12.5px;color:var(--t3);margin:6px 0 24px}
+  .fld{margin-bottom:13px}
+  .fld label{display:block;font-size:12px;color:var(--t3);margin-bottom:6px}
+  input,select,textarea{width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:11px 13px;font-size:14px;color:var(--t1);font-family:inherit;outline:none;transition:border-color var(--dur),box-shadow var(--dur)}
+  input:focus,select:focus,textarea:focus{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-dim)}
+  input::placeholder{color:var(--t3)}
+  .btn{width:100%;padding:13px;border-radius:var(--r-md);border:none;font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;
+    background:var(--accent);color:var(--accent-ink);transition:var(--dur);box-shadow:0 8px 22px rgba(45,212,191,.18)}
+  .btn:hover{transform:translateY(-1px)} .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .err{background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.28);color:#FCA5A5;
+    border-radius:var(--r-sm);padding:10px 13px;font-size:12.8px;margin-bottom:13px;line-height:1.7}
+
+  .shell{border-radius:var(--r-lg);overflow:hidden;margin-bottom:20px}
+  .bar{display:flex;align-items:center;gap:12px;padding:15px 20px;border-bottom:1px solid var(--line)}
+  .bar .logo{font-size:15px;font-weight:800;letter-spacing:.2px}
+  .bar .logo i{font-style:normal;color:var(--accent)}
+  .bar .sp{flex:1}
+  .bar button{background:none;border:none;font-size:13px;color:var(--t2);font-weight:600;cursor:pointer;font-family:inherit;transition:color var(--dur)}
+  .bar button:hover{color:var(--accent)}
+  /* 顶部导航：分组隔离 + 清晰激活态（工业实用） */
+  .tabs{display:flex;gap:4px;padding:10px 14px;border-bottom:1px solid var(--line);overflow-x:auto;
+    background:var(--surface);position:sticky;top:0;z-index:20}
+  .tabs button{background:transparent;border:1px solid transparent;font-family:inherit;font-size:13px;font-weight:600;color:var(--t2);
+    padding:9px 14px;border-radius:99px;cursor:pointer;white-space:nowrap;transition:all var(--dur)}
+  .tabs button:hover{color:var(--t1);background:rgba(255,255,255,.05)}
+  .tabs button.on{color:var(--accent-ink);background:var(--accent);border-color:var(--accent)}
+  .tabs .num{font-size:10px;font-weight:800;color:var(--accent-ink);background:rgba(4,33,29,.18);
+    border-radius:999px;padding:1.5px 7px;margin-left:6px}
+  .tabs button.on .num{background:rgba(4,33,29,.22)}
+  .pbody{padding:18px}
+
+  .blk{padding:18px 20px;border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--line)}
+  .blk h3{font-size:12px;font-weight:700;color:var(--t3);letter-spacing:1.2px;margin-bottom:14px;
+    display:flex;align-items:center;gap:10px;text-transform:uppercase;font-family:var(--mono)}
+  .blk h3 .sp{flex:1}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font-weight:600;color:var(--t3);font-size:10.5px;letter-spacing:.9px;text-align:left;padding:9px 12px;
+    border-bottom:1px solid var(--line-2);text-transform:uppercase;white-space:nowrap;font-family:var(--mono)}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--t1);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr{transition:background 140ms}
+  tbody tr:hover{background:rgba(45,212,191,.035)}
+  .empty{padding:26px;text-align:center;color:var(--t3);font-size:13px}
+  .mono{font-family:var(--mono);font-size:12.5px;color:#8AD8CE;word-break:break-all}
+  /* 数字统一等宽 + 表格数字右对齐感 */
+  td b, .numv{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .st{display:inline-block;font-size:11px;font-weight:700;padding:2.5px 9px;border-radius:6px;white-space:nowrap;border:1px solid transparent;
+    font-family:var(--mono)}
+  /* 状态双通道：色 + 字义（不单靠颜色） */
+  .st-ok{background:rgba(52,211,153,.13);color:#6EE7B7;border-color:rgba(52,211,153,.28)}
+  .st-ok::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;margin-right:5px;vertical-align:1px}
+  .st-warn{background:rgba(251,191,36,.12);color:#FCD34D;border-color:rgba(251,191,36,.26)}
+  .st-bad{background:rgba(248,113,113,.12);color:#FCA5A5;border-color:rgba(248,113,113,.26)}
+  .st-wait{background:rgba(148,163,184,.12);color:#A8B6CB;border-color:rgba(148,163,184,.24)}
+  .st-open{background:var(--accent-dim);color:#5EEAD4;border-color:var(--accent-line)}
+  .op{display:flex;gap:6px;flex-wrap:wrap}
+  .op button{font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:var(--r-sm);cursor:pointer;font-family:inherit;
+    white-space:nowrap;border:1px solid var(--line-2);background:var(--surface-3);color:var(--t2);transition:all var(--dur)}
+  .op button:hover{background:rgba(255,255,255,.09);color:var(--t1);border-color:var(--line-2)}
+  .op .o-main{background:var(--accent-dim);color:#5EEAD4;border-color:var(--accent-line)}
+  .op .o-danger{color:#FCA5A5;border-color:rgba(248,113,113,.26)}
+  .btnNew{font-size:12.5px;font-weight:700;padding:8px 15px;border-radius:var(--r-sm);cursor:pointer;font-family:inherit;border:none;
+    background:var(--accent);color:var(--accent-ink);transition:var(--dur)}
+  .btnNew:hover{filter:brightness(1.08)}
+
+  .ov{position:fixed;inset:0;background:rgba(5,7,10,.72);backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:var(--dur);z-index:50}
+  .ov.show{opacity:1;pointer-events:auto}
+  .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.97);width:min(390px,calc(100vw - 36px));
+    z-index:60;opacity:0;pointer-events:none;transition:var(--dur);overflow:hidden;border-radius:var(--r-lg);max-height:88vh;overflow-y:auto}
+  .modal.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+  .mh{display:flex;align-items:center;gap:10px;padding:19px 21px 11px;font-size:15px;font-weight:800}
+  .mh .ic{width:33px;height:33px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:15px;
+    background:var(--accent-dim);border:1px solid var(--accent-line)}
+  .mh .ic.warn{background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.30)}
+  .mh .ic.bad{background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.30)}
+  .mh .ic.gray{background:rgba(148,163,184,.10);border-color:rgba(148,163,184,.24)}
+  .mc{padding:0 21px 16px;font-size:12.8px;color:var(--t2);line-height:1.75}
+  .mf{padding:0 21px 19px;display:flex;gap:9px}
+  .mf button{flex:1;padding:12px;border-radius:var(--r-md);font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;border:1px solid transparent;transition:var(--dur)}
+  .b-main{background:var(--accent);color:var(--accent-ink)}
+  .b-ghost{background:var(--surface-3);color:var(--t2);border-color:var(--line-2)!important}
+  .b-ghost:hover{background:rgba(255,255,255,.10);color:var(--t1)}
+  .b-danger{background:rgba(248,113,113,.13);color:#FCA5A5;border-color:rgba(248,113,113,.28)!important}
+  .rows{padding:0 21px 12px}
+  .row{display:flex;gap:10px;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12.6px}
+  .row:last-child{border-bottom:none}
+  .row b{flex:none;width:68px;color:var(--t3);font-weight:500}
+  .row span{color:var(--t1);font-weight:600;word-break:break-all}
+  .cred{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-md);margin:0 21px 12px;padding:13px 15px}
+  .cred .line{display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:10px}
+  .cred .line b{font-size:11.5px;color:var(--t3);font-weight:500;flex:none}
+  .cred .line span{font-family:var(--mono);font-size:13px;font-weight:700;color:#8AD8CE;word-break:break-all;text-align:right}
+  .tip{font-size:11.5px;color:var(--t3);padding:0 21px 14px;line-height:1.65}
+  .warn{background:rgba(251,191,36,.09);border:1px solid rgba(251,191,36,.22);border-radius:var(--r-sm);
+    margin:0 21px 13px;padding:10px 13px;font-size:11.8px;color:#FCD34D;line-height:1.65}
+  .okbox{background:rgba(52,211,153,.09);border:1px solid rgba(52,211,153,.24);border-radius:var(--r-sm);
+    margin:0 21px 13px;padding:10px 13px;font-size:11.8px;color:#6EE7B7;line-height:1.65}
+  .mi{margin:0 21px 13px;width:calc(100% - 42px)}
+  .toast{position:fixed;left:50%;bottom:40px;transform:translate(-50%,18px);z-index:80;opacity:0;pointer-events:none;transition:var(--dur);
+    background:var(--surface-3);border:1px solid var(--accent-line);border-radius:var(--r-md);padding:12px 22px;
+    font-size:13px;font-weight:600;color:#A7F3D0;box-shadow:var(--sh2);max-width:88vw;text-align:center}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(4,33,29,.3);border-top-color:var(--accent-ink);
+    border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:7px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  /* 系统设置：分区卡 + 配置项行（键名等宽、状态徽章双通道） */
+  .cfgwrap{margin-bottom:12px;border:1px solid var(--line);border-radius:var(--r-md);padding:0 16px;background:var(--surface-2);transition:border-color var(--dur)}
+  .cfgwrap:hover{border-color:var(--line-2)}
+  .cfgwrap>summary{cursor:pointer;list-style:none;padding:14px 2px;font-size:13.5px;font-weight:700;color:var(--t1);
+    display:flex;align-items:center;gap:8px}
+  .cfgwrap>summary::-webkit-details-marker{display:none}
+  .cfgwrap>summary::before{content:"▸";color:var(--accent);font-size:11px;transition:transform var(--dur)}
+  .cfgwrap[open]>summary::before{transform:rotate(90deg)}
+  .cfgwrap[open]>summary{border-bottom:1px solid var(--line);margin-bottom:14px}
+  .cgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px 18px;padding-bottom:14px}
+  @media (max-width:900px){.cgrid{grid-template-columns:1fr}}
+  .crow{min-width:0}
+  .clabel{font-size:12.3px;color:var(--t2);margin-bottom:5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .ckey{font-size:10px;color:var(--t3);font-family:var(--mono);background:var(--surface-3);border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px}
+  .cbadge{font-size:10px;font-weight:700;border-radius:999px;padding:1px 8px;font-family:var(--mono)}
+  .cb-def{background:rgba(148,163,184,.18);color:var(--t2)}
+  .cb-chg{background:rgba(251,191,36,.18);color:#FCD34D}
+  .cb-ok{background:rgba(52,211,153,.18);color:#6EE7B7}
+  .cb-warn{background:rgba(248,113,113,.18);color:#FCA5A5}
+  /* 专家可视化编辑器 */
+  .expcard{border:1px solid var(--line);border-radius:var(--r-md);padding:12px 14px;margin-bottom:10px;background:var(--surface-2);transition:border-color var(--dur)}
+  .expcard:hover{border-color:var(--line-2)}
+  .exphead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .exphead .emi{width:46px;text-align:center;font-size:17px;padding:6px 4px}
+  .exphead .nm{width:120px}
+  .exphead .sb{flex:1;min-width:180px}
+  .tools{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--t2);align-items:center}
+  .tools label{cursor:pointer;display:flex;align-items:center;gap:3px}
+  .exptext{width:100%;margin-top:6px;padding:8px 10px;font-size:12.3px;line-height:1.6;background:#0E1116;border:1px solid var(--line);border-radius:var(--r-sm);color:var(--t1)}
+  .exptools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+  .qrupload{display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap}
+  /* 动效降级（skill 要求） */
+  @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
+</style>
+</head>
+<body>
+
+<!-- 登录已由入口页 index.html 统一完成，此处只承载管理员界面 -->
+<div id="app">
+  <div class="wrap">
+    <div class="shell glass">
+      <div class="bar">
+        <span class="logo">中防AI <i>管理台</i></span>
+        <span class="sp"></span>
+        <button onclick="openM('mLogout')">退出</button>
+      </div>
+      <div class="tabs">
+        <button class="on" id="tabBtn0" onclick="tab(0)">待审核<span class="num hide" id="pendNum">0</span></button>
+        <button id="tabBtn1" onclick="tab(1)">会员管理</button>
+        <button id="tabBtn2" onclick="tab(2)">发放记录</button>
+        <button id="tabBtn3" onclick="tab(3)">员工管理</button>
+        <button id="tabBtn4" onclick="tab(4)">系统设置</button>
+        <button id="tabBtn5" onclick="tab(5)">专家配置</button>
+        <button id="tabBtn6" onclick="tab(6)">运营配置</button>
+        <button id="tabBtn7" onclick="tab(7)">成本看板</button>
+      </div>
+
+      <div class="pbody" id="tab0">
+        <div class="blk">
+          <h3>待审核申请</h3>
+          <div id="pendBox"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab1">
+        <div class="blk">
+          <h3>会员管理<span class="sp"></span><button class="btnNew" onclick="openNewAcc()">＋ 新建账号</button></h3>
+          <div id="accBox"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab2">
+        <div class="blk">
+          <h3>发放记录</h3>
+          <div id="dlvBox"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab3">
+        <div class="blk">
+          <h3>员工管理<span class="sp"></span><button class="btnNew" onclick="openNewStaff()">＋ 新建员工</button></h3>
+          <div id="stfBox"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab4">
+        <div class="blk">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+            <input id="cfgSearch" class="mi" placeholder="搜索配置项（名称 / 键名 / 用途）" style="max-width:340px;padding:8px 12px;font-size:12.5px" oninput="renderSettings()">
+            <span style="font-size:11.5px;color:var(--t3)">只提交改动项；保存后约 30 秒全端生效</span>
+            <span id="cfgVersion" style="font-size:11.5px;color:var(--t3)"></span>
+          </div>
+          <div id="cfgSections"></div>
+          <div id="cfgResult" style="margin-top:10px"></div>
+          <details class="cfgwrap" style="margin-top:16px"><summary>配置变更历史（可回滚）</summary><div id="cfgHistory"></div></details>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab6">
+        <div class="blk">
+          <h3>档位运营配置（价格 / 额度 / 显示 / 收款码 / 功能开关）<span class="sp"></span>
+            <button class="btnNew" id="tiersSave" onclick="saveTiers()">保存并生效</button></h3>
+          <div style="font-size:11.5px;color:var(--t3);margin-bottom:10px">
+            保存后约 30 秒全端生效（App 权益页 / 员工端开单 / 管理台同步）。"显示开关"关闭 = 客户端与员工端不再展示该档，管理台仍可手动指定。
+          </div>
+          <div id="tiersBox"><div class="empty">加载中…</div></div>
+          <div id="tiersResult" style="margin-top:10px"></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab7">
+        <div class="blk">
+          <h3>成本看板<span class="sp"></span>
+            <button onclick="loadCostReport(7)" id="cr7">近 7 天</button>
+            <button onclick="loadCostReport(14)" id="cr14">近 14 天</button>
+            <button onclick="loadCostReport(30)" id="cr30">近 30 天</button>
+          </h3>
+          <div style="font-size:11.5px;color:var(--t3);margin-bottom:12px">
+            数据源：每次调用一条用量日志（真实成本口径）。看板可定位异常客户、评估档位选择对成本的影响。
+          </div>
+          <div id="costReport"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+
+      <div class="pbody hide" id="tab5">
+        <div class="blk">
+          <h3>专家目录（云端下发，App 启动自动拉取）<span class="sp"></span>
+            <button class="btnNew" id="expSaveBtn" onclick="saveExpertsViz()">保存并发布</button>
+            <button onclick="addExpert()">＋ 新增专家</button>
+            <button onclick="resetExperts()">恢复内置默认</button>
+            <button id="expModeBtn" onclick="toggleExpMode()">切到 JSON 模式</button>
+          </h3>
+          <div style="font-size:11.5px;color:var(--t3);margin-bottom:10px">
+            当前版本 <b id="expVer" style="color:var(--t1)">—</b> ·
+            点专家卡片展开可改图标/工具开关/话术/开场白；能力勾选决定这位专家能用哪些工具（联网/生图/文档导出）。
+            保存后 App 下次启动自动拉取生效，无需出包。
+          </div>
+          <div id="expVizBox">
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+              <label style="font-size:12.5px;color:var(--t2)">侧栏标题 <input class="mi" id="expUiTitle" style="width:200px;margin-left:6px"></label>
+              <label style="font-size:12.5px;color:var(--t2)">侧栏图标（SF Symbol） <input class="mi" id="expUiIcon" style="width:200px;margin-left:6px"></label>
+            </div>
+            <div id="expViz"><div class="empty">加载中…</div></div>
+          </div>
+          <div id="expJsonBox" class="hide">
+            <div style="font-size:11.5px;color:var(--t3);margin-bottom:8px">高级模式：直接编辑 JSON（experts 数组 + starters + ui）</div>
+            <textarea id="expJson" spellcheck="false" style="width:100%;min-height:420px;background:rgba(255,255,255,.05);
+              border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--t1);font-family:ui-monospace,Menlo,Consolas,monospace;
+              font-size:12px;line-height:1.6;outline:none"></textarea>
+          </div>
+          <div id="expResult" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="ov" onclick="closeM()"></div>
+
+<div class="modal glass" id="mApprove" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#10004;</span><span id="apTitle">确认通过该申请？</span></div>
+  <div class="mc" id="apBody"></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="apBtn" onclick="doApprove()">确认通过</button></div>
+</div>
+
+<div class="modal glass" id="mReject" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic bad">&#10008;</span>驳回申请</div>
+  <div class="mc" style="padding-bottom:11px" id="rjBody">请填写驳回原因，该原因会通知提交人。</div>
+  <input class="mi" id="rejectInput" maxlength="60" placeholder="例如：未收到款项，请确认后重新提交">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" id="rjBtn" onclick="doReject()">确认驳回</button></div>
+</div>
+
+<div class="modal glass" id="mResult" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic" id="rsIc">&#127881;</span><span id="rsTitle">完成</span></div>
+  <div class="cred" id="rsCred"></div>
+  <div class="okbox" id="rsNote"></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">关闭</button><button class="b-main" id="rsCopy" onclick="copyResult()">复制</button></div>
+</div>
+
+<div class="modal glass" id="mNewAcc" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#10133;</span>新建会员账号</div>
+  <div class="mc" style="padding-bottom:11px">你自己收的款可直接建号，跳过审核。登录名与密码可自定义，留空由系统生成。</div>
+  <input class="mi" id="naName" maxlength="20" placeholder="客户称呼（必填）" style="margin-bottom:8px">
+  <input class="mi" id="naReal" maxlength="20" placeholder="客户姓名（选填）" style="margin-bottom:8px">
+  <input class="mi" id="naPhone" maxlength="11" inputmode="numeric" placeholder="客户电话（选填，11 位手机号）" style="margin-bottom:8px">
+  <select class="mi" id="naTier" style="margin-bottom:8px" onchange="syncTierAmount()">
+    <option value="plus">Plus 基础版</option>
+  </select>
+  <input class="mi" id="naPaid" maxlength="8" placeholder="实收金额（选填，默认按档位标价）" style="margin-bottom:8px">
+  <input class="mi" id="naUser" maxlength="20" placeholder="登录名（自定义，留空系统生成）" style="margin-bottom:8px">
+  <input class="mi" id="naPass" maxlength="32" placeholder="密码（自定义，留空系统生成，至少 6 位）" style="margin-bottom:8px">
+  <input class="mi" id="naNote" maxlength="60" placeholder="备注（选填）">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="naBtn" onclick="createAccount()">创建</button></div>
+</div>
+
+<div class="modal glass" id="mNewStaff" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#128100;</span>新建员工账号</div>
+  <div class="mc" style="padding-bottom:11px">员工只能提交开通/续费申请与查看基础信息。</div>
+  <input class="mi" id="nsName" maxlength="20" placeholder="员工姓名（必填）" style="margin-bottom:8px">
+  <input class="mi" id="nsLogin" maxlength="32" placeholder="登录名（自定义，留空自动生成）" style="margin-bottom:8px">
+  <input class="mi" id="nsPass" maxlength="32" placeholder="密码（自定义，留空自动生成）">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="nsBtn" onclick="createStaff()">创建</button></div>
+</div>
+
+<div class="modal glass" id="mSuspend" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic bad">&#9940;</span>确认停用？</div>
+  <div class="mc">停用后「<b id="susWho" style="color:var(--t1)">客户</b>」将<b style="color:var(--t1)">立即无法登录 App</b>，
+    已产生的对话与资料不受影响。可随时重新启用。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" id="susBtn" onclick="doSuspend()">确认停用</button></div>
+</div>
+
+<div class="modal glass" id="mDisableStaff" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic bad">&#9940;</span>确认禁用该员工？</div>
+  <div class="mc">禁用后「<b id="dsWho" style="color:var(--t1)">员工</b>」将<b style="color:var(--t1)">立即无法登录管理台</b>。
+    他提交过的申请与发放记录<b style="color:var(--t1)">全部保留</b>。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" id="dsBtn" onclick="doDisableStaff()">确认禁用</button></div>
+</div>
+
+<div class="modal glass" id="mNote" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#9998;</span>编辑备注</div>
+  <div class="mc" style="padding-bottom:11px">备注是该记录中<b style="color:var(--t1)">唯一可修改</b>的字段。</div>
+  <input class="mi" id="noteInput" maxlength="60" placeholder="例如：招商会现场 · 南山区">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="noteBtn" onclick="saveNote()">保存</button></div>
+</div>
+
+<div class="modal glass" id="mEdit" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#9998;</span>编辑会员信息</div>
+  <div class="mc" style="padding-bottom:11px">修改即时生效并留审计记录。变更档位后<b style="color:var(--t1)">额度池按新档位计算，已用量保留</b>。</div>
+  <input class="mi" id="edName" maxlength="20" placeholder="客户称呼" style="margin-bottom:8px">
+  <input class="mi" id="edReal" maxlength="20" placeholder="客户姓名" style="margin-bottom:8px">
+  <input class="mi" id="edPhone" maxlength="11" inputmode="numeric" placeholder="客户电话（11 位手机号）" style="margin-bottom:8px">
+  <select class="mi" id="edTier" style="margin-bottom:8px"></select>
+  <input class="mi" id="edExp" type="date" style="margin-bottom:8px">
+  <input class="mi" id="edQuota" inputmode="numeric" placeholder="月额度上限（选填，留空 = 按档位）" style="margin-bottom:8px">
+  <input class="mi" id="edNote" maxlength="60" placeholder="备注（选填）">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="edBtn" onclick="saveEdit()">保存修改</button></div>
+</div>
+
+<div class="modal glass" id="mLogout" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic gray">&#128682;</span>确认退出？</div>
+  <div class="mc">退出后需要重新输入登录名和密码。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" onclick="logout()">退出</button></div>
+</div>
+
+<div class="modal glass" id="mDel" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic bad">&#128465;</span><span id="delTitle">确认删除？</span></div>
+  <div class="mc" id="delBody"></div>
+  <div class="bad" id="delWarn"></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" id="delBtn" onclick="doDelete()">确认删除</button></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var API = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
+var TOKEN = null, ME = null;
+var ACCOUNTS = [], PENDING = [], STAFF = [], NOTE_TARGET = null, RS_COPY = '', CUR = {};
+
+function q(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function toast(m){ var t=q('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2600); }
+function openM(id){ q('ov').classList.add('show');
+  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');}); q(id).classList.add('show'); }
+function closeM(){ q('ov').classList.remove('show');
+  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');}); }
+function busy(b,on,label){ if(!b) return; b.disabled=on;
+  if(on){ b._t=b.innerHTML; b.innerHTML='<span class="spin"></span>'+(label||'处理中'); }
+  else if(b._t){ b.innerHTML=b._t; } }
+function api(path,opt){ opt=opt||{}; var h={'Content-Type':'application/json'};
+  if(TOKEN) h.Authorization='Bearer '+TOKEN;
+  return fetch(API+path,{method:opt.method||'GET',headers:h,body:opt.body?JSON.stringify(opt.body):undefined})
+    .then(function(r){ if(r.status===401&&TOKEN) logout();
+      return r.json().catch(function(){return {};}); })
+    .then(function(j){ if(!j||j.ok===false) throw new Error((j&&j.message)||'请求失败'); return j; }); }
+function p2(n){ return n<10?'0'+n:''+n; }
+function fmtTime(v){ if(!v) return '—'; var d=new Date(v); if(isNaN(d)) return '—';
+  return (d.getMonth()+1)+'-'+p2(d.getDate())+' '+p2(d.getHours())+':'+p2(d.getMinutes()); }
+function fmtDate(v){ if(!v) return '—'; var d=new Date(v); if(isNaN(d)) return '—';
+  return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate()); }
+function copyText(t,cb){ function fb(t2){ var ta=document.createElement('textarea'); ta.value=t2;
+    ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select();
+    try{document.execCommand('copy');}catch(e){} document.body.removeChild(ta); (cb||function(){toast('已复制到剪贴板');})(); }
+  if(navigator.clipboard&&window.isSecureContext){ navigator.clipboard.writeText(t).then(function(){(cb||function(){toast('已复制到剪贴板');})();},function(){fb(t);}); }
+  else fb(t); }
+
+/* ── 会话（由入口页写入，本页只读取） ── */
+function readSession() {
+  try {
+    return { token: localStorage.getItem('bf_token'), role: localStorage.getItem('bf_role') };
+  } catch (e) { return { token: null, role: null }; }
+}
+function logout() {
+  try {
+    localStorage.removeItem('bf_token');
+    localStorage.removeItem('bf_role');
+    localStorage.removeItem('bf_name');
+  } catch (e) {}
+  location.replace('index.html');
+}
+
+/* ── 切换 tab ── */
+function tab(i){
+  for(var k=0;k<8;k++){ q('tab'+k).classList.toggle('hide',k!==i); q('tabBtn'+k).classList.toggle('on',k===i); }
+  if(i===4) loadSettings();
+  if(i===5 && !EXPLOADED) loadExperts();
+  if(i===6 && !TIERSCFG) loadTiersConfig();
+  if(i===7) loadCostReport(7);
+}
+
+/* ── 加载 ── */
+function refreshAll(){ loadPending(); loadAccounts(); loadDeliveries(); loadStaff(); }
+
+function loadPending(){
+  api('/admin/requests').then(function(j){
+    PENDING=(j.list||[]).filter(function(r){return r.status==='pending';});
+    var n=q('pendNum');
+    if(PENDING.length){ n.textContent=PENDING.length; n.classList.remove('hide'); } else n.classList.add('hide');
+    if(!PENDING.length){ q('pendBox').innerHTML='<div class="empty">没有待审核的申请</div>'; return; }
+    var h='<table><thead><tr><th>类型</th><th>档位</th><th>客户</th><th>提交人</th><th>提交时间</th><th>审核状态</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    var TIER_NAME={plus:'Plus',pro:'Pro',ultra:'Ultra'};
+    PENDING.forEach(function(r){
+      var type=r.type==='renew'?'<span class="st st-warn">续费</span>':'<span class="st st-open">开通</span>';
+      var tierKey=TIER_NAME[r.tier]?r.tier:'plus';
+      var tierCell='<span class="st '+(tierKey==='ultra'?'st-warn':'st-ok')+'">'+TIER_NAME[tierKey]+'</span>'
+        +(r.amountCny?'<span style="color:var(--t2);font-size:12px;margin-left:6px">¥'+r.amountCny+'</span>':'')
+        +(r.selfService?'<br><span class="st st-warn" style="margin-top:3px">会员自助</span>':'')
+        +(r.confirmedByStaff?'<br><span class="st st-ok" style="margin-top:3px">管理员确认收款</span>':'');
+      // P0-22：审核制下无超时（expiresAt=null）→ 显示等待时长；超时自动通过开启时显示剩余时限
+      var left;
+      if(r.expiresAt){
+        var ms=new Date(r.expiresAt).getTime()-Date.now();
+        left = ms>0 ? ('<span class="st st-warn">'+Math.floor(ms/3600000)+' 小时 '+Math.floor(ms%3600000/60000)+' 分后自动通过</span>') : '<span class="st st-warn">即将自动通过</span>';
+      } else {
+        var waited=Date.now()-new Date(r.createdAt).getTime();
+        var wh=Math.floor(waited/3600000), wm=Math.floor(waited%3600000/60000);
+        left='<span class="st st-wait">已等待 '+(wh>0?wh+' 小时 ':'')+wm+' 分</span>';
+      }
+      h+='<tr><td>'+type+'</td><td>'+tierCell+'</td><td>'+esc(r.customerName)+'</td>'
+        +'<td style="color:var(--t2)">'+esc(r.submittedByName||'—')+'</td>'
+        +'<td style="color:var(--t2)">'+fmtTime(r.createdAt)+'</td>'
+        +'<td><span class="st st-warn">'+left+'</span></td>'
+        +'<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        +'<button class="o-main" data-act="approve" data-id="'+esc(r._id)+'">通过</button>'
+        +'<button class="o-danger" data-act="reject" data-id="'+esc(r._id)+'">驳回</button>'
+        +'<button class="o-danger" data-act="del" data-kind="req" data-id="'+esc(r._id)+'" data-name="'+esc(r.customerName)+'">删除</button>'
+        +'</span></td></tr>';
+    });
+    q('pendBox').innerHTML=h+'</tbody></table>';
+  }).catch(function(e){ q('pendBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+
+function loadAccounts(){
+  api('/admin/accounts').then(function(j){
+    ACCOUNTS=j.list||[];
+    if(!ACCOUNTS.length){ q('accBox').innerHTML='<div class="empty">还没有会员账号</div>'; return; }
+    var h='<table><thead><tr><th>显示名</th><th>登录账号</th><th>档位</th><th>状态</th><th>到期</th><th>月额度剩余</th><th>日 / 周用量</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    var TIER_NAME={plus:'Plus',pro:'Pro',ultra:'Ultra'};
+    ACCOUNTS.forEach(function(a){
+      var st=a.status==='active'?'<span class="st st-ok">正常</span>'
+        :a.status==='suspended'?'<span class="st st-bad">已停用</span>':'<span class="st st-bad">已到期</span>';
+      var dl=a.daysLeft==null?'—':(a.daysLeft>=0?'还剩 '+a.daysLeft+' 天':'已过期 '+(-a.daysLeft)+' 天');
+      var tierKey=TIER_NAME[a.tier]?a.tier:'plus';
+      var tierCell='<span class="st '+(tierKey==='ultra'?'st-warn':'st-ok')+'">'+TIER_NAME[tierKey]+'</span>';
+      var pct=(a.poolPct==null)?null:a.poolPct;
+      // P0-25 修正：月池大时一位小数被取整成 100% 会掩盖真实用量 → 用 quota 精确值显示 99.6% 这种形态
+      var pctCell;
+      if(a.quota&&a.quota.monthCap){
+        var mp=(1-a.quota.monthUsed/a.quota.monthCap)*100;
+        var mpTxt=(mp>=99.95?100:mp.toFixed(1));
+        var mcol=(mp<=20)?'var(--rd)':(mp<=50?'#FCD34D':'var(--t1)');
+        pctCell='<b style="color:'+mcol+'">'+mpTxt+'%</b>'
+          +'<div style="font-size:11px;color:var(--t3)">已用 ¥'+(Math.round(a.quota.monthUsed*100)/100)+' / ¥'+a.quota.monthCap+'</div>'
+          +(a.poolBand==='limited'?' <span class="st st-bad">已用完</span>':a.poolBand==='notice'?' <span class="st st-warn">偏高</span>':'');
+      } else {
+        pctCell=pct==null?'—':('<b style="color:'+(pct<=20?'var(--rd)':'var(--t1)')+'">'+pct+'%</b>'
+          +(a.poolBand==='limited'?' <span class="st st-bad">已用完</span>'
+            :a.poolBand==='notice'?' <span class="st st-warn">偏高</span>':''));
+      }
+      // P0-25 日/周用量两行小字（带小.cap），超过 80% 黄字、100% 红字
+      function dw(used,cap){ if(cap==null) return '—';
+        var p=cap>0?used/cap:0;
+        var col=p>=1?'var(--rd)':(p>=0.8?'#FCD34D':'var(--t1)');
+        return '<span style="color:'+col+'">¥'+(Math.round(used*100)/100)+'</span><span style="color:var(--t3)"> / ¥'+cap+'</span>'; }
+      var dwCell=(a.quota&&a.quota.dayCap!=null)
+        ? '<div style="font-size:11.5px;line-height:1.55">日 '+dw(a.quota.dayUsed,a.quota.dayCap)
+          +'<br>周 '+dw(a.quota.weekUsed,a.quota.weekCap)+'</div>'
+        : '—';
+      var info=(a.realName||a.phone)?'<br><small style="color:var(--t3)">'+esc(a.realName||'')+(a.realName&&a.phone?' · ':'')+esc(a.phone||'')+'</small>':'';
+      h+='<tr><td>'+esc(a.displayName)+info+'</td><td class="mono">'+esc(a.username)+'</td><td>'+tierCell+'</td><td>'+st+'</td>'
+        +'<td style="color:var(--t2)">'+dl+'</td>'
+        +'<td>'+pctCell+'</td>'
+        +'<td>'+dwCell+'</td>'
+        +'<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        +'<button class="o-main" data-act="edit" data-id="'+esc(a.id)+'">编辑</button>'
+        +'<button data-act="renew" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">续费</button>'
+        +'<button data-act="reset" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">重置密码</button>'
+        +'<button class="o-danger" data-act="suspend" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">停用</button>'
+        +'<button class="o-danger" data-act="del" data-kind="acc" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">删除</button>'
+        +'</span></td></tr>';
+    });
+    q('accBox').innerHTML=h+'</tbody></table>';
+  }).catch(function(e){ q('accBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+
+function loadDeliveries(){
+  api('/admin/deliveries').then(function(j){
+    var list=j.list||[];
+    if(!list.length){ q('dlvBox').innerHTML='<div class="empty">还没有发放记录</div>'; return; }
+    var h='<table><thead><tr><th>充值时间</th><th>登录账号</th><th>登录密码</th><th>发放时间</th><th>备注</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    list.forEach(function(d){
+      var note=d.note?esc(d.note):'<span style="color:var(--t3)">点击填写</span>';
+      h+='<tr><td style="color:var(--t2)">'+fmtTime(d.chargedAt)+'</td>'
+        +'<td class="mono">'+esc(d.username)+'</td><td class="mono">'+esc(d.password||'—')+'</td>'
+        +'<td style="color:var(--t2)">'+fmtTime(d.issuedAt)+'</td><td>'+note+'</td>'
+        +'<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        +'<button data-act="note" data-id="'+esc(d.id)+'" data-note="'+esc(d.note||'')+'">编辑备注</button>'
+        +'<button data-act="copy" data-text="'+esc((d.username||'')+' / '+(d.password||''))+'">复制</button>'
+        +'<button class="o-danger" data-act="del" data-kind="dlv" data-id="'+esc(d.id)+'" data-name="'+esc(d.username)+'">删除</button>'
+        +'</span></td></tr>';
+    });
+    q('dlvBox').innerHTML=h+'</tbody></table>';
+  }).catch(function(e){ q('dlvBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+
+function loadStaff(){
+  api('/admin/staff').then(function(j){
+    STAFF=j.list||[];
+    if(!STAFF.length){ q('stfBox').innerHTML='<div class="empty">还没有员工账号</div>'; return; }
+    var h='<table><thead><tr><th>姓名</th><th>登录名</th><th>角色</th><th>状态</th><th>最近登录</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    STAFF.forEach(function(s){
+      var role=s.role==='admin'?'<span class="st st-open">管理员</span>':'<span class="st st-open">员工</span>';
+      var st=s.status==='active'?'<span class="st st-ok">正常</span>':'<span class="st st-bad">已禁用</span>';
+      var nm=esc(s.displayName).replace(/'/g,"\\'");
+      h+='<tr><td>'+esc(s.displayName)+'</td><td class="mono">'+esc(s.username)+'</td><td>'+role+'</td><td>'+st+'</td>'
+        +'<td style="color:var(--t2)">'+(s.lastLoginAt?fmtTime(s.lastLoginAt):'—')+'</td>'
+        +'<td style="text-align:right">'+(s.role==='admin'?'<span style="color:var(--t3);font-size:12px">—</span>'
+        +'':'<span class="op" style="justify-content:flex-end"><button onclick="viewStaffPwd(\''+s.id+'\',\''+nm+'\')">密码</button>'
+        +'<button class="o-danger" onclick="askDisableStaff(\''+s.id+'\',\''+nm+'\')">禁用</button>'
+        +'<button class="o-danger" onclick="askDel(\'staff\',\''+s.id+'\',\''+nm+'\')">删除</button></span>')+'</td></tr>';
+    });
+    q('stfBox').innerHTML=h+'</tbody></table>';
+  }).catch(function(e){ q('stfBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+
+/* ── 审批 ── */
+function findReq(id){ return PENDING.filter(function(r){return r._id===id;})[0]; }
+function askApprove(id){
+  var r=findReq(id); if(!r) return; CUR={id:id,type:r.type,who:r.customerName,by:r.submittedByName||'提交人'};
+  q('apTitle').textContent = r.type==='renew' ? '确认通过该续费？' : '确认通过该申请？';
+  q('apBody').innerHTML = r.type==='renew'
+    ? '将通过「<b style="color:var(--t1)">'+esc(r.customerName)+'</b>」的续费申请。<br>该客户到期时间会自动顺延 1 个月。'
+    : '将通过「<b style="color:var(--t1)">'+esc(r.customerName)+'</b>」的建号申请。<br>系统会立即生成会员账号并通知提交人。';
+  openM('mApprove');
+}
+function doApprove(){
+  busy(q('apBtn'),true,'处理中');
+  api('/admin/requests/'+CUR.id+'/approve',{method:'POST'}).then(function(j){
+    busy(q('apBtn'),false); closeM();
+    var res=(j.result)||{};
+    if(res.type==='renew'){
+      q('rsIc').innerHTML='&#9989;'; q('rsTitle').textContent='续费已完成';
+      q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(CUR.who)+'</span></div>'
+        +'<div class="line"><b>新到期</b><span>'+fmtDate(res.to)+'</span></div>';
+      q('rsNote').textContent='已通知提交人。'; RS_COPY=''; q('rsCopy').classList.add('hide');
+    } else {
+      q('rsIc').innerHTML='&#127881;'; q('rsTitle').textContent='账号已生成';
+      q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(CUR.who)+'</span></div>'
+        +'<div class="line"><b>登录账号</b><span>'+esc(res.username||'—')+'</span></div>';
+      q('rsNote').textContent='已通知'+CUR.by+'，他可在员工端查看并转发给客户。';
+      RS_COPY=res.username||''; q('rsCopy').classList.remove('hide');
+    }
+    openM('mResult'); refreshAll();
+  }).catch(function(e){ busy(q('apBtn'),false); toast(e.message); });
+}
+function askReject(id){
+  var r=findReq(id); if(!r) return; CUR={id:id,who:r.customerName,type:r.type};
+  q('rjBody').innerHTML='将驳回「<b style="color:var(--t1)">'+esc(r.customerName)+'</b>」的'
+    +(r.type==='renew'?'续费':'建号')+'申请。原因会通知提交人。';
+  q('rejectInput').value=''; openM('mReject');
+}
+function doReject(){
+  var v=q('rejectInput').value.trim();
+  if(!v){ toast('请填写驳回原因'); return; }
+  busy(q('rjBtn'),true,'处理中');
+  api('/admin/requests/'+CUR.id+'/reject',{method:'POST',body:{reason:v}})
+    .then(function(){ busy(q('rjBtn'),false); closeM(); toast('已驳回并通知提交人'); refreshAll(); })
+    .catch(function(e){ busy(q('rjBtn'),false); toast(e.message); });
+}
+
+/* ── 会员操作 ── */
+function askRenew(id,name){
+  CUR={id:id,who:name};
+  api('/admin/accounts/'+id+'/renew',{method:'POST'}).then(function(j){
+    q('rsIc').innerHTML='&#9989;'; q('rsTitle').textContent='续费已完成';
+    q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(name)+'</span></div>'
+      +'<div class="line"><b>新到期</b><span>'+fmtDate(j.to)+'</span></div>';
+    q('rsNote').textContent='该客户已续期 1 个月。'; RS_COPY=''; q('rsCopy').classList.add('hide');
+    openM('mResult'); refreshAll();
+  }).catch(function(e){ toast(e.message); });
+}
+function askReset(id,name){
+  api('/admin/accounts/'+id+'/reset-password',{method:'POST'}).then(function(j){
+    q('rsIc').innerHTML='&#128273;'; q('rsTitle').textContent='密码已重置';
+    q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(name)+'</span></div>'
+      +'<div class="line"><b>新密码</b><span>'+esc(j.password||'—')+'</span></div>';
+    q('rsNote').textContent='新密码只显示这一次，请立即复制并发给客户。重置后客户在其他设备上会被登出。';
+    RS_COPY=j.password||''; q('rsCopy').classList.remove('hide');
+    openM('mResult'); refreshAll();
+  }).catch(function(e){ toast(e.message); });
+}
+function askSuspend(id,name){ CUR={id:id,who:name}; q('susWho').textContent=name; openM('mSuspend'); }
+function doSuspend(){
+  busy(q('susBtn'),true,'处理中');
+  api('/admin/accounts/'+CUR.id+'/suspend',{method:'POST',body:{suspend:true}})
+    .then(function(){ busy(q('susBtn'),false); closeM(); toast('已停用该账号'); refreshAll(); })
+    .catch(function(e){ busy(q('susBtn'),false); toast(e.message); });
+}
+function copyResult(){ if(RS_COPY) copyText(RS_COPY); else toast('暂无可复制内容'); }
+/* P0-9：查看员工当前密码 */
+function viewStaffPwd(id,name){
+  api('/admin/staff/'+id+'/password').then(function(j){
+    q('rsIc').innerHTML='&#128273;'; q('rsTitle').textContent='员工密码 — '+name;
+    q('rsCred').innerHTML='<div class="line"><b>登录名</b><span>'+esc(j.username)+'</span></div>'
+      +'<div class="line"><b>当前密码</b><span>'+esc(j.password)+'</span></div>';
+    q('rsNote').textContent='如需更换，用「重置」生成新密码后重新发给员工。';
+    RS_COPY=j.username+' / '+j.password; q('rsCopy').classList.remove('hide');
+    openM('mResult'); 
+  }).catch(function(e){ toast(e.message); });
+}
+
+/* ── 新建 ── */
+function openNewAcc(){
+  loadTiersForAdmin(); q('naName').value=''; q('naNote').value=''; q('naReal').value=''; q('naPhone').value=''; if(q('naUser'))q('naUser').value=''; if(q('naPass'))q('naPass').value=''; if(q('naTier'))q('naTier').value='plus'; if(q('naPaid'))q('naPaid').value=''; openM('mNewAcc'); }
+// 档位由服务端 /tiers 下发（价格不写死；拉取失败时保留当前选项，不影响建号）
+var TIER_PRICE={plus:166};
+function loadTiersForAdmin(){
+  api('/tiers').then(function(j){
+    var list=(j&&j.tiers)||[]; if(!list.length) return;
+    var sel=q('naTier'); if(!sel) return;
+    TIER_PRICE={}; var html='';
+    list.forEach(function(t){ TIER_PRICE[t.key]=t.priceCny; html+='<option value="'+t.key+'">'+t.name+' · ¥'+t.priceCny+'</option>'; });
+    sel.innerHTML=html;
+    syncTierAmount();
+  }).catch(function(){});
+}
+function syncTierAmount(){
+  var t=(q('naTier')&&q('naTier').value)||'plus';
+  var price=TIER_PRICE[t];
+  if(q('naPaid')) q('naPaid').placeholder= price? ('实收金额（选填，默认 '+price+'）') : '实收金额（选填）';
+}
+function createAccount(){
+  var n=q('naName').value.trim();
+  if(!n){ toast('请填写客户称呼'); return; }
+  var u=(q('naUser')&&q('naUser').value.trim())||'';
+  var p=(q('naPass')&&q('naPass').value.trim())||'';
+  if(u&&!/^[a-zA-Z0-9_]{3,20}$/.test(u)){ toast('登录名限 3-20 位字母、数字或下划线'); return; }
+  if(p&&p.length<6){ toast('密码至少 6 位'); return; }
+  var payload={displayName:n,note:q('naNote').value.trim()};
+  var rn=(q('naReal')&&q('naReal').value.trim())||'';
+  var ph=(q('naPhone')&&q('naPhone').value.trim())||'';
+  if(ph&&!/^1\d{10}$/.test(ph)){ toast('电话格式不正确（11 位手机号）'); return; }
+  if(rn)payload.realName=rn;
+  if(ph)payload.phone=ph;
+  var tierKey=(q('naTier')&&q('naTier').value)||'plus';
+  payload.tier=tierKey;
+  var paid=(q('naPaid')&&q('naPaid').value.trim())||'';
+  if(paid){ var pv=Number(paid); if(!(pv>0)){ toast('实收金额请填数字'); return; } payload.amountPaidCny=pv; }
+  if(u)payload.username=u;
+  if(p)payload.password=p;
+  busy(q('naBtn'),true,'创建中');
+  api('/admin/accounts',{method:'POST',body:payload})
+    .then(function(j){
+      busy(q('naBtn'),false); closeM();
+      q('rsIc').innerHTML='&#127881;'; q('rsTitle').textContent='账号已生成';
+      q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(n)+'</span></div>'
+        +'<div class="line"><b>登录账号</b><span>'+esc(j.username)+'</span></div>'
+        +'<div class="line"><b>登录密码</b><span>'+esc(j.password)+'</span></div>';
+      q('rsNote').textContent='该账号已直接创建并生效，未走审核流程。';
+      RS_COPY=j.username+' / '+j.password; q('rsCopy').classList.remove('hide');
+      openM('mResult'); refreshAll();
+    })
+    .catch(function(e){ busy(q('naBtn'),false); toast(e.message); });
+}
+function openNewStaff(){ q('nsName').value=''; q('nsLogin').value=''; q('nsPass').value=''; openM('mNewStaff'); }
+function createStaff(){
+  var n=q('nsName').value.trim();
+  if(!n){ toast('请填写员工姓名'); return; }
+  busy(q('nsBtn'),true,'创建中');
+  api('/admin/staff',{method:'POST',body:{displayName:n,username:q('nsLogin').value.trim(),password:q('nsPass').value.trim()}})
+    .then(function(j){
+      busy(q('nsBtn'),false); closeM();
+      q('rsIc').innerHTML='&#128100;'; q('rsTitle').textContent='员工账号已创建';
+      q('rsCred').innerHTML='<div class="line"><b>姓名</b><span style="font-family:inherit;font-size:13px">'+esc(n)+'</span></div>'
+        +'<div class="line"><b>登录名</b><span>'+esc(j.username)+'</span></div>'
+        +'<div class="line"><b>初始密码</b><span>'+esc(j.password)+'</span></div>';
+      q('rsNote').textContent='把登录名与密码发给'+n+'，他登录员工端（staff.html）即可使用。密码之后可在员工管理里随时查看/重置。';
+      RS_COPY=j.username+' / '+j.password; q('rsCopy').classList.remove('hide');
+      openM('mResult'); loadStaff();
+    })
+    .catch(function(e){ busy(q('nsBtn'),false); toast(e.message); });
+}
+function askDisableStaff(id,name){ CUR={id:id,who:name}; q('dsWho').textContent=name; openM('mDisableStaff'); }
+function doDisableStaff(){
+  busy(q('dsBtn'),true,'处理中');
+  api('/admin/staff/'+CUR.id+'/disable',{method:'POST'})
+    .then(function(){ busy(q('dsBtn'),false); closeM(); toast('已禁用该员工账号'); loadStaff(); })
+    .catch(function(e){ busy(q('dsBtn'),false); toast(e.message); });
+}
+
+/* ── 编辑会员（P0-21：档位/到期/姓名/电话直改） ── */
+var EDIT_ACC=null;
+function openEdit(id){
+  var a=ACCOUNTS.filter(function(x){return x.id===id;})[0];
+  if(!a){ toast('未找到该账号'); return; }
+  EDIT_ACC=a;
+  q('edName').value=a.displayName||'';
+  q('edReal').value=a.realName||'';
+  q('edPhone').value=a.phone||'';
+  q('edExp').value=a.expiresAt?new Date(a.expiresAt).toISOString().slice(0,10):'';
+  q('edQuota').value=(a.quotaOverrideCny&&a.quotaOverrideCny>0)?String(a.quotaOverrideCny):'';
+  q('edNote').value=a.note||'';
+  // 档位选项从服务端拉（带 ?all=1 拿全量，含已隐藏的 Pro/Ultra；失败时兜底三档硬选项）
+  api('/tiers?all=1').then(function(j){
+    var list=(j&&j.tiers)||[];
+    var sel=q('edTier'); if(!sel) return;
+    var html='';
+    if(list.length){ list.forEach(function(t){ html+='<option value="'+t.key+'">'+t.name+' · ¥'+t.priceCny+'</option>'; }); }
+    else { html='<option value="plus">Plus 基础版</option><option value="pro">Pro 专业版</option><option value="ultra">Ultra 旗舰版</option>'; }
+    sel.innerHTML=html;
+    sel.value=a.tier||'plus';
+    if(sel.value!==(a.tier||'plus')) sel.value='plus';
+  });
+  openM('mEdit');
+}
+function saveEdit(){
+  if(!EDIT_ACC) return;
+  var ph=(q('edPhone').value.trim())||'';
+  if(ph&&!/^1\d{10}$/.test(ph)){ toast('电话格式不正确（11 位手机号）'); return; }
+  var exp=(q('edExp').value||'').trim();
+  if(exp&&!/^\d{4}-\d{2}-\d{2}$/.test(exp)){ toast('到期日格式应为 YYYY-MM-DD'); return; }
+  var qo=(q('edQuota')&&q('edQuota').value.trim())||'';
+  if(qo&&!(Number(qo)>0)){ toast('月额度上限请填正数字'); return; }
+  busy(q('edBtn'),true,'保存中');
+  api('/admin/accounts/'+EDIT_ACC.id+'/update',{method:'POST',body:{
+    displayName:q('edName').value.trim(),
+    realName:q('edReal').value.trim(),
+    phone:ph,
+    tier:(q('edTier')&&q('edTier').value)||undefined,
+    expiresAt:exp||undefined,
+    quotaOverrideCny:qo,
+    note:q('edNote').value.trim()
+  }}).then(function(j){
+    busy(q('edBtn'),false); closeM();
+    var cs=(j.changes&&j.changes.length)?j.changes.join('；'):'（无变更）';
+    q('rsIc').innerHTML='&#9998;'; q('rsTitle').textContent='修改已保存';
+    q('rsCred').innerHTML='<div class="line"><b>客户</b><span style="font-family:inherit;font-size:13px">'+esc(EDIT_ACC.displayName)+'</span></div>'
+      +'<div class="line"><b>变更</b><span style="font-family:inherit;font-size:12.5px;text-align:left">'+esc(cs)+'</span></div>';
+    q('rsNote').textContent='修改已生效并写入审计记录。';
+    RS_COPY=''; q('rsCopy').classList.add('hide');
+    openM('mResult'); loadAccounts();
+  }).catch(function(e){ busy(q('edBtn'),false); toast(e.message); });
+}
+
+/* ── 备注 ── */
+function openNote(id,cur){ NOTE_TARGET=id; q('noteInput').value=cur||''; openM('mNote'); }
+function saveNote(){
+  if(!NOTE_TARGET) return;
+  busy(q('noteBtn'),true,'保存中');
+  api('/admin/deliveries/'+NOTE_TARGET+'/note',{method:'POST',body:{note:q('noteInput').value}})
+    .then(function(){ busy(q('noteBtn'),false); closeM(); toast('备注已保存'); loadDeliveries(); })
+    .catch(function(e){ busy(q('noteBtn'),false); toast(e.message); });
+}
+
+/* ── 系统设置（P0-35 重设计：分区折叠 + 搜索 + 分区保存 + 默认值提示） ── */
+var SETTINGS=null;
+/* ─────────────────────────────────────────────────────────────
+   配置中心（2026-10-23 重构）
+   契约唯一来源：后端 settings-schema.js —— 分组/标题/说明/控件/范围/来源都由
+   /admin/settings 下发，前端不再维护 CFG_GROUPS（旧版那份与后端各写一遍，必然漂移）。
+   保存只提交当前分区内相对基线发生变化的字段，并带 baseUpdatedAt 做乐观并发。
+   ───────────────────────────────────────────────────────────── */
+var CFG_DATA=[], CFG_SECTIONS=[], CFG_UPDATED=null, CFG_DIRTY={}, CFG_SNAPS=[];
+
+function cfgByKey(k){ return CFG_DATA.filter(function(x){return x.key===k;})[0]; }
+function fmtSource(src){ return ({database:'数据库覆盖', environment:'环境变量', builtin:'内置默认'})[src]||src||'未知'; }
+function sourceBadge(s){
+  var cls = s.source==='database' ? 'cb-chg' : 'cb-def';
+  return '<span class="cbadge '+cls+'">'+fmtSource(s.source)+'</span>';
+}
+function toggleTech(k){
+  var el=q('tech-'+k); if(!el) return;
+  el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+function markDirty(el){
+  var k=el.getAttribute('data-k'); if(!k) return;
+  CFG_DIRTY[k]=el.type==='checkbox' ? (el.checked?'1':'0') : el.value;
+  if(el.type==='checkbox' && el.parentNode && el.parentNode.querySelector('span')){
+    el.parentNode.querySelector('span').textContent = el.checked ? '已开启' : '已关闭';
+  }
+  var row=document.querySelector('#cfgSections [data-row="'+k+'"]');
+  if(row){ row.style.outline = '1px solid rgba(59,130,246,.55)'; row.style.borderRadius='8px'; }
+}
+function fieldHtml(s){
+  var key=esc(s.key);
+  var v=s.secret ? '' : (s.value==null?'':String(s.value));
+  var common='data-k="'+key+'"';
+  var input='';
+  if(s.widget==='toggle'){
+    var on=(String(s.value)==='1'||s.value===true);
+    input='<label style="display:inline-flex;align-items:center;gap:8px;font-size:12.5px">'
+      +'<input type="checkbox" '+common+(on?' checked':'')+' onchange="markDirty(this)">'
+      +'<span>'+(on?'已开启':'已关闭')+'</span></label>';
+  } else if(s.widget==='enum'){
+    // 当前值可能不在枚举里（历史配置/手工改库）：把它作为首项保留，避免下拉框静默显示成别的值
+    var cur=String(s.value==null?'':s.value);
+    var list=(s.enum||[]).slice();
+    if(cur && list.indexOf(cur)<0) list.unshift(cur);
+    var opts=list.map(function(o){
+      return '<option value="'+esc(o)+'"'+(cur===o?' selected':'')+'>'+esc(o)+(s.enum.indexOf(o)<0?'（当前值）':'')+'</option>';
+    }).join('');
+    input='<select '+common+' onchange="markDirty(this)" style="width:100%;padding:7px 10px">'+opts+'</select>';
+  } else if(s.widget==='textarea'||s.widget==='json'){
+    input='<textarea '+common+' rows="'+(s.widget==='json'?6:4)+'" oninput="markDirty(this)" '
+      +'style="width:100%;padding:8px 10px;font-size:12.5px;'+(s.widget==='json'?'font-family:Consolas,monospace':'')+'">'+esc(v)+'</textarea>';
+  } else if(s.widget==='password'){
+    input='<input type="password" '+common+' autocomplete="new-password" oninput="markDirty(this)" '
+      +'placeholder="'+(s.configured?'已配置（'+esc(s.value)+'）· 留空不修改':'未配置，请填写完整 Key')+'" '
+      +'style="width:100%;padding:7px 10px;font-size:12.5px">';
+  } else if(s.widget==='number'){
+    input='<input type="number" '+common+' value="'+esc(v)+'" min="'+(s.min==null?'':s.min)+'" max="'+(s.max==null?'':s.max)
+      +'" step="'+(s.step==null?1:s.step)+'" oninput="markDirty(this)" style="width:100%;padding:7px 10px;font-size:12.5px">';
+  } else {
+    input='<input type="text" '+common+' value="'+esc(v)+'" maxlength="'+(s.maxLength||120)+'" oninput="markDirty(this)" '
+      +'style="width:100%;padding:7px 10px;font-size:12.5px">';
+  }
+  var hint='';
+  if(s.widget==='number') hint='范围 '+s.min+'~'+s.max+(s.unit?(' '+s.unit):'');
+  else if(s.enum) hint='可选：'+s.enum.join(' / ');
+  else if(s.widget==='textarea'||s.widget==='json') hint='最多 '+(s.maxLength||20000)+' 字符';
+  if(s.secret) hint+=(hint?' · ':'')+'留空表示不修改';
+  return '<div class="crow" data-row="'+key+'">'
+    +'<div class="clabel">'+esc(s.title||s.label)+' '+sourceBadge(s)
+    +(s.risk==='high'?'<span class="cbadge cb-warn">高风险</span>':'')+'</div>'
+    +(s.description?'<div style="font-size:11.5px;color:var(--t3);margin:2px 0 6px">'+esc(s.description)+'</div>':'')
+    +input
+    +'<div style="font-size:11px;color:var(--t3);margin-top:4px">'+esc(hint)
+    +' · <a href="javascript:;" onclick="toggleTech(\''+key+'\')" style="color:var(--t3)">技术详情</a></div>'
+    +'<div id="tech-'+key+'" style="display:none;font-size:11px;color:var(--t3);margin-top:4px">'
+    +'键名 <code>'+key+'</code> · 内置默认 <code>'+esc(s.builtinDefault==null?'-':String(s.builtinDefault).slice(0,60))+'</code></div>'
+    +'</div>';
+}
+function renderSettings(){
+  var wrap=q('cfgSections'); if(!wrap) return;
+  var kw=(q('cfgSearch')&&q('cfgSearch').value.trim().toLowerCase())||'';
+  var bySec={};
+  CFG_DATA.forEach(function(s){ (bySec[s.section]=bySec[s.section]||[]).push(s); });
+  var h='';
+  CFG_SECTIONS.forEach(function(sec){
+    var rows=(bySec[sec.id]||[]).filter(function(s){
+      var hay=(s.title+' '+s.key+' '+(s.description||'')).toLowerCase();
+      return !kw || hay.indexOf(kw)>=0;
+    });
+    if(!rows.length) return;
+    var dirty=rows.filter(function(s){ return CFG_DIRTY[s.key]!==undefined; }).length;
+    h+='<details class="cfgwrap" open><summary>'+esc(sec.title)+' <span style="font-size:11px;color:var(--t3)">（'
+      +(dirty?dirty+' 项待保存 · ':'')+rows.length+' 项）</span></summary>'
+      +'<div style="font-size:11.5px;color:var(--t3);margin:0 0 8px">'+esc(sec.desc)+'</div>'
+      +rows.map(fieldHtml).join('')
+      +'<div style="margin-top:10px"><button class="btnNew" data-save="'+sec.id+'">保存本区变更</button></div></details>';
+  });
+  wrap.innerHTML = h || '<div class="empty">没有匹配的配置项</div>';
+  document.querySelectorAll('#cfgSections [data-save]').forEach(function(b){
+    b.onclick=function(){ saveSection(b.getAttribute('data-save')); };
+  });
+  // 恢复用户尚未保存的输入（搜索/重渲染不应丢草稿）
+  Object.keys(CFG_DIRTY).forEach(function(k){
+    var el=document.querySelector('#cfgSections [data-k="'+k+'"]'); if(!el) return;
+    if(el.type==='checkbox') el.checked=(CFG_DIRTY[k]==='1'); else el.value=CFG_DIRTY[k];
+  });
+  renderHistory();
+}
+function renderHistory(){
+  var box=q('cfgHistory'); if(!box) return;
+  if(!CFG_SNAPS.length){ box.innerHTML='<div style="font-size:11.5px;color:var(--t3)">暂无历史快照（每次保存前会自动留存一份）</div>'; return; }
+  box.innerHTML=CFG_SNAPS.map(function(s){
+    var t=new Date(s.at).toLocaleString('zh-CN');
+    return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)">'
+      +'<span>'+esc(t)+'</span>'
+      +'<button class="btnNew" style="padding:3px 10px;font-size:11.5px" onclick="rollbackTo(\''+esc(s.at)+'\')">回滚到此版本</button></div>';
+  }).join('');
+}
+function rollbackTo(at){
+  if(!confirm('确定回滚到 '+new Date(at).toLocaleString('zh-CN')+' 的配置？\n当前值也会被保存为一份快照，可再次回滚。')) return;
+  api('/admin/settings/rollback',{method:'POST',body:{at:at}}).then(function(){
+    toast('已回滚'); CFG_DIRTY={}; loadSettings();
+  }).catch(function(e){ toast(e.message); });
+}
+function collectSection(sid){
+  var btn=document.querySelector('#cfgSections [data-save="'+sid+'"]');
+  var box=btn ? btn.closest('details') : null;
+  if(!box) return {};
+  var patch={};
+  box.querySelectorAll('[data-k]').forEach(function(el){
+    var k=el.getAttribute('data-k'); var s=cfgByKey(k); if(!s) return;
+    var v=(el.type==='checkbox') ? (el.checked?'1':'0') : el.value;
+    if(s.secret){ if(v && v.indexOf('****')<0) patch[k]=v; return; }
+    if(String(v)!==String(s.value==null?'':s.value)) patch[k]=v;
+  });
+  return patch;
+}
+function saveSection(sid){
+  var patch=collectSection(sid);
+  if(!Object.keys(patch).length){ toast('本区没有变更'); return; }
+  var high=Object.keys(patch).filter(function(k){ var s=cfgByKey(k); return s && s.risk==='high'; });
+  if(high.length){
+    var lines=high.map(function(k){
+      var s=cfgByKey(k);
+      return '· '+(s.title||k)+'：'+(s.secret?'（密钥）':(String(s.value==null?'':s.value).slice(0,40)||'空'))+' → '+(s.secret?'（新值）':String(patch[k]).slice(0,40));
+    }).join('\n');
+    if(!confirm('以下高风险配置将被修改：\n'+lines+'\n\n确认保存？')) return;
+  }
+  var btn=document.querySelector('#cfgSections [data-save="'+sid+'"]');
+  busy(btn,true,'保存中'); q('cfgResult').innerHTML='';
+  api('/admin/settings',{method:'POST',body:{updates:patch, baseUpdatedAt:CFG_UPDATED}}).then(function(j){
+    busy(btn,false); CFG_DIRTY={};
+    var h='<div class="okbox" style="margin:0">✅ 已生效（'+((j.applied||[]).length)+' 项）：';
+    (j.applied||[]).forEach(function(a){ h+=esc(a)+'；'; });
+    (j.skipped||[]).forEach(function(s){ h+='<span style="opacity:.65">'+esc(s)+'；</span>'; });
+    q('cfgResult').innerHTML=h+'</div>';
+    loadSettings();
+  }).catch(function(e){ busy(btn,false); toast(e.message); });
+}
+function loadSettings(){
+  api('/admin/settings').then(function(j){
+    CFG_DATA=j.settings||[]; CFG_SECTIONS=j.sections||[]; CFG_UPDATED=j.updatedAt||null; CFG_SNAPS=j.snapshots||[];
+    if(q('cfgVersion')) q('cfgVersion').textContent = CFG_UPDATED ? ('最近修改 '+new Date(CFG_UPDATED).toLocaleString('zh-CN')) : '';
+    renderSettings();
+  }).catch(function(e){
+    var wrap=q('cfgSections'); if(wrap) wrap.innerHTML='<div class="empty">'+esc(e.message)+'</div>';
+  });
+}
+
+/* ── 专家配置（P0-35 可视化编辑器 + JSON 高级模式） ── */
+var EXPLOADED=false, EXP_OBJ=null, EXP_JSON_MODE=false;
+var EXP_TOOLS=[['search','联网'],['image','生图'],['word','Word'],['ppt','PPT'],['excel','Excel'],['pdf','PDF']];
+function toggleExpMode(){
+  EXP_JSON_MODE=!EXP_JSON_MODE;
+  q('expModeBtn').textContent = EXP_JSON_MODE ? '切到可视化模式' : '切到 JSON 模式';
+  q('expVizBox').classList.toggle('hide', EXP_JSON_MODE);
+  q('expJsonBox').classList.toggle('hide', !EXP_JSON_MODE);
+  if(EXP_JSON_MODE){ q('expJson').value=JSON.stringify(EXP_OBJ,null,2); }
+  else { try{ EXP_OBJ=JSON.parse(q('expJson').value); renderExpViz(); }catch(e){ toast('JSON 解析失败：'+e.message); EXP_JSON_MODE=true; toggleExpMode(); } }
+}
+function loadExperts(){
+  api('/admin/experts-config').then(function(j){
+    EXPLOADED=true;
+    EXP_OBJ={experts:j.experts||[], starters:j.starters||{}, ui:j.ui||{expertsSectionTitle:'您的专属军师',expertsSectionIcon:'crown.fill'}};
+    q('expVer').textContent='v'+(j.version||1);
+    renderExpViz();
+  }).catch(function(e){ toast(e.message); });
+}
+function renderExpViz(){
+  var ui=EXP_OBJ.ui||{};
+  q('expUiTitle').value=ui.expertsSectionTitle||'您的专属军师';
+  q('expUiIcon').value=ui.expertsSectionIcon||'crown.fill';
+  var h='';
+  EXP_OBJ.experts.forEach(function(e,i){
+    var tools=e.tools||[];
+    h+='<details class="expcard"><summary style="cursor:pointer;list-style:none">'
+      +'<div class="exphead"><span style="font-size:15px;color:var(--t3);width:22px">'+(i+1)+'</span>'
+      +'<span style="font-size:20px">'+(e.emoji||'🧠')+'</span>'
+      +'<b style="font-size:13.5px">'+esc(e.name||'')+'</b>'
+      +'<span style="font-size:12px;color:var(--t3)">'+esc(e.subtitle||'')+'</span>'
+      +'<span class="sp" style="flex:1"></span>'
+      +'<span style="font-size:11.5px;color:var(--t3)">'+tools.map(function(t){var f=EXP_TOOLS.filter(function(x){return x[0]===t;})[0];return f?f[1]:t;}).join(' · ')+'</span>'
+      +'</div></summary>'
+      +'<div style="padding-top:12px" data-idx="'+i+'">'
+      +'<div class="exphead">'
+      +'<label style="font-size:12px;color:var(--t2)">图标 <input class="mi emi" data-f="emoji" value="'+esc(e.emoji||'')+'" maxlength="4"></label>'
+      +'<label style="font-size:12px;color:var(--t2)">名称 <input class="mi nm" data-f="name" value="'+esc(e.name||'')+'"></label>'
+      +'<label style="font-size:12px;color:var(--t2);flex:1">副标题 <input class="mi sb" data-f="subtitle" value="'+esc(e.subtitle||'')+'"></label>'
+      +'</div>'
+      +'<div class="tools" style="margin-top:10px">能力：'
+      +EXP_TOOLS.map(function(t){return '<label><input type="checkbox" data-tool="'+t[0]+'"'+(tools.indexOf(t[0])>=0?' checked':'')+'>'+t[1]+'</label>';}).join('')
+      +'</div>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:10px">角色定位（人设提示词）'
+      +'<textarea class="exptext" data-f="role" rows="2">'+esc(e.role||'')+'</textarea></label>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">方法论框架'
+      +'<input class="mi" data-f="framework" value="'+esc(e.framework||'')+'" style="width:100%;margin-top:4px"></label>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">'
+      +'<label style="font-size:12px;color:var(--t2)">工作流步骤（每行一条）<textarea class="exptext" data-f="steps" rows="6" style="margin-top:4px">'+esc((e.steps||[]).join('\n'))+'</textarea></label>'
+      +'<label style="font-size:12px;color:var(--t2)">交付自检（每行一条）<textarea class="exptext" data-f="checklist" rows="6" style="margin-top:4px">'+esc((e.checklist||[]).join('\n'))+'</textarea></label>'
+      +'</div>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">时效性要求（需联网核实的领域）'
+      +'<input class="mi" data-f="freshnessCue" value="'+esc(e.freshnessCue||'')+'" style="width:100%;margin-top:4px"></label>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">开场白（每行一条，格式：标签｜内容）'
+      +'<textarea class="exptext" data-f="starters" rows="3" style="margin-top:4px">'+esc(starterLines(e.id))+'</textarea></label>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">默认交付物 <select class="mi" data-f="deliverable" style="width:140px">'
+      +['word','ppt','excel','pdf'].map(function(d){return '<option value="'+d+'"'+((e.deliverable||'word')===d?' selected':'')+'>'+d.toUpperCase()+'</option>';}).join('')
+      +'</select></label>'
+      +'<div class="exptools"><button onclick="moveExpert('+i+',-1)">↑ 上移</button><button onclick="moveExpert('+i+',1)">↓ 下移</button>'
+      +'<button onclick="delExpert('+i+')" style="color:#FCA5A5">删除该专家</button></div>'
+      +'</div></details>';
+  });
+  q('expViz').innerHTML=h||'<div class="empty">还没有专家，点「+ 新增专家」</div>';
+}
+function starterLines(id){
+  var arr=(EXP_OBJ.starters||{})[id]||[];
+  return arr.map(function(s){ return s.label+'｜'+s.content; }).join('\n');
+}
+function collectExpViz(){
+  var cards=document.querySelectorAll('#expViz details.expcard');
+  var out=[], starters={};
+  cards.forEach(function(card){
+    var body=card.querySelector('[data-idx]');
+    var idx=Number(body.getAttribute('data-idx'));
+    var src=EXP_OBJ.experts[idx];
+    function val(f){ var el=body.querySelector('[data-f="'+f+'"]'); return el?el.value.trim():''; }
+    var tools=[]; body.querySelectorAll('[data-tool]').forEach(function(c){ if(c.checked) tools.push(c.getAttribute('data-tool')); });
+    var e={
+      id:src.id, emoji:val('emoji')||'🧠', name:val('name'), subtitle:val('subtitle'),
+      symbol:src.symbol||'bubble.left.and.bubble.right.fill', role:val('role'),
+      framework:val('framework'),
+      steps:val('steps').split('\n').map(function(x){return x.trim();}).filter(Boolean),
+      deliverable:val('deliverable')||'word', tools:tools,
+      checklist:val('checklist').split('\n').map(function(x){return x.trim();}).filter(Boolean),
+      freshnessCue:val('freshnessCue')
+    };
+    if(!e.name||!e.role||!e.steps.length) throw new Error('第 '+(idx+1)+' 位专家：名称/角色/工作流步骤不能为空');
+    out.push(e);
+    var sl=val('starters');
+    if(sl){ starters[e.id]=sl.split('\n').map(function(line){
+      var p=line.split('｜'); if(p.length<2) return null;
+      return {label:p[0].trim(), content:p.slice(1).join('｜').trim()};
+    }).filter(Boolean).slice(0,5); }
+  });
+  return { experts:out, starters:starters, ui:{expertsSectionTitle:q('expUiTitle').value.trim(), expertsSectionIcon:q('expUiIcon').value.trim()} };
+}
+function saveExpertsViz(){
+  var payload;
+  try {
+    payload = EXP_JSON_MODE ? JSON.parse(q('expJson').value) : collectExpViz();
+  } catch(e){ toast(e.message); return; }
+  if(!payload.experts||!payload.experts.length){ toast('至少保留一位专家'); return; }
+  busy(q('expSaveBtn'),true,'发布中');
+  api('/admin/experts-config',{method:'POST',body:payload}).then(function(j){
+    busy(q('expSaveBtn'),false);
+    q('expVer').textContent='v'+j.version;
+    q('expResult').innerHTML='<div class="okbox" style="margin:0">✅ 已发布 v'+j.version+'，App 下次启动自动拉取生效</div>';
+    EXPLOADED=false; EXP_OBJ=payload;
+  }).catch(function(e){ busy(q('expSaveBtn'),false); toast(e.message); });
+}
+function moveExpert(i,dir){
+  var arr=EXP_OBJ.experts, j=i+dir;
+  if(j<0||j>=arr.length) return;
+  var tmp=arr[i]; arr[i]=arr[j]; arr[j]=tmp;
+  try{ var cur=collectExpViz(); }catch(e){ toast(e.message); return; }
+  EXP_OBJ.experts=arr; renderExpViz();
+}
+function delExpert(i){
+  var nm=EXP_OBJ.experts[i].name;
+  if(!confirm('确定删除「'+nm+'」？保存后客户端将不再显示该专家。')) return;
+  EXP_OBJ.experts.splice(i,1); renderExpViz();
+}
+function addExpert(){
+  try{
+    var cur=collectExpViz(); EXP_OBJ.experts=cur.experts; EXP_OBJ.starters=cur.starters;
+  }catch(e){ toast(e.message); return; }
+  var num=EXP_OBJ.experts.length+1;
+  EXP_OBJ.experts.push({
+    id:'custom_'+Date.now().toString(36), emoji:'🧠', name:'新专家'+num, subtitle:'请填写定位',
+    symbol:'bubble.left.and.bubble.right.fill', role:'你是……（填写这位专家的人设与专长）',
+    framework:'（方法论框架）', steps:['第一步','第二步'], deliverable:'word', tools:['search','image','word'],
+    checklist:['（自检项）'], freshnessCue:''
+  });
+  renderExpViz();
+}
+function resetExperts(){
+  if(!confirm('确定恢复为内置默认专家目录？当前线上配置将被覆盖。')) return;
+  api('/admin/experts-config',{method:'POST',body:{reset:true}}).then(function(j){
+    toast('已恢复内置默认 v'+j.version);
+    loadExperts();
+  }).catch(function(e){ toast(e.message); });
+}
+
+/* ── 运营配置（P0-34：档位价格/额度/显示/收款码/功能开关 在线可改） ── */
+var TIERSCFG=null;
+var FEATURE_FIELDS=[
+  ['exportDoc','导出文档（Word/PPT/Excel/PDF）','bool'],
+  ['deepResearch','深度研究','bool'],
+  ['customExpert','自定义专家（知识库 RAG）','bool'],
+  ['whiteLabel','白标（自定义品牌名）','bool'],
+  ['memoryLimit','经营记忆条数（-1=不限）','num'],
+  ['schedules','定时任务数量','num'],
+  ['fileMb','单文件上限（MB）','num'],
+  ['fileCount','可上传文件数（-1=不限）','num'],
+];
+function loadTiersConfig(){
+  api('/admin/settings').then(function(j){
+    TIERSCFG=j.tiers||[];
+    var h='';
+    TIERSCFG.forEach(function(t,idx){
+      h+='<div style="border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px">'
+        +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">'
+        +'<b style="font-size:14px">'+esc(t.name)+'</b>'
+        +'<span style="font-size:11.5px;color:var(--t3)">'+esc(t.key)+'</span>'
+        +'<span class="sp" style="flex:1"></span>'
+        +'<label style="font-size:12.5px;color:'+(t.visible?'var(--ok,#34D399)':'var(--t3)')+';cursor:pointer">'
+        +'<input type="checkbox" data-t="'+idx+'" data-f="visible"'+(t.visible?' checked':'')+'> 对客户端显示</label></div>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:10px;margin-bottom:10px">'
+        +'<label style="font-size:12.3px;color:var(--t2)">价格（元）<input data-t="'+idx+'" data-f="priceCny" value="'+t.priceCny+'" inputmode="numeric" style="width:100%;margin-top:4px;padding:7px 10px;font-size:12.5px"></label>'
+        +'<label style="font-size:12.3px;color:var(--t2)">额度池（元）<input data-t="'+idx+'" data-f="poolCapCny" value="'+t.poolCapCny+'" inputmode="numeric" style="width:100%;margin-top:4px;padding:7px 10px;font-size:12.5px"></label>'
+        +'<label style="font-size:12.3px;color:var(--t2)">收款码（文件名或完整 URL）<input data-t="'+idx+'" data-f="qrFile" value="'+esc(t.qrFile)+'" style="width:100%;margin-top:4px;padding:7px 10px;font-size:12.5px"></label>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">'
+        +'<img id="qrimg_'+idx+'" src="'+esc(t.qrUrl)+'" alt="收款码" style="width:74px;height:74px;object-fit:contain;border-radius:8px;border:1px solid var(--line);background:#fff">'
+        +'<div style="flex:1">'
+        +'<div class="qrupload"><input type="file" accept="image/png,image/jpeg,image/webp" id="qrfile_'+idx+'" style="font-size:12px;max-width:230px">'
+        +'<button onclick="uploadQr('+idx+')" id="qrbtn_'+idx+'" style="padding:5px 12px;font-size:12.5px">上传收款码</button>'
+        +'<span class="cbadge '+(t.source==='upload'?'cb-ok':'cb-def')+'">'+(t.source==='upload'?'当前：后台上传图':'当前：静态文件')+'</span></div>'
+        +'<div style="font-size:11.5px;color:var(--t3);margin-top:4px">直接上传 PNG/JPG（≤600KB）即可替换收款码，30 秒内全端生效；也可在下面填文件名或完整 URL。</div>'
+        +'</div></div>'
+        +'<div style="font-size:12px;color:var(--t3);margin-bottom:6px">功能开放（App 据此显示/隐藏对应能力）：</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px">';
+      FEATURE_FIELDS.forEach(function(f){
+        var v=t.features?t.features[f[0]]:(f[2]==='bool'?false:0);
+        if(f[2]==='bool'){
+          h+='<label style="font-size:12.3px;color:var(--t2);cursor:pointer"><input type="checkbox" data-t="'+idx+'" data-f="feat_'+f[0]+'"'+(v?' checked':'')+'> '+esc(f[1])+'</label>';
+        } else {
+          h+='<label style="font-size:12.3px;color:var(--t2)">'+esc(f[1])+'<input data-t="'+idx+'" data-f="feat_'+f[0]+'" value="'+v+'" inputmode="numeric" style="width:80px;margin-left:8px;padding:4px 8px;font-size:12.3px"></label>';
+        }
+      });
+      h+='</div></div>';
+    });
+    q('tiersBox').innerHTML=h;
+  }).catch(function(e){ q('tiersBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+function saveTiers(){
+  var ov={};
+  TIERSCFG.forEach(function(t,idx){ ov[t.key]={features:{}}; });
+  document.querySelectorAll('#tab6 [data-t]').forEach(function(el){
+    var idx=Number(el.getAttribute('data-t')), f=el.getAttribute('data-f'), key=TIERSCFG[idx].key;
+    if(f==='visible'){ ov[key].visible=el.checked; }
+    else if(f==='priceCny'||f==='poolCapCny'){ var n=Number(el.value); if(!(n>0)){ toast('价格与额度必须为正数'); throw new Error('bad'); } ov[key][f]=n; }
+    else if(f==='qrFile'){ var qv=el.value.trim(); if(qv) ov[key].qrFile=qv; }   // 留空 = 不改（保持上传图或原文件）
+    else if(f.indexOf('feat_')===0){
+      var fn=f.slice(5);
+      var isBool=FEATURE_FIELDS.filter(function(x){return x[0]===fn;})[0][2]==='bool';
+      ov[key].features[fn]= isBool ? el.checked : Number(el.value);
+    }
+  });
+  busy(q('tiersSave'),true,'保存中');
+  api('/admin/settings',{method:'POST',body:{updates:{TIERS_OVERRIDE: ov}}}).then(function(j){
+    busy(q('tiersSave'),false);
+    q('tiersResult').innerHTML='<div class="okbox" style="margin:0">✅ 已生效（约 30 秒全端同步）：'+esc((j.applied||[]).join('；'))+'</div>';
+    loadTiersConfig(); loadTiersForAdmin();
+  }).catch(function(e){ busy(q('tiersSave'),false); toast(e.message); });
+}
+
+/* P0-35 收款码上传：本地文件 → dataURL → 服务端存 DB → 全端生效 */
+function uploadQr(idx){
+  var tier=TIERSCFG[idx].key;
+  var f=q('qrfile_'+idx);
+  if(!f||!f.files||!f.files.length){ toast('请先选择图片文件'); return; }
+  var file=f.files[0];
+  if(file.size>600*1024){ toast('图片 '+Math.round(file.size/1024)+'KB 超过 600KB，请压缩后再传'); return; }
+  var fr=new FileReader();
+  fr.onload=function(){
+    busy(q('qrbtn_'+idx),true,'上传中');
+    api('/admin/upload-qr',{method:'POST',body:{tier:tier,image:fr.result}}).then(function(j){
+      busy(q('qrbtn_'+idx),false);
+      toast('已上传（'+j.sizeKb+'KB），已切换使用上传图');
+      loadTiersConfig();
+    }).catch(function(e){ busy(q('qrbtn_'+idx),false); toast(e.message); });
+  };
+  fr.readAsDataURL(file);
+}
+
+/* ── 成本看板（P0-39） ── */
+function loadCostReport(days){
+  [7,14,30].forEach(function(d){ var b=q('cr'+d); if(b) b.classList.toggle('on', d===days); });
+  api('/admin/cost-report?days='+days).then(function(j){
+    var h='';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px">'
+      +'<div style="background:rgba(45,212,191,.1);border:1px solid rgba(45,212,191,.3);border-radius:12px;padding:13px 15px">'
+      +'<b style="display:block;font-size:22px;color:#5EEAD4">¥'+j.totalCny.toFixed(2)+'</b><span style="font-size:12px;color:var(--t3)">近 '+j.days+' 天总成本</span></div>'
+      +'<div style="background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:12px;padding:13px 15px">'
+      +'<b style="display:block;font-size:22px">'+j.calls+'</b><span style="font-size:12px;color:var(--t3)">调用次数</span></div>'
+      +'<div style="background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:12px;padding:13px 15px">'
+      +'<b style="display:block;font-size:22px">¥'+j.avgCnyPerCall.toFixed(4)+'</b><span style="font-size:12px;color:var(--t3)">单次均价</span></div>'
+      +'<div style="background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:12px;padding:13px 15px">'
+      +'<b style="display:block;font-size:22px">¥'+(j.byKind.image||0).toFixed(2)+'</b><span style="font-size:12px;color:var(--t3)">其中生图</span></div>'
+      +'</div>';
+
+    // 按能力
+    var kindRows=[['对话', j.byKind.chat||0],['生图', j.byKind.image||0]];
+    var kmax=Math.max(0.0001, kindRows[0][1], kindRows[1][1]);
+    h+='<h3 style="font-size:13px;color:var(--t2);margin:6px 0 8px">按能力分布</h3>';
+    kindRows.forEach(function(r){
+      h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:12.5px">'
+        +'<span style="width:52px;color:var(--t2)">'+r[0]+'</span>'
+        +'<span style="flex:1;height:9px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden">'
+        +'<i style="display:block;height:100%;width:'+Math.round(r[1]/kmax*100)+'%;background:linear-gradient(90deg,#2DD4BF,#0EA5A0)"></i></span>'
+        +'<span style="width:78px;text-align:right">¥'+r[1].toFixed(2)+'</span></div>';
+    });
+
+    // 按日
+    if(j.byDay && j.byDay.length){
+      var dmax=Math.max.apply(null, j.byDay.map(function(d){return d.cost;}).concat([0.0001]));
+      h+='<h3 style="font-size:13px;color:var(--t2);margin:16px 0 8px">按日趋势</h3>';
+      h+='<div style="display:flex;gap:3px;align-items:flex-end;height:120px;padding:8px 0;border-bottom:1px solid var(--line)">';
+      j.byDay.slice(-30).forEach(function(d){
+        var hp=Math.max(2, Math.round(d.cost/dmax*100));
+        h+='<div title="'+d.date+' ¥'+d.cost.toFixed(2)+'" style="flex:1;min-width:8px;height:'+hp+'%;background:linear-gradient(180deg,#2DD4BF,#0D9488);border-radius:3px 3px 0 0"></div>';
+      });
+      h+='</div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--t3);margin-top:4px">'
+        +'<span>'+j.byDay[0].date+'</span><span>'+j.byDay[j.byDay.length-1].date+'</span></div>';
+    }
+
+    // TOP 客户
+    if(j.topAccounts && j.topAccounts.length){
+      h+='<h3 style="font-size:13px;color:var(--t2);margin:18px 0 8px">成本 TOP 客户</h3>';
+      h+='<table><thead><tr><th>客户</th><th style="text-align:right">成本</th><th style="text-align:right">占总额</th></tr></thead><tbody>';
+      j.topAccounts.forEach(function(a){
+        var pct=j.totalCny>0?(a.cost/j.totalCny*100):0;
+        h+='<tr><td>'+esc(a.name)+'</td><td style="text-align:right">¥'+a.cost.toFixed(2)+'</td>'
+          +'<td style="text-align:right;color:var(--t2)">'+pct.toFixed(1)+'%</td></tr>';
+      });
+      h+='</tbody></table>';
+    }
+
+    // 按档位 / 按模型
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px">';
+    [['按档位', j.byTier], ['按模型', j.byModel]].forEach(function(pair){
+      h+='<div><h3 style="font-size:13px;color:var(--t2);margin:0 0 8px">'+pair[0]+'</h3>';
+      var keys=Object.keys(pair[1]||{});
+      if(!keys.length){ h+='<div class="empty">暂无数据</div>'; }
+      else { h+='<div style="font-size:12.3px;line-height:2">';
+        keys.sort(function(a,b){return pair[1][b]-pair[1][a];}).forEach(function(k){
+          h+='<div style="display:flex;justify-content:space-between"><span style="color:var(--t2)">'+esc(k)+'</span><span>¥'+pair[1][k].toFixed(3)+'</span></div>';
+        }); h+='</div>'; }
+      h+='</div>';
+    });
+    h+='</div>';
+
+    // 单价快照
+    var ps=j.priceSnapshot||{};
+    h+='<h3 style="font-size:13px;color:var(--t2);margin:18px 0 8px">当前记账单价（元/百万token · 生图/张）</h3>'
+      +'<div style="font-size:12.3px;color:var(--t3);line-height:1.9">'
+      +'标准档 '+(ps.chatStandard||[]).join(' / ')+' ｜ 高档 '+(ps.chatHigh||[]).join(' / ')+' ｜ 最高档 '+(ps.chatUltra||[]).join(' / ')
+      +' ｜ 生图 ¥'+ps.image+'（2K ¥'+ps.image2K+'）</div>';
+    q('costReport').innerHTML=h;
+  }).catch(function(e){ q('costReport').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
+}
+
+/* ── 删除 ── */
+var DEL=null;
+function askDel(kind,id,name){
+  DEL={kind:kind,id:id};
+  if(kind==='acc'){
+    q('delTitle').textContent='删除这个会员账号？';
+    q('delBody').innerHTML='将永久删除「<b style="color:var(--t1)">'+esc(name)+'</b>」的账号。';
+    q('delWarn').textContent='该账号的用量流水与发放存档会一并删除，客户将无法再登录。删除后不可恢复。';
+  } else if(kind==='staff'){
+    q('delTitle').textContent='删除这个员工？';
+    q('delBody').innerHTML='将删除员工「<b style="color:var(--t1)">'+esc(name)+'</b>」的登录账号。';
+    q('delWarn').textContent='删除后他将无法再登录管理台。他提交过的申请与发放记录会保留。';
+  } else if(kind==='req'){
+    q('delTitle').textContent='删除这条申请？';
+    q('delBody').innerHTML='将删除「<b style="color:var(--t1)">'+esc(name)+'</b>」的申请记录。';
+    q('delWarn').textContent='删除后不可恢复。已开通的账号不受影响。';
+  } else {
+    q('delTitle').textContent='删除这条发放记录？';
+    q('delBody').innerHTML='将删除「<b style="color:var(--t1)">'+esc(name)+'</b>」的发放存档。';
+    q('delWarn').textContent='删除后无法再回查这条记录的账号密码。';
+  }
+  openM('mDel');
+}
+function doDelete(){
+  if(!DEL) return;
+  var path=DEL.kind==='acc'?'/admin/accounts/'+DEL.id
+          :DEL.kind==='staff'?'/admin/staff/'+DEL.id
+          :DEL.kind==='req'?'/admin/requests/'+DEL.id
+          :'/admin/deliveries/'+DEL.id;
+  busy(q('delBtn'),true,'删除中');
+  api(path,{method:'DELETE'})
+    .then(function(){ busy(q('delBtn'),false); closeM(); toast('已删除'); refreshAll(); })
+    .catch(function(e){ busy(q('delBtn'),false); closeM(); toast(e.message); });
+}
+
+document.addEventListener('keydown',function(e){ if(e.key==='Escape') closeM(); });
+
+// 10-24 安全修复：所有含动态数据的操作按钮改用 data-* + 事件委托。
+// 旧实现把客户名/备注拼进 onclick="fn('...')"，esc() 产出的 &#39; 会被浏览器
+// 先做 HTML 实体解码、再当 JS 源码解析 —— 单引号恢复即可闭合字符串，形成存储型 XSS。
+// 现在动态值只作为 HTML 属性（由 esc 正确转义），永不进入可执行代码。
+document.addEventListener('click', function(e){
+  var b = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+  if(!b) return;
+  var act = b.getAttribute('data-act');
+  var id = b.getAttribute('data-id') || '';
+  var name = b.getAttribute('data-name') || '';
+  var kind = b.getAttribute('data-kind') || '';
+  var note = b.getAttribute('data-note') || '';
+  var text = b.getAttribute('data-text') || '';
+  if(act==='approve') askApprove(id);
+  else if(act==='reject') askReject(id);
+  else if(act==='del') askDel(kind, id, name);
+  else if(act==='edit') openEdit(id);
+  else if(act==='renew') askRenew(id, name);
+  else if(act==='reset') askReset(id, name);
+  else if(act==='suspend') askSuspend(id, name);
+  else if(act==='note') openNote(id, note);
+  else if(act==='copy') copyText(text);
+});
+
+/* ── 启动：角色闸门 ── */
+(function boot(){
+  var s=readSession();
+  if(!s.token){ location.replace('index.html'); return; }
+  if(s.role!=='admin'){ location.replace('staff.html'); return; }
+  TOKEN=s.token;
+  refreshAll();
+  setInterval(function(){ if(TOKEN) loadPending(); }, 60000);
+})();
+</script>
+</body>
+</html>

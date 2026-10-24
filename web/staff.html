@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>中防AI 管理台</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{ --line:rgba(255,255,255,.10); --line2:rgba(255,255,255,.18);
+         --t1:#EAF1FB; --t2:#8FA2BC; --t3:#61748F; --cy:#22D3EE; --bl:#3B82F6; --rd:#F87171; --gn:#34D399; }
+  html,body{min-height:100%}
+  body{font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--t1);
+    padding:26px 16px 80px;-webkit-font-smoothing:antialiased;
+    background:radial-gradient(120% 80% at 8% 0%, rgba(34,211,238,.13), transparent 55%),
+               radial-gradient(130% 90% at 95% 100%, rgba(59,130,246,.16), transparent 62%),
+               linear-gradient(180deg,#070B14,#0B1220);background-attachment:fixed}
+  .wrap{max-width:960px;margin:0 auto}
+  .glass{position:relative;background:rgba(255,255,255,.055);border:1px solid var(--line);border-radius:16px;
+    backdrop-filter:blur(22px) saturate(140%);-webkit-backdrop-filter:blur(22px) saturate(140%);
+    box-shadow:0 14px 38px rgba(0,0,0,.36), inset 0 1px 0 rgba(255,255,255,.10)}
+  .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+    background:linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,0) 42%,rgba(255,255,255,.045))}
+  .hide{display:none!important}
+
+  /* 登录 */
+  #login{max-width:390px;margin:9vh auto 0;padding:30px 28px}
+  #login .logo{font-size:20px;font-weight:800;text-align:center;letter-spacing:.3px}
+  #login .logo i{font-style:normal;background:linear-gradient(120deg,var(--cy),var(--bl));-webkit-background-clip:text;background-clip:text;color:transparent}
+  #login .sub{text-align:center;font-size:12.5px;color:var(--t3);margin:6px 0 24px}
+  .fld{margin-bottom:13px}
+  .fld label{display:block;font-size:12px;color:var(--t3);margin-bottom:6px}
+  input,select{width:100%;background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:10px;
+    padding:11px 13px;font-size:14px;color:var(--t1);font-family:inherit;outline:none;transition:.15s}
+  input:focus,select:focus{border-color:rgba(34,211,238,.45);box-shadow:0 0 0 3px rgba(34,211,238,.10)}
+  input::placeholder{color:var(--t3)}
+  .btn{width:100%;padding:13px;border-radius:11px;border:none;font-size:14.5px;font-weight:700;cursor:pointer;font-family:inherit;
+    background:linear-gradient(135deg,var(--cy),var(--bl));color:#04121F;transition:.16s;box-shadow:0 8px 22px rgba(34,211,238,.24)}
+  .btn:hover{transform:translateY(-1px)}
+  .btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+  .err{background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.28);color:#FCA5A5;
+    border-radius:10px;padding:10px 13px;font-size:12.8px;margin-bottom:13px}
+
+  /* 顶栏 */
+  .bar{display:flex;align-items:center;gap:12px;padding:15px 20px;margin-bottom:16px}
+  .bar .logo{font-size:15px;font-weight:800}
+  .bar .logo i{font-style:normal;background:linear-gradient(120deg,var(--cy),var(--bl));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .bar .sp{flex:1}
+  .bar button{background:none;border:none;font-size:13px;color:var(--t2);font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+  .bar button:hover{color:var(--cy)}
+
+  .card{padding:18px 20px;margin-bottom:16px}
+  .card h3{font-size:12px;font-weight:700;color:var(--t3);letter-spacing:1px;margin-bottom:13px;text-transform:uppercase}
+
+  .notif{display:flex;align-items:center;gap:14px;padding:18px 20px;margin-bottom:16px;cursor:pointer;transition:.18s;
+    border:1.5px solid rgba(52,211,153,.55);box-shadow:0 0 22px rgba(52,211,153,.28), 0 14px 40px rgba(0,0,0,.42);
+    animation:notifPulse 1.6s ease-in-out infinite}
+  @keyframes notifPulse{0%,100%{box-shadow:0 0 10px rgba(52,211,153,.22), 0 14px 40px rgba(0,0,0,.42)}
+    50%{box-shadow:0 0 30px rgba(52,211,153,.55), 0 14px 40px rgba(0,0,0,.42)}}
+  .notif:hover{border-color:var(--line2);animation:none;box-shadow:0 14px 40px rgba(0,0,0,.42), 0 0 0 1px rgba(34,211,238,.18)}
+  .notif .ic{width:44px;height:44px;border-radius:12px;flex:none;display:grid;place-items:center;font-size:22px;
+    background:linear-gradient(135deg,rgba(52,211,153,.28),rgba(34,211,238,.18));border:1px solid rgba(52,211,153,.4)}
+  .notif .tx{flex:1;font-size:15.5px;font-weight:800;color:#6EE7B7}
+  .notif .tx small{display:block;font-weight:600;color:var(--t1);font-size:13px;margin-top:2px}
+  .notif .badge{font-size:13px;font-weight:800;color:#04121F;background:linear-gradient(135deg,#34D399,var(--cy));border-radius:999px;padding:4px 12px}
+
+  .ctas{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-bottom:16px}
+  @media(max-width:640px){.ctas{grid-template-columns:1fr}}
+  .cta{padding:17px;border-radius:15px;border:none;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit;
+    background:linear-gradient(135deg,var(--bl),#1E4585);color:#fff;transition:.18s;box-shadow:0 10px 26px rgba(59,130,246,.30)}
+  .cta.alt{background:linear-gradient(135deg,var(--cy),var(--bl));color:#04121F;box-shadow:0 10px 26px rgba(34,211,238,.30)}
+  .cta:hover{transform:translateY(-2px)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font-weight:600;color:var(--t3);font-size:11px;letter-spacing:.8px;text-align:left;padding:9px 12px;
+    border-bottom:1px solid var(--line);text-transform:uppercase;white-space:nowrap}
+  td{padding:11px 12px;border-bottom:1px solid rgba(255,255,255,.055);color:var(--t1);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:rgba(255,255,255,.028)}
+  .empty{padding:26px;text-align:center;color:var(--t3);font-size:13px}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:#9EC5FF}
+
+  .st{display:inline-block;font-size:11px;font-weight:700;padding:2.5px 9px;border-radius:6px;white-space:nowrap;border:1px solid transparent}
+  .tierBtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:9px 4px;border-radius:11px;
+    background:rgba(255,255,255,.05);border:1px solid var(--bd);color:var(--t2);font-size:12.5px;font-weight:600;cursor:pointer;transition:.15s}
+  .tierBtn b{font-size:14px;font-weight:800;color:var(--t1)}
+  .tierBtn.on{background:linear-gradient(135deg,rgba(14,165,233,.22),rgba(99,102,241,.22));border-color:var(--cy);color:var(--t1)}
+  .tierBtn.on b{color:var(--cy)}
+  .st-ok{background:rgba(52,211,153,.14);color:#6EE7B7;border-color:rgba(52,211,153,.28)}
+  .st-warn{background:rgba(251,191,36,.14);color:#FCD34D;border-color:rgba(251,191,36,.28)}
+  .st-bad{background:rgba(248,113,113,.14);color:#FCA5A5;border-color:rgba(248,113,113,.28)}
+  .st-wait{background:rgba(148,163,184,.14);color:#A8B6CB;border-color:rgba(148,163,184,.26)}
+  .st-open{background:rgba(34,211,238,.14);color:#67E8F9;border-color:rgba(34,211,238,.30)}
+
+  .op{display:flex;gap:6px;flex-wrap:wrap}
+  .op button{font-size:11.5px;font-weight:700;padding:5px 11px;border-radius:8px;cursor:pointer;font-family:inherit;
+    white-space:nowrap;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--t2);transition:.15s}
+  .op button:hover{background:rgba(255,255,255,.10);color:var(--t1)}
+  .op .o-main{background:linear-gradient(135deg,rgba(34,211,238,.22),rgba(59,130,246,.18));color:#7DD3FC;border-color:rgba(34,211,238,.34)}
+  .op .o-danger{color:#FCA5A5;border-color:rgba(248,113,113,.26)}
+
+  /* 弹窗 */
+  .ov{position:fixed;inset:0;background:rgba(4,8,16,.68);backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:.2s;z-index:50}
+  .ov.show{opacity:1;pointer-events:auto}
+  .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.96);width:min(380px,calc(100vw - 36px));
+    z-index:60;opacity:0;pointer-events:none;transition:.2s;overflow:hidden;border-radius:16px;max-height:88vh;overflow-y:auto}
+  .modal.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+  .mh{display:flex;align-items:center;gap:10px;padding:19px 21px 11px;font-size:15px;font-weight:800}
+  .mh .ic{width:33px;height:33px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:15px;
+    background:linear-gradient(135deg,rgba(34,211,238,.20),rgba(59,130,246,.14));border:1px solid rgba(34,211,238,.30)}
+  .mh .ic.warn{background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.30)}
+  .mh .ic.bad{background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.30)}
+  .mh .ic.gray{background:rgba(148,163,184,.12);border-color:rgba(148,163,184,.24)}
+  .mc{padding:0 21px 16px;font-size:12.8px;color:var(--t2);line-height:1.75}
+  .mf{padding:0 21px 19px;display:flex;gap:9px}
+  .mf button{flex:1;padding:12px;border-radius:11px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;border:1px solid transparent;transition:.16s}
+  .b-main{background:linear-gradient(135deg,var(--cy),var(--bl));color:#04121F}
+  .b-ghost{background:rgba(255,255,255,.06);color:var(--t2);border-color:var(--line)!important}
+  .b-ghost:hover{background:rgba(255,255,255,.11);color:var(--t1)}
+  .b-danger{background:rgba(248,113,113,.14);color:#FCA5A5;border-color:rgba(248,113,113,.28)!important}
+  .rows{padding:0 21px 12px}
+  .row{display:flex;gap:10px;padding:8px 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:12.6px}
+  .row:last-child{border-bottom:none}
+  .row b{flex:none;width:66px;color:var(--t3);font-weight:500}
+  .row span{color:var(--t1);font-weight:600}
+  .cred{background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:12px;margin:0 21px 12px;padding:13px 15px}
+  .cred .line{display:flex;justify-content:space-between;align-items:center;padding:6px 0;gap:10px}
+  .cred .line b{font-size:11.5px;color:var(--t3);font-weight:500;flex:none}
+  .cred .line span{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;font-weight:700;color:#9EC5FF;word-break:break-all;text-align:right}
+  .tip{font-size:11.5px;color:var(--t3);padding:0 21px 14px;line-height:1.65}
+  .warn{background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.24);border-radius:10px;
+    margin:0 21px 13px;padding:10px 13px;font-size:11.8px;color:#FCD34D;line-height:1.65}
+  .okbox{background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.24);border-radius:10px;
+    margin:0 21px 13px;padding:10px 13px;font-size:11.8px;color:#6EE7B7;line-height:1.65}
+  .badbox{background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.24);border-radius:10px;
+    margin:0 21px 13px;padding:10px 13px;font-size:11.8px;color:#FCA5A5;line-height:1.65}
+  .mi{margin:0 21px 13px;width:calc(100% - 42px)}
+  .qr{width:124px;height:124px;margin:6px auto 12px;border-radius:14px;position:relative;
+    background:repeating-conic-gradient(#EAF1FB 0 25%, transparent 0 50%) 0 0/15px 15px, rgba(255,255,255,.92);
+    border:1px solid var(--line2)}
+  .qr em{position:absolute;inset:32px;background:#0B1220;border-radius:9px;display:grid;place-items:center;
+    font-style:normal;font-size:10.5px;color:var(--cy);font-weight:800;border:1px solid rgba(34,211,238,.30)}
+  .price{text-align:center;font-size:20px;font-weight:800}
+  .price small{display:block;font-size:12px;color:var(--t2);font-weight:500;margin-top:3px}
+  .pick{max-height:250px;overflow:auto;padding:0 14px 12px}
+  .pick button{display:block;width:100%;text-align:left;padding:12px 15px;margin:7px 0;border-radius:11px;cursor:pointer;font-family:inherit;
+    background:rgba(255,255,255,.05);border:1px solid var(--line);font-size:13px;font-weight:600;color:var(--t1);transition:.15s}
+  .pick button:hover{border-color:rgba(34,211,238,.42);background:rgba(34,211,238,.10)}
+  .pick button small{display:block;color:var(--t3);font-weight:500;font-size:11.5px;margin-top:3px}
+
+  .toast{position:fixed;left:50%;bottom:40px;transform:translate(-50%,18px);z-index:80;opacity:0;pointer-events:none;transition:.22s;
+    background:rgba(20,30,48,.94);border:1px solid rgba(34,211,238,.30);border-radius:12px;padding:12px 22px;
+    font-size:13px;font-weight:600;color:#A5F3FC;backdrop-filter:blur(14px);max-width:88vw;text-align:center}
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(4,18,31,.3);border-top-color:#04121F;
+    border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:7px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- 登录已由入口页 index.html 统一完成，此处只承载员工工作界面 -->
+<div id="app">
+  <div class="wrap">
+    <div class="bar glass">
+      <span class="logo">中防AI <i>管理台</i></span>
+      <span class="sp"></span>
+      <button onclick="logout()">退出</button>
+    </div>
+
+    <div id="notifBox" class="hide"></div>
+
+    <div class="ctas">
+      <button class="cta" onclick="startOpen()">＋ 我要开通账号</button>
+      <button class="cta alt" onclick="openRenewPick()">↻ 我要续费</button>
+    </div>
+
+    <div class="card glass">
+      <h3>会员列表</h3>
+      <div id="accBox"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="card glass">
+      <h3>发放记录</h3>
+      <div id="dlvBox"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="card glass">
+      <h3>我的申请</h3>
+      <div id="reqBox"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="ov" onclick="closeM()"></div>
+
+<div class="modal glass" id="mClosed" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic warn">&#9200;</span>当前非开通时段</div>
+  <div class="mc">账号开通功能每日 <b style="color:var(--t1)">08:00 – 20:00</b> 开放，请在开放时间内提交申请。</div>
+  <div class="mf"><button class="b-main" onclick="closeM()">我知道了</button></div>
+</div>
+
+<div class="modal glass" id="mNotice" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#128221;</span>开通会员账号</div>
+  <div class="rows">
+    <div class="row"><b>服务时段</b><span>每日 08:00 – 20:00</span></div>
+    <div class="row"><b>开通时效</b><span>提交后最晚 6 小时内完成</span></div>
+  </div>
+  <div class="mf"><button class="b-main" onclick="closeM();openPay('create')">我已了解</button></div>
+</div>
+
+<div class="modal glass" id="mPay" onclick="event.stopPropagation()">
+  <div id="payTierWrap" style="margin-bottom:12px">
+    <div style="font-size:12.5px;color:var(--t2);margin-bottom:7px;text-align:center">选择会员档位</div>
+    <div style="display:flex;gap:8px">
+      <button type="button" class="tierBtn on" id="tbPlus" onclick="pickTier('plus')">Plus<b>¥166</b></button>
+      <button type="button" class="tierBtn" id="tbPro" onclick="pickTier('pro')">Pro<b>¥700</b></button>
+      <button type="button" class="tierBtn" id="tbUltra" onclick="pickTier('ultra')">Ultra<b>¥1400</b></button>
+    </div>
+  </div>
+  <div style="text-align:center;padding:4px 4px 0">
+    <div style="display:inline-block;padding:10px;background:#ffffff;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.45)">
+      <img id="payQr" src="qrcode-plus.jpg" alt="收款码" style="width:186px;height:186px;object-fit:cover;border-radius:8px;display:block">
+    </div>
+    <div style="margin-top:9px;font-size:12.5px;color:var(--t2)">支付宝扫码支付 · 转账请备注客户称呼</div>
+  </div>
+  <div style="text-align:center;margin:12px 0 10px">
+    <span id="payAmount" style="font-size:32px;font-weight:800;letter-spacing:.5px">¥166</span>
+    <small id="payTitle" style="font-size:13px;color:var(--t2);margin-left:6px">Plus 基础版</small>
+  </div>
+  <div id="payNameWrap" class="hide">
+    <input class="mi" id="payName" placeholder="客户称呼（必填）" maxlength="20" style="margin-bottom:8px">
+    <input class="mi" id="payRealName" placeholder="客户姓名（选填）" maxlength="20" style="margin-bottom:8px">
+    <input class="mi" id="payPhone" placeholder="客户电话（选填，11 位手机号）" maxlength="11" inputmode="numeric">
+  </div>
+
+  <div class="tip" id="payHint">请确认客户已完成付款，再点击「我已支付」。<br>点击后将立即提交申请，不可撤回。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消支付</button><button class="b-main" id="payBtn" onclick="submitPay()">我已支付</button></div>
+</div>
+
+<div class="modal glass" id="mDone" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#9989;</span><span id="doneTitle">已提交开通申请</span></div>
+  <div class="okbox" id="doneBody">申请已提交，管理员审核通过后会在这里醒目提示并自动弹出账号，请留意页面顶部绿色提示条。</div>
+  <div class="mf"><button class="b-main" onclick="closeM()">好的</button></div>
+</div>
+
+<div class="modal glass" id="mRenewPick" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#8635;</span>选择要续费的客户</div>
+  <div class="pick" id="renewPick"><div class="empty">加载中…</div></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button></div>
+</div>
+
+<div class="modal glass" id="mReady" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#127881;</span>你的会员账号已经准备好了</div>
+  <div class="cred" id="readyCred"></div>
+  <div class="tip">这是初始密码。客户可在 App 内自行修改，修改后此处不会同步更新。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">关闭</button><button class="b-main" id="readyCopy" onclick="copyReady()">复制账号信息</button></div>
+</div>
+
+<div class="modal glass" id="mNote" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic">&#9998;</span>编辑备注</div>
+  <div class="mc" style="padding-bottom:11px">备注是该记录中<b style="color:var(--t1)">唯一可修改</b>的字段。</div>
+  <input class="mi" id="noteInput" maxlength="60" placeholder="例如：招商会现场 · 南山区">
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-main" id="noteBtn" onclick="saveNote()">保存</button></div>
+</div>
+
+<div class="modal glass" id="mReq" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic gray">&#128203;</span>申请详情</div>
+  <div class="rows" id="reqDetail"></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">关闭</button></div>
+</div>
+
+<div class="modal glass" id="mLogout" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic gray">&#128682;</span>确认退出？</div>
+  <div class="mc">退出后需要重新输入登录名和密码。</div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" onclick="logout()">退出</button></div>
+</div>
+
+<div class="modal glass" id="mDel" onclick="event.stopPropagation()">
+  <div class="mh"><span class="ic bad">&#128465;</span><span id="delTitle">确认删除？</span></div>
+  <div class="mc" id="delBody"></div>
+  <div class="bad" id="delWarn"></div>
+  <div class="mf"><button class="b-ghost" onclick="closeM()">取消</button><button class="b-danger" id="delBtn" onclick="doDelete()">确认删除</button></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════ 配置 ══════════════ */
+var API = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
+
+/* ══════════════ 基础 ══════════════ */
+var TOKEN = null, ME = null, pending = { type: 'create', accountId: null, who: '' };
+var ACCOUNTS = [], DELIVERIES = [], NOTE_TARGET = null, READY_DLY = null, POLL = null;
+
+function q(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+  return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+function toast(msg) {
+  var t = q('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove('show'); }, 2600);
+}
+function openM(id) {
+  q('ov').classList.add('show');
+  document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('show'); });
+  q(id).classList.add('show');
+}
+function closeM() {
+  q('ov').classList.remove('show');
+  document.querySelectorAll('.modal').forEach(function (m) { m.classList.remove('show'); });
+}
+function busy(btn, on, label) {
+  if (!btn) return;
+  btn.disabled = on;
+  if (on) { btn._t = btn.innerHTML; btn.innerHTML = '<span class="spin"></span>' + (label || '处理中'); }
+  else if (btn._t) { btn.innerHTML = btn._t; }
+}
+
+function api(path, opt) {
+  opt = opt || {};
+  var headers = { 'Content-Type': 'application/json' };
+  if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+  return fetch(API + path, { method: opt.method || 'GET', headers: headers,
+    body: opt.body ? JSON.stringify(opt.body) : undefined })
+    .then(function (r) {
+      if (r.status === 401) { if (TOKEN) { logout(); } }
+      return r.json().catch(function () { return {}; });
+    })
+    .then(function (j) { if (!j || j.ok === false) throw new Error((j && j.message) || '请求失败'); return j; });
+}
+
+function fmtTime(v) {
+  if (!v) return '—';
+  var d = new Date(v); if (isNaN(d)) return '—';
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function fmtDate(v) {
+  if (!v) return '—';
+  var d = new Date(v); if (isNaN(d)) return '—';
+  var p = function (n) { return n < 10 ? '0' + n : '' + n; };
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+function copyText(txt) {
+  var done = function () { toast('已复制到剪贴板'); };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(txt).then(done, function () { fallback(txt, done); });
+  } else { fallback(txt, done); }
+  function fallback(t, cb) {
+    var ta = document.createElement('textarea'); ta.value = t;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta); cb();
+  }
+}
+
+/* ══════════════ 会话（由入口页写入，本页只读取） ══════════════ */
+function readSession() {
+  try {
+    return { token: localStorage.getItem('bf_token'), role: localStorage.getItem('bf_role') };
+  } catch (e) { return { token: null, role: null }; }
+}
+function logout() {
+  try {
+    localStorage.removeItem('bf_token');
+    localStorage.removeItem('bf_role');
+    localStorage.removeItem('bf_name');
+  } catch (e) {}
+  location.replace('index.html');
+}
+
+/* ══════════════ 数据加载 ══════════════ */
+function refreshAll() { loadAccounts(); loadDeliveries(); loadRequests(); loadNotifs(); }
+
+function loadAccounts() {
+  api('/admin/accounts').then(function (j) {
+    ACCOUNTS = j.list || [];
+    if (!ACCOUNTS.length) { q('accBox').innerHTML = '<div class="empty">还没有会员账号</div>'; return; }
+    var h = '<table><thead><tr><th>显示名</th><th>状态</th><th>到期</th><th>剩余额度</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    ACCOUNTS.forEach(function (a) {
+      var st = a.status === 'active' ? '<span class="st st-ok">正常</span>'
+        : a.status === 'suspended' ? '<span class="st st-bad">已停用</span>'
+        : '<span class="st st-bad">已到期</span>';
+      var dl = a.daysLeft == null ? '—' : (a.daysLeft >= 0 ? '还剩 ' + a.daysLeft + ' 天' : '已过期 ' + (-a.daysLeft) + ' 天');
+      var pct = (a.poolPct == null) ? '—' : a.poolPct + '%';
+      var pctCls = (a.poolPct != null && a.poolPct <= 20) ? '<span class="st st-bad">' + pct + '</span>'
+        : (a.poolPct != null && a.poolPct <= 40) ? '<span class="st st-warn">' + pct + '</span>' : pct;
+      var susBtn = a.status === 'active'
+        ? '<button class="o-danger" data-act="suspendFor" data-id="' + esc(a.id) + '" data-name="' + esc(a.displayName) + '">停用</button>'
+        : (a.status === 'suspended' ? '<button data-act="resumeFor" data-id="' + esc(a.id) + '">恢复</button>' : '');
+      h += '<tr><td>' + esc(a.displayName) + '</td><td>' + st + '</td><td style="color:var(--t2)">' + dl + '</td><td>' + pctCls + '</td>'
+        + '<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        + '<button class="o-main" data-act="renewFor" data-id="' + esc(a.id) + '" data-name="' + esc(a.displayName) + '" data-tier="' + esc(a.tier || 'plus') + '">续费</button>'
+        + susBtn
+        + '</span></td></tr>';
+    });
+    q('accBox').innerHTML = h + '</tbody></table>';
+  }).catch(function (e) { q('accBox').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
+}
+
+var SUS = { id: null, who: '' };
+function askSuspendFor(id, name) {
+  SUS = { id: id, who: name };
+  if (q('susName')) q('susName').textContent = name;
+  if (confirm('确认停用「' + name + '」的账号？停用后客户将无法登录，可随时恢复。')) {
+    api('/admin/accounts/' + id + '/suspend', { method: 'POST', body: { suspend: true } })
+      .then(function () { toast('已停用'); loadAccounts(); })
+      .catch(function (e) { toast(e.message); });
+  }
+}
+function resumeFor(id) {
+  api('/admin/accounts/' + id + '/suspend', { method: 'POST', body: { suspend: false } })
+    .then(function () { toast('已恢复'); loadAccounts(); })
+    .catch(function (e) { toast(e.message); });
+}
+
+function loadDeliveries() {
+  api('/admin/deliveries').then(function (j) {
+    DELIVERIES = j.list || [];
+    if (!DELIVERIES.length) { q('dlvBox').innerHTML = '<div class="empty">还没有发放记录</div>'; return; }
+    var h = '<table><thead><tr><th>充值时间</th><th>登录账号</th><th>登录密码</th><th>备注</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    DELIVERIES.forEach(function (d) {
+      var note = d.note ? esc(d.note) : '<span style="color:var(--t3)">点击填写</span>';
+      h += '<tr><td style="color:var(--t2)">' + fmtTime(d.chargedAt) + '</td>'
+        + '<td class="mono">' + esc(d.username) + '</td>'
+        + '<td class="mono">' + esc(d.password || '—') + '</td>'
+        + '<td>' + note + '</td>'
+        + '<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        + '<button data-act="note" data-id="' + esc(d.id) + '" data-note="' + esc(d.note || '') + '">编辑备注</button>'
+        + '<button data-act="copy" data-text="' + esc((d.username || '') + ' / ' + (d.password || '')) + '">复制</button>'
+        + '<button class="o-danger" data-act="del" data-kind="dlv" data-id="' + esc(d.id) + '" data-name="' + esc(d.username) + '">删除</button>'
+        + '</span></td></tr>';
+    });
+    q('dlvBox').innerHTML = h + '</tbody></table>';
+  }).catch(function (e) { q('dlvBox').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
+}
+
+function loadRequests() {
+  api('/admin/requests').then(function (j) {
+    var list = j.list || [];
+    if (!list.length) { q('reqBox').innerHTML = '<div class="empty">还没有提交过申请</div>'; return; }
+    var h = '<table><thead><tr><th>类型</th><th>提交时间</th><th>客户</th><th>状态</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    list.forEach(function (r) {
+      var type = r.type === 'renew' ? '<span class="st st-warn">续费</span>' : '<span class="st st-open">开通</span>';
+      var st = r.status === 'pending' ? '<span class="st st-wait">待审核</span>'
+        : r.status === 'approved' ? '<span class="st st-ok">已开通</span>'
+        : '<span class="st st-bad">已驳回</span>';
+      h += '<tr><td>' + type + '</td><td style="color:var(--t2)">' + fmtTime(r.createdAt) + '</td>'
+        + '<td>' + esc(r.customerName)
+        + (r.phone ? '<br><small style="color:var(--t3)">' + esc(r.realName || '') + (r.realName && r.phone ? ' · ' : '') + esc(r.phone) + '</small>' : (r.realName ? '<br><small style="color:var(--t3)">' + esc(r.realName) + '</small>' : ''))
+        + '</td><td>' + st + '</td>'
+        + '<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
+        + '<button data-act="showReq" data-id="' + esc(r._id) + '">详情</button>'
+        + '<button class="o-danger" data-act="del" data-kind="req" data-id="' + esc(r._id) + '" data-name="' + esc(r.customerName) + '">删除</button>'
+        + '</span></td></tr>';
+    });
+    q('reqBox').innerHTML = h + '</tbody></table>';
+    window._REQS = list;
+  }).catch(function (e) { q('reqBox').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; });
+}
+
+function loadNotifs() {
+  if (!TOKEN) return;
+  api('/admin/notifications').then(function (j) {
+    var unread = (j.list || []).filter(function (n) { return !n.read; });
+    var box = q('notifBox');
+    if (!unread.length) { box.classList.add('hide'); box.innerHTML = ''; return; }
+    var n = unread[0];
+    box.classList.remove('hide');
+    box.innerHTML = '<div class="notif glass" onclick="openNotif(\'' + n._id + '\')">'
+      + '<span class="ic">&#127881;</span>'
+      + '<span class="tx">🎉 ' + (unread.length > 1 ? unread.length + ' 条新通知，最新：' : '') + esc(n.title || '账号已开通')
+      + '<small>' + esc(n.body || '') + ' · 点击领取账号密码</small></span>'
+      + '<span class="badge">' + unread.length + '</span></div>';
+    // P0-23 醒目交付：账号开通通知自动弹出（每条只自动弹一次，靠 sessionStorage 防重）
+    try {
+      var shown = JSON.parse(sessionStorage.getItem('bf_shown_notifs') || '[]');
+      if (!shown.includes(n._id)) {
+        shown.push(n._id);
+        sessionStorage.setItem('bf_shown_notifs', JSON.stringify(shown));
+        openNotif(n._id);
+      }
+    } catch (e) { /* 存储异常时退回仅横幅提示 */ }
+  }).catch(function () {});
+}
+
+/* ══════════════ 开通 / 续费 ══════════════ */
+function startOpen() {
+  var h = new Date().getHours();
+  if (h < 8 || h >= 20) { openM('mClosed'); return; }
+  openM('mNotice');
+}
+function openRenewPick() {
+  var h = new Date().getHours();
+  if (h < 8 || h >= 20) { openM('mClosed'); return; }
+  var box = q('renewPick');
+  if (!ACCOUNTS.length) { box.innerHTML = '<div class="empty">还没有可续费的会员</div>'; openM('mRenewPick'); return; }
+  var h2 = '';
+  ACCOUNTS.forEach(function (a) {
+    var dl = a.daysLeft == null ? '' : (a.daysLeft >= 0 ? '还剩 ' + a.daysLeft + ' 天' : '已过期 ' + (-a.daysLeft) + ' 天');
+    h2 += '<button onclick="renewFor(\'' + a.id + '\',\'' + esc(a.displayName).replace(/'/g, "\\'") + '\',\'' + (a.tier || 'plus') + '\')">'
+      + esc(a.displayName) + '<small>' + dl + '</small></button>';
+  });
+  box.innerHTML = h2;
+  openM('mRenewPick');
+}
+// 档位与会收款码由服务端 /tiers 下发（不写死价格，避免各端不一致）
+// 防呆：拉取失败时退化为"仅当前档位"，并禁止选择其它档，避免用错收款码
+var TIERS = { plus: { price: 166, qr: 'qrcode-plus.jpg', name: 'Plus 基础版' } };
+var TIERS_LOADED = false;
+function loadTiers() {
+  return fetch(API + '/tiers').then(function (r) { return r.json(); }).then(function (j) {
+    var list = (j && j.tiers) || [];
+    // P0-32：客户端只展示可见档位；但员工给"历史隐藏档客户"续费时，需按当前档位临时注入该档按钮
+    if (j && j.hiddenTiers) j.hiddenTiers.forEach(function (t) { HIDDEN_TIERS[t.key] = t; });
+    else (j.hiddenTiers = []);
+    if (!list.length) return;
+    var map = {};
+    list.forEach(function (t) {
+      map[t.key] = { price: t.priceCny, qr: t.qrUrl, name: t.name };
+      HIDDEN_TIERS[t.key] = null;   // 可见档从隐藏表移除
+    });
+    TIERS = map;
+    TIERS_LOADED = true;
+    renderTierButtons(list);
+    pickTier(pickTierKey);
+  }).catch(function () { /* 保留兜底档位 */ });
+}
+// P0-32 隐藏档位表（续费历史客户时按需注入按钮）
+var HIDDEN_TIERS = {};
+function renderTierButtons(list) {
+  var wrap = q('payTierWrap'); if (!wrap) return;
+  var html = '<div style="font-size:12.5px;color:var(--t2);margin-bottom:7px;text-align:center">选择会员档位</div><div style="display:flex;gap:8px">';
+  list.forEach(function (t) {
+    html += '<button type="button" class="tierBtn" id="tb_' + t.key + '" onclick="pickTier(\'' + t.key + '\')">'
+         + t.name.replace(/ .*/, '') + '<b>¥' + t.priceCny + '</b></button>';
+  });
+  wrap.innerHTML = html + '</div>';
+}
+var pickTierKey = 'plus';
+function pickTier(k) {
+  if (!TIERS[k]) return;
+  pickTierKey = k;
+  Object.keys(TIERS).forEach(function (key) {
+    var el = q('tb_' + key); if (el) el.classList.toggle('on', key === k);
+  });
+  var t = TIERS[k];
+  if (q('payAmount')) q('payAmount').textContent = '¥' + t.price;
+  if (q('payQr')) { q('payQr').src = t.qr; q('payQr').alt = t.name + ' 收款码'; }
+}
+function renewFor(accountId, name, tier) {
+  pending = { type: 'renew', accountId: accountId, who: name };
+  q('payTitle').textContent = '为「' + name + '」续费 1 个月';
+  // P0-32：客户当前是隐藏档（Pro/Ultra 历史客户）时，临时把该档注入可选按钮，保证续费价与收款码正确
+  if (HIDDEN_TIERS[tier] && !TIERS[tier]) {
+    TIERS[tier] = { price: HIDDEN_TIERS[tier].priceCny, qr: HIDDEN_TIERS[tier].qrUrl, name: HIDDEN_TIERS[tier].name };
+    var wrap = q('payTierWrap');
+    if (wrap) {
+      var btn = document.createElement('button');
+      btn.type = 'button'; btn.className = 'tierBtn'; btn.id = 'tb_' + tier;
+      btn.innerHTML = HIDDEN_TIERS[tier].name.replace(/ .*/, '') + '<b>¥' + HIDDEN_TIERS[tier].priceCny + '</b>';
+      btn.onclick = function () { pickTier(tier); };
+      var box = wrap.querySelector('div[style*="display:flex"]') || wrap.lastElementChild;
+      if (box) box.appendChild(btn);
+    }
+  }
+  q('payHint').innerHTML = '请确认客户已完成付款，再点击「我已支付」。<br>提交后进入<b>待审核</b>，管理员审核通过后自动续期并通知你。';
+  q('payNameWrap').classList.add('hide');
+  pickTier(TIERS[tier] ? tier : 'plus');   // 默认沿用客户当前档位
+  openM('mPay');
+}
+function openPay(type) {
+  loadTiers();
+  pending = { type: 'create', accountId: null, who: '' };
+  q('payTitle').textContent = '月度会员';
+  q('payHint').innerHTML = '请确认客户已完成付款，再点击「我已支付」。<br>提交后进入<b>待审核</b>，管理员审核通过后自动开通账号并通知你。';
+  q('payNameWrap').classList.remove('hide');
+  q('payName').value = '';
+  q('payRealName').value = '';
+  q('payPhone').value = '';
+  pickTier('plus');
+  openM('mPay');
+}
+function submitPay() {
+  if (pending.type === 'create') {
+    var nm = q('payName').value.trim();
+    if (!nm) { toast('请填写客户称呼'); return; }
+    pending.who = nm;
+  }
+  // P0-21 客户资料：姓名/电话（选填，电话 11 位校验）
+  var realName = (q('payRealName') && q('payRealName').value.trim()) || '';
+  var phone = (q('payPhone') && q('payPhone').value.trim()) || '';
+  if (phone && !/^1\d{10}$/.test(phone)) { toast('电话格式不正确（11 位手机号）'); return; }
+  // 员工端不做账号自定义：登录名与密码由管理员端创建时统一设置
+  // P0-22：恢复审核制——员工提交后进待审核队列，由管理员审核通过后开通
+  var body = { type: pending.type, customerName: pending.who, accountId: pending.accountId, tier: pickTierKey,
+               realName: realName, phone: phone };
+  busy(q('payBtn'), true, '提交中');
+  api('/admin/requests', { method: 'POST', body: body })
+    .then(function (j) {
+      busy(q('payBtn'), false);
+      q('doneTitle').textContent = pending.type === 'renew' ? '已提交续费申请' : '已提交开通申请';
+      q('doneBody').innerHTML = pending.type === 'renew'
+        ? '已确认收款，续费<b>已立即生效</b>，该客户到期时间已顺延。<br>本操作已记录审计，管理员可事后抽检。'
+        : '已确认收款，账号<b>已立即开通</b>，可在会员列表查看登录名与密码。<br>本操作已记录审计，管理员可事后抽检。';
+      openM('mDone');
+      refreshAll();
+    })
+    .catch(function (e) { busy(q('payBtn'), false); openM('mPay'); toast(e.message); });
+}
+
+/* ══════════════ 通知 / 备注 / 详情 ══════════════ */
+function openNotif(id) {
+  READY_DLY = null;
+  var h = '<div class="line"><b>状态</b><span>正在读取…</span></div>';
+  q('readyCred').innerHTML = h;
+  openM('mReady');
+  api('/admin/notifications/' + id + '/read', { method: 'POST' }).catch(function () {});
+  api('/admin/deliveries').then(function (j) {
+    var list = j.list || [];
+    // 取最新一条尚未展示过的记录（服务端按充值时间倒序）
+    var d = list[0];
+    if (!d) { q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>未找到对应记录</span></div>'; return; }
+    READY_DLY = d;
+    q('readyCred').innerHTML =
+      '<div class="line"><b>登录账号</b><span>' + esc(d.username) + '</span></div>' +
+      '<div class="line"><b>登录密码</b><span>' + esc(d.password || '—') + '</span></div>' +
+      '<div class="line"><b>发放时间</b><span>' + fmtTime(d.issuedAt) + '</span></div>';
+    loadNotifs(); refreshAll();
+  }).catch(function () {});
+}
+function copyReady() {
+  if (!READY_DLY) { toast('暂无可复制内容'); return; }
+  copyText(READY_DLY.username + ' / ' + (READY_DLY.password || ''));
+}
+function openNote(id, cur) {
+  NOTE_TARGET = id; q('noteInput').value = cur || '';
+  openM('mNote');
+}
+function saveNote() {
+  if (!NOTE_TARGET) return;
+  busy(q('noteBtn'), true, '保存中');
+  api('/admin/deliveries/' + NOTE_TARGET + '/note', { method: 'POST', body: { note: q('noteInput').value } })
+    .then(function () { busy(q('noteBtn'), false); closeM(); toast('备注已保存'); loadDeliveries(); })
+    .catch(function (e) { busy(q('noteBtn'), false); toast(e.message); });
+}
+function showReq(id) {
+  var r = (window._REQS || []).filter(function (x) { return x._id === id; })[0];
+  if (!r) return;
+  var rows = '<div class="row"><b>类型</b><span>' + (r.type === 'renew' ? '续费' : '开通会员') + '</span></div>'
+    + '<div class="row"><b>客户</b><span>' + esc(r.customerName) + '</span></div>'
+    + '<div class="row"><b>提交时间</b><span>' + fmtTime(r.createdAt) + '</span></div>'
+    + '<div class="row"><b>状态</b><span>' + (r.status === 'pending' ? '待审核' : r.status === 'approved' ? '已通过' : '已驳回') + '</span></div>';
+  if (r.createdAccountUsername) rows += '<div class="row"><b>开通账号</b><span class="mono">' + esc(r.createdAccountUsername) + '</span></div>';
+  var extra = r.status === 'rejected' && r.rejectReason
+    ? '<div class="badbox">驳回原因：' + esc(r.rejectReason) + '</div>' : '';
+  q('reqDetail').innerHTML = rows;
+  q('reqDetail').parentNode.querySelector('.badbox') && q('reqDetail').parentNode.querySelector('.badbox').remove();
+  if (extra) q('reqDetail').insertAdjacentHTML('afterend', extra);
+  openM('mReq');
+}
+
+/* ══════════════ 删除 ══════════════ */
+var DEL = null;
+function askDel(kind, id, name) {
+  DEL = { kind: kind, id: id };
+  var what = kind === 'req' ? '这条申请' : '这条发放记录';
+  q('delTitle').textContent = kind === 'req' ? '删除这条申请？' : '删除这条发放记录？';
+  q('delBody').innerHTML = '将删除「<b style="color:var(--t1)">' + esc(name) + '</b>」的' + what + '。';
+  q('delWarn').textContent = '删除后不可恢复。';
+  openM('mDel');
+}
+function doDelete() {
+  if (!DEL) return;
+  var path = DEL.kind === 'req' ? '/admin/requests/' + DEL.id
+           : '/admin/deliveries/' + DEL.id;
+  busy(q('delBtn'), true, '删除中');
+  api(path, { method: 'DELETE' })
+    .then(function () { busy(q('delBtn'), false); closeM(); toast('已删除'); refreshAll(); })
+    .catch(function (e) { busy(q('delBtn'), false); closeM(); toast(e.message); });
+}
+
+/* ══════════════ 启动：先校验会话，再加载数据 ══════════════ */
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeM(); });
+
+// 10-24 安全修复：动态数据不再拼进 onclick（esc 的 &#39; 在事件属性里会被解码回单引号，
+// 形成存储型 XSS）。统一改为 data-* + 事件委托，动态值只作为 HTML 属性传递。
+document.addEventListener('click', function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+  if (!b) return;
+  var act = b.getAttribute('data-act');
+  var id = b.getAttribute('data-id') || '';
+  var name = b.getAttribute('data-name') || '';
+  var kind = b.getAttribute('data-kind') || '';
+  var note = b.getAttribute('data-note') || '';
+  var text = b.getAttribute('data-text') || '';
+  var tier = b.getAttribute('data-tier') || '';
+  if (act === 'suspendFor') askSuspendFor(id, name);
+  else if (act === 'resumeFor') resumeFor(id);
+  else if (act === 'renewFor') renewFor(id, name, tier);
+  else if (act === 'note') openNote(id, note);
+  else if (act === 'copy') copyText(text);
+  else if (act === 'del') askDel(kind, id, name);
+  else if (act === 'showReq') showReq(id);
+});
+
+(function boot() {
+  var s = readSession();
+  if (!s.token) { location.replace('index.html'); return; }
+  if (s.role === 'admin') { location.replace('admin.html'); return; }
+  TOKEN = s.token;
+  refreshAll();
+  POLL = setInterval(loadNotifs, 30000);
+})();
+</script>
+</body>
+</html>
