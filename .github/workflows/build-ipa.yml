@@ -189,6 +189,16 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee build.log | tail -120
 
+      # 10-24：失败时把完整 build.log 传上去。
+      # 之前只保留 tail -120，编译错误的诊断行被截掉，排障要靠猜（本轮就踩过）。
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7
+
       - name: Package IPA
         run: |
           mkdir -p Payload

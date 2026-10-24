@@ -49,7 +49,7 @@ enum LibraryImageWriter {
     @MainActor
     @discardableResult
     static func save(imageData: Data,
-                     conversationId: String,
+                     conversationId: UUID?,
                      prompt: String = "",
                      context: ModelContext) -> Bool {
         guard !imageData.isEmpty else { return false }
@@ -62,7 +62,7 @@ enum LibraryImageWriter {
                                 filename: filename(prompt: prompt),
                                 kind: .generated,
                                 category: .image,
-                                sourceConversationId: conversationId,
+                                sourceConversationId: conversationId?.uuidString ?? "",
                                 context: context)
             savedFingerprints.insert(key)
             PerformanceTrace.event("library_image_saved")

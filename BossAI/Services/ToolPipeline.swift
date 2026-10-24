@@ -124,7 +124,7 @@ enum ToolPipeline {
         // 重试后补上的图同样要进资料库（已存在的按指纹跳过）
         for data in images {
             LibraryImageWriter.save(imageData: data,
-                                    conversationId: message.conversationID ?? "",
+                                    conversationId: message.conversationID,
                                     prompt: message.text,
                                     context: context)
         }
