@@ -103,4 +103,14 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertTrue(plan.prompt.contains("画面比例"), "应补充比例要求")
         XCTAssertFalse(plan.prompt.contains("橘猫坐在沙发上"), "不得替用户编造画面内容")
     }
+
+    // MARK: - 与服务端 task_kind 的映射（规划类型必须能落到服务端认识的四个值）
+
+    func testTaskKindMapping() {
+        XCTAssertEqual(ImageService.taskKind(for: .generate), "generate")
+        XCTAssertEqual(ImageService.taskKind(for: .edit), "edit")
+        XCTAssertEqual(ImageService.taskKind(for: .series), "series")
+        XCTAssertEqual(ImageService.taskKind(for: .reference), "generate", "参考图生成走普通生成")
+        XCTAssertEqual(ImageService.taskKind(for: .poster), "generate", "海报底图仍走生成，文字由排版层负责")
+    }
 }

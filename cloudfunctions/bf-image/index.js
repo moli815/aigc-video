@@ -1405,6 +1405,27 @@ const server = http.createServer(async (req, res) => {
         IMAGE_API_KEY: !!String(RT.IMAGE_API_KEY || "").trim(),
         IMAGE_BASE_URL: !!String(RT.IMAGE_BASE_URL || "").trim(),
       },
+      // 10-24：把 selectImageRoute 的真实返回也摊开。
+      // 只回配置不跑路由 = 证明了 A、没证明 A 真的被用；这里直接用同一个函数跑四种典型任务，
+      // 线上任何人一眼能看出"普通/高质量/编辑/组图"分别落到哪个 model。
+      routes: (function () {
+        const cases = [
+          { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto", prompt: "", renderIntent: "" } },
+          { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro", prompt: "", renderIntent: "" } },
+          { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro", prompt: "", renderIntent: "" } },
+          { key: "series", args: { taskKind: "series", qualityTier: "auto", prompt: "", renderIntent: "" } },
+        ];
+        const out = {};
+        for (const c of cases) {
+          try {
+            const r = selectImageRoute(c.args);
+            out[c.key] = { model: r.model || "", reason: r.reason || "", unsupported: !!r.unsupported };
+          } catch (e) {
+            out[c.key] = { model: "", reason: "route-error", error: String((e && e.message) || e).slice(0, 80) };
+          }
+        }
+        return out;
+      })(),
       requestId: currentRequestId(),
     });
   }

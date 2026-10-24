@@ -41,3 +41,20 @@ test("MODELS-03 三档解析规则：新键优先、旧键做 pro 兼容别名�
   assert.match(body, /pro: String\(RT\.IMAGE_MODEL_PRO \|\| ""\)\.trim\(\) \|\| legacy/, "pro 档解析不对（旧 IMAGE_MODEL 兼容丢失）");
   assert.match(body, /series: String\(RT\.IMAGE_MODEL_SERIES \|\| ""\)\.trim\(\)/, "series 档解析不对");
 });
+
+test("MODELS-04 端点必须同时返回 selectImageRoute 的真实结果（不只是配置）", () => {
+  const start = IMG.indexOf('u.indexOf("/models")');
+  const body = IMG.slice(start, start + 2600);
+  assert.match(body, /selectImageRoute\(/, "没有调用真实的选模函数（只回配置等于没验证）");
+  for (const k of ["generate_auto", "generate_pro", "edit_pro", "series"]) {
+    assert.ok(body.includes(`key: "${k}"`), `缺少路由探针 ${k}`);
+  }
+  assert.match(body, /model: r\.model \|\| ""/, "探针没有回传实际 model");
+  assert.match(body, /unsupported: !!r\.unsupported/, "没有回传不支持标记");
+});
+
+test("MODELS-05 路由失败不能把整个端点打挂", () => {
+  const start = IMG.indexOf('u.indexOf("/models")');
+  const body = IMG.slice(start, start + 2600);
+  assert.match(body, /catch \(e\) \{[\s\S]{0,160}route-error/, "单个探针异常没有兜底");
+});
