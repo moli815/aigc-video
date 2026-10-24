@@ -510,6 +510,9 @@ struct SidebarView: View {
 /// - 手动 Key 模式：本地双环（对话 / 生图），额度设为 0（不限）时自动隐藏对应环
 struct QuotaSidebarWidget: View {
     @Environment(\.appTheme) private var theme
+    /// 侧栏会员卡改为观察实时状态（此前读 UserDefaults 静态快照 + 20 秒轮询，
+    /// 首次安装/冷启动时快照还没写，就把默认值当成真实会员状态显示成"Plus 已过期"）。
+    @ObservedObject private var account = HostedAccount.shared
     @State private var tick = 0
     @State private var showIdentity = false
     @State private var showMembership = false
@@ -546,25 +549,52 @@ struct QuotaSidebarWidget: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// 徽章文案：从未同步且还没有档位信息时，不要说成具体的 Plus（默认值会误导）
+    private var tierBadgeText: String {
+        MembershipDisplay.tierBadge(tierName: account.tierName,
+                                    synced: account.lastRefreshAt != nil,
+                                    syncing: account.refreshing)
+    }
+
+    /// 剩余天数：优先用 /me 实时值，再退回本地缓存；都没有就返回 nil（交给 UI 显示"未同步"）
+    private var effectiveDaysLeft: Int? {
+        if let d = account.daysLeft { return d }
+        return HostedAccount.cachedDaysLeft
+    }
+
     /// P0-19 方案 A：档位徽章 + 剩余天数 + 三环并排 + 身份设置/升级入口
     @ViewBuilder
     private var hostedTierCard: some View {
         VStack(spacing: 10) {
             HStack {
-                Text("👑 " + HostedAccount.cachedTierName)
+                Text("👑 " + tierBadgeText)
                     .font(.caption.weight(.bold))
                     .padding(.horizontal, 9).padding(.vertical, 3)
                     .background(theme.accent.opacity(0.18), in: Capsule())
                     .foregroundStyle(theme.accent)
+                    .onTapGesture { Task { await account.refresh() } }
+                    .accessibilityIdentifier("sidebar-tier")
                 Spacer()
-                if let days = HostedAccount.cachedDaysLeft {
+                if account.refreshing {
+                    ProgressView().controlSize(.mini)
+                } else if let days = effectiveDaysLeft {
                     Text(days >= 0 ? "剩 \(days) 天" : "已到期")
                         .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Button("未同步·点此刷新") { Task { await account.refresh() } }
+                        .font(.caption2).foregroundStyle(.secondary).buttonStyle(.plain)
                 }
             }
             // 10-22 用户要求：底部不再显示额度金额/百分比，改为「会员到期时间」
-            MembershipExpiryRing(daysLeft: HostedAccount.cachedDaysLeft,
-                                 until: HostedAccount.cachedMemberUntil)
+            MembershipExpiryRing(daysLeft: effectiveDaysLeft,
+                                 until: account.memberUntil ?? HostedAccount.cachedMemberUntil,
+                                 syncing: account.refreshing)
+            if let err = account.lastRefreshError, account.lastRefreshAt == nil {
+                Text("会员信息没取到：" + err)
+                    .font(.system(size: 9)).foregroundStyle(.orange)
+                    .lineLimit(2).multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             HStack(spacing: 8) {
                 Button { showIdentity = true } label: {
                     Label("身份设置", systemImage: "gearshape")
@@ -600,20 +630,56 @@ struct QuotaSidebarWidget: View {
     }
 }
 
+/// 会员展示的纯计算（抽出来是为了能被单测锁住）。
+/// 关键不变量：**"没有数据"必须返回 nil，绝不能被当成 0 天/已到期** ——
+/// 侧栏此前读本地快照，首次安装时快照还没写入，于是把默认值渲染成「Plus 基础版 · 已过期」。
+enum MembershipDisplay {
+    /// 剩余天数：服务端值优先；缺失时按到期日推算；两者都没有 → nil（未知）
+    static func daysLeft(serverDays: Int?, until: Date?, now: Date = Date()) -> Int? {
+        if let serverDays { return serverDays }
+        guard let until else { return nil }
+        return Calendar.current.dateComponents([.day], from: now, to: until).day
+    }
+
+    /// 是否已到期：未知一律返回 false（宁可显示"未同步"，也不能谎称已过期）
+    static func isExpired(daysLeft: Int?) -> Bool {
+        guard let daysLeft else { return false }
+        return daysLeft <= 0
+    }
+
+    /// 徽章文案：从未同步且仍是默认档位时，不冒充具体档位
+    static func tierBadge(tierName: String, synced: Bool, syncing: Bool) -> String {
+        if synced || tierName != "Plus 基础版" { return tierName }
+        return syncing ? "会员同步中…" : "会员"
+    }
+}
+
 /// 会员有效期环：环心显示剩余天数，环按「剩余/30」比例收缩，下方标注到期日期。
 /// 10-22 用户要求用「会员到期」替代原额度金额展示。
 struct MembershipExpiryRing: View {
     @Environment(\.appTheme) private var theme
     let daysLeft: Int?
     let until: Date?
+    /// 正在向服务端取会员状态（用于区分"还没取到"和"取到了但没有到期日"）
+    var syncing: Bool = false
 
-    private var days: Int { max(0, daysLeft ?? 0) }
+    /// 天数优先用服务端下发；缺失时按到期日自己算（只用于展示，不参与任何计费判断）
+    private var computedDays: Int? { MembershipDisplay.daysLeft(serverDays: daysLeft, until: until) }
+    /// 没有任何可用数据 = 未知。**未知绝不等于已到期**（这正是"会员显示不正确"的根因）
+    private var unknown: Bool { computedDays == nil }
+    private var days: Int { max(0, computedDays ?? 0) }
     private var progress: CGFloat {
         // 以 30 天为一个周期估算环进度（到期时间不由本地计算，仅作视觉参考）
-        min(1, max(0.02, CGFloat(days) / 30.0))
+        guard !unknown else { return 0.02 }
+        return min(1, max(0.02, CGFloat(days) / 30.0))
     }
-    private var expired: Bool { (daysLeft ?? 0) <= 0 }
+    private var expired: Bool { MembershipDisplay.isExpired(daysLeft: computedDays) }
+    private var centreText: String {
+        if unknown { return syncing ? "…" : "—" }
+        return expired ? "0" : "\(days)"
+    }
     private var expiryText: String {
+        if unknown { return syncing ? "同步中…" : "未同步" }
         guard let until else { return expired ? "已到期" : "—" }
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
@@ -630,7 +696,7 @@ struct MembershipExpiryRing: View {
                             style: StrokeStyle(lineWidth: 6, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 VStack(spacing: 0) {
-                    Text(expired ? "0" : "\(days)")
+                    Text(centreText)
                         .font(.system(size: 15, weight: .heavy, design: .rounded).monospacedDigit())
                     Text("天").font(.system(size: 8)).foregroundStyle(.secondary)
                 }
@@ -642,7 +708,8 @@ struct MembershipExpiryRing: View {
                 .lineLimit(1).minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
-        .accessibilityLabel(expired ? "会员已到期" : "会员剩余 \(days) 天，\(expiryText)")
+        .accessibilityLabel(unknown ? (syncing ? "会员信息同步中" : "会员信息未同步")
+                            : (expired ? "会员已到期" : "会员剩余 \(days) 天，\(expiryText)"))
     }
 }
 

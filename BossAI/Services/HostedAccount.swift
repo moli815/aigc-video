@@ -78,6 +78,30 @@ final class HostedAccount: ObservableObject {
     /// 全局单例：账号状态全 App 唯一，避免多处各自拉取 /me 造成状态漂移
     static let shared = HostedAccount()
 
+    /// 服务端时间统一是 ISO8601 **带毫秒**（如 2026-11-15T02:53:29.994Z）。
+    /// 默认 ISO8601DateFormatter 不接受小数秒，`date(from:)` 会直接返回 nil ——
+    /// 后果是会员到期日永远为空、侧栏把"没同步到"显示成"已过期"。这里带毫秒/不带毫秒都收。
+    static func parseISO(_ raw: String) -> Date? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let withMS = ISO8601DateFormatter()
+        withMS.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withMS.date(from: trimmed) { return d }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: trimmed)
+    }
+
+    /// 档位 key → 展示名。登录响应只回 tier（没有 tierName），靠它先把徽章显示对。
+    static func displayName(forTier key: String) -> String {
+        switch key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "ultra": return "Ultra 旗舰版"
+        case "pro":   return "Pro 专业版"
+        case "plus":  return "Plus 基础版"
+        default:      return key.isEmpty ? "会员" : key
+        }
+    }
+
     /// 登录前的持久化状态
     /// 会员 token（存在 Keychain；nil = 未登录）。private(set) 防止外部随意改写绕过 storeToken
     @Published private(set) var token: String?
@@ -123,6 +147,10 @@ final class HostedAccount: ObservableObject {
     @Published private(set) var dayResetAt: Date?
     @Published private(set) var weekResetAt: Date?
     @Published private(set) var monthResetAt: Date?
+    /// 最近一次 /me 成功时间：侧栏用它区分"还没同步到"与"真的到期"
+    @Published private(set) var lastRefreshAt: Date?
+    /// 最近一次 /me 失败原因（成功即清空）。以前失败被静默吞掉，界面就把默认值当成真实状态展示。
+    @Published private(set) var lastRefreshError: String?
     /// 单设备登录：账号在别处登录时，这里存放给用户看的提示（弹窗后清空）
     @Published var sessionReplacedNotice: String?
     @Published private(set) var refreshing = false
@@ -179,7 +207,7 @@ final class HostedAccount: ObservableObject {
     /// 会员到期时间
     nonisolated static var cachedMemberUntil: Date? {
         guard let raw = UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["memberUntil"] as? String else { return nil }
-        return ISO8601DateFormatter().date(from: raw)
+        return Self.parseISO(raw)
     }
 
     /// 会员剩余天数（负数表示已过期）
@@ -388,15 +416,15 @@ final class HostedAccount: ObservableObject {
     }
     nonisolated static var cachedDayResetAt: Date? {
         (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["dayResetAt"] as? String)
-            .flatMap { ISO8601DateFormatter().date(from: $0) }
+            .flatMap { Self.parseISO($0) }
     }
     nonisolated static var cachedWeekResetAt: Date? {
         (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["weekResetAt"] as? String)
-            .flatMap { ISO8601DateFormatter().date(from: $0) }
+            .flatMap { Self.parseISO($0) }
     }
     nonisolated static var cachedMonthResetAt: Date? {
         (UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?["monthResetAt"] as? String)
-            .flatMap { ISO8601DateFormatter().date(from: $0) }
+            .flatMap { Self.parseISO($0) }
     }
 
     /// 托管模式下是否已具备可用凭据
@@ -439,7 +467,7 @@ final class HostedAccount: ObservableObject {
             if !cachedAccount.isEmpty { accountName = cachedAccount }
             displayName = dict["displayName"] as? String ?? ""
             if let s = dict["memberUntil"] as? String {
-                memberUntil = ISO8601DateFormatter().date(from: s)
+                memberUntil = Self.parseISO(s)
             }
             chatBand = HostedUsageBand(rawValue: dict["chatBand"] as? String ?? "") ?? .normal
             imageBand = HostedUsageBand(rawValue: dict["imageBand"] as? String ?? "") ?? .normal
@@ -631,8 +659,13 @@ final class HostedAccount: ObservableObject {
         sessionGeneration &+= 1
         accountName = trimmed
         displayName = json["displayName"] as? String ?? trimmed
+        // 登录响应只有 tier、没有 tierName：先把徽章显示对，别等 /me 回来才纠正
+        if let t = json["tier"] as? String, !t.isEmpty {
+            tier = t
+            tierName = Self.displayName(forTier: t)
+        }
         if let s = json["memberUntil"] as? String {
-            memberUntil = ISO8601DateFormatter().date(from: s)
+            memberUntil = Self.parseISO(s)
         }
         persistInfo()
         await refresh()
@@ -710,7 +743,7 @@ final class HostedAccount: ObservableObject {
             guard startGeneration == sessionGeneration else { return }
             displayName = json["displayName"] as? String ?? displayName
             if let s = json["memberUntil"] as? String {
-                memberUntil = ISO8601DateFormatter().date(from: s)
+                memberUntil = Self.parseISO(s)
             }
             if let usage = json["usage"] as? [String: Any] {
                 chatBand = HostedUsageBand(rawValue: usage["chat"] as? String ?? "") ?? .normal
@@ -760,16 +793,21 @@ final class HostedAccount: ObservableObject {
                 func pick(_ key: String) -> (Double, Date?)? {
                     guard let node = limits[key] as? [String: Any] else { return nil }
                     let pct = (node["remainingPct"] as? NSNumber)?.doubleValue ?? 0
-                    let reset = (node["resetAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+                    let reset = (node["resetAt"] as? String).flatMap { Self.parseISO($0) }
                     return (pct, reset)
                 }
                 if let d = pick("day") { dayRemainingPct = d.0; dayResetAt = d.1 }
                 if let w = pick("week") { weekRemainingPct = w.0; weekResetAt = w.1 }
                 if let m = pick("month") { monthRemainingPct = m.0; monthResetAt = m.1 }
             }
+            lastRefreshAt = Date()
+            lastRefreshError = nil
             persistInfo()
         } catch {
-            // 刷新失败不打断使用；401 已在 request 内处理
+            // 刷新失败不打断使用；401 已在 request 内处理（会清登录态并弹"已在别处登录"）。
+            // 但原因必须留下来：否则侧栏会把"没同步到"的默认值当成真实会员状态展示。
+            // HostedError 已是 LocalizedError，直接用面向用户的文案（不要 String(describing:) 的枚举 dump）
+            lastRefreshError = error.localizedDescription
         }
     }
 
