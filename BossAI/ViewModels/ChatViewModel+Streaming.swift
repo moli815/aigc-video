@@ -456,15 +456,34 @@ extension ChatViewModel {
                             }()
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
                             let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
+                            // ── 10-24 P1：图片任务规划（只作用于图片分支，文本聊天完全不经过这里）──
+                            // 把"比例/张数/档位/禁画字/保留原图"从模型随口决定，改成确定性推断；
+                            // 规划结果**必须真的进入请求**，否则等于没接（见下方 planPrompt/planAspect/planTier）。
+                            let plan = ImageTaskPlanner.plan(
+                                userText: prompt,
+                                referenceCount: refs.count,
+                                requestedCount: requestedCount > 0 ? requestedCount : nil,
+                                aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
+                                qualityTier: qualityTier.isEmpty ? nil : qualityTier)
+                            // 说"改图"却一张图都没有：先问一句，别硬生成一张全新图
+                            if plan.needsClarification, let ask = plan.clarification {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": "【需要先确认】" + ask])
+                                continue
+                            }
+                            let planPrompt = plan.prompt
+                            let planAspect = plan.aspectRatio
+                            let planTier = plan.qualityTier
+                            let planCount = plan.outputCount
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
                             if toolName == "image_series" {
-                                let n = max(2, min(4, requestedCount > 1 ? requestedCount : 2))
+                                let n = max(2, min(4, planCount > 1 ? planCount : 2))
                                 statusText = "正在生成 \(n) 张图片（逐张生成，可随时停止）…"
                                 let run = try await runSeriesTask(
-                                    prompt: prompt, requestedCount: n,
+                                    prompt: planPrompt, requestedCount: n,
                                     structured: structuredArgs, renderIntent: renderIntent,
-                                    aspectRatio: aspectRatio, qualityTier: qualityTier,
+                                    aspectRatio: planAspect, qualityTier: planTier,
                                     conversation: conv)
                                 if let msg = run.message {
                                     artifactFlag.set()
@@ -493,7 +512,46 @@ extension ChatViewModel {
                                 }
                                 continue
                             }
-                            var imageData = try await Self.generateImageWithRetry(prompt: prompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: imageTaskKind, qualityTier: qualityTier, requestedCount: requestedCount > 1 ? requestedCount : nil)
+                            var imageData: Data
+                            // ── 10-24 P1：海报/名片走「AI 出无字底图 + 程序画字」──
+                            // 图像模型画汉字必错，所以文字密集的物料不进普通生成：
+                            // 先用服务端 renderPoster 拿一张无文字底图，再用真实字体把文字画上去。
+                            // 任何一步失败都退回普通生图，不能让海报任务直接失败。
+                            if plan.taskType == .poster,
+                               let content = PosterContent.from(args: args, prompt: prompt) {
+                                var composed: Data? = nil
+                                if let bg = try? await HostedAccount.shared.renderPoster(
+                                    title: content.title, subtitle: content.subtitle, bullets: content.bullets) {
+                                    composed = PosterLayout.render(background: bg, content: content).pngData()
+                                }
+                                if let composed {
+                                    imageData = composed
+                                    PerformanceTrace.event("poster_rendered_locally")
+                                } else {
+                                    imageData = try await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: false, renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil)
+                                }
+                            } else {
+                                imageData = try await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil)
+                            }
+
+                            // ── 10-24 P1：保存前质检（不调视觉模型，纯程序判定）──
+                            // 分工：无法解码/尺寸过小 → 重新生成一次（内容确实坏了）；
+                            //      体积异常（下载被截断）→ 不重新生成，交给下载重试，避免重复计费。
+                            var quality = ImageQualityChecker.check(imageData, expectedAspect: planAspect)
+                            if ImageQualityChecker.shouldRegenerate(quality) {
+                                if let retried = try? await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier) {
+                                    imageData = retried
+                                    quality = ImageQualityChecker.check(retried, expectedAspect: planAspect)
+                                    BudgetTracker.addImageGeneration()
+                                }
+                            }
+                            PerformanceTrace.event("image_quality_checked")
+                            // 重试后仍不可用 → 不落库、不报成功（避免"存了一个坏文件还告诉用户完成了"）
+                            if ImageQualityChecker.shouldRegenerate(quality) {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(pluginID: toolName, reason: "生成结果无法正常解码或尺寸过小（\(quality.summary)），已重试一次仍未通过。请如实告知用户这次没有成功，建议稍后重试。")])
+                                continue
+                            }
                             // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
                             // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
                             // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
@@ -503,7 +561,7 @@ extension ChatViewModel {
                                    let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
                                    !check.ok {
                                     let fixPrompt = prompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
-                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: aspectRatio) {
+                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: planAspect) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
                                     }

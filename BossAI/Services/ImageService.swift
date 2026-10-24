@@ -296,6 +296,30 @@ final class ImageService {
         throw ImageError.noImage
     }
 
+    /// 按规划器的计划直接生成（10-24 新增）。
+    /// 只做「计划 → 请求参数」的适配，不改动既有 generate 的任何行为：
+    /// 调用方仍然可以随时走原来的长参数版本。
+    func generate(plan: ImageTaskPlan,
+                  references: [Data] = [],
+                  requestId: String? = nil) async throws -> Data {
+        try await generate(prompt: plan.prompt,
+                           references: references,
+                           requestId: requestId,
+                           aspectRatio: plan.aspectRatio,
+                           taskKind: Self.taskKind(for: plan.taskType),
+                           qualityTier: plan.qualityTier,
+                           requestedCount: plan.outputCount > 1 ? plan.outputCount : nil)
+    }
+
+    /// 规划类型 → 服务端 task_kind（服务端只认 generate / edit / series / decompose）
+    static func taskKind(for type: ImageTaskType) -> String {
+        switch type {
+        case .edit: return "edit"
+        case .series: return "series"
+        case .poster, .reference, .generate: return "generate"
+        }
+    }
+
     // MARK: - 组图（10-24 新增：N 张逐张下载，不再只取第一张）
 
     /// 单张子任务的结果（成功或失败的**用户可见**信息）

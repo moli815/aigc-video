@@ -1370,6 +1370,66 @@ const server = http.createServer(async (req, res) => {
     return send(200, { ok: true, fn: "bf-image" });
   }
 
+  /**
+   * GET /img/models —— 把「配置里写了什么」和「实际会用哪个模型」摊开。
+   *
+   * 审计多次提到同一个问题：配置里存在 IMAGE_MODEL_PRO，不代表请求真的走了 pro 模型。
+   * 这条端点只读运行态，不需要鉴权（不含密钥），用于发布前自检与线上排查：
+   *   · 三个档位最终解析成哪个 model id；
+   *   · 每个模型的能力位（是否支持组图/图层/图生图）；
+   *   · 当前路由模式（auto / flash_only / pro_only）。
+   * 密钥类配置只回「是否已配置」，不回值。
+   */
+  if (req.method === "GET" && u.indexOf("/models") >= 0) {
+    await refreshRuntime();
+    const m = modelsOf();
+    const caps = {};
+    for (const [tier, model] of Object.entries(m)) {
+      if (!model) { caps[tier] = null; continue; }
+      const c = capsOf(model);
+      caps[tier] = {
+        model,
+        edit: !!c.edit,
+        series: !!c.series,
+        layers: !!c.layers,
+        fastPromptMode: !!c.fastPromptMode,
+        unknown: !!c.unknown,
+      };
+    }
+    return send(200, {
+      ok: true,
+      routingMode: String(RT.IMAGE_ROUTING_MODE || "auto"),
+      models: m,
+      caps,
+      keys: {
+        IMAGE_API_KEY: !!String(RT.IMAGE_API_KEY || "").trim(),
+        IMAGE_BASE_URL: !!String(RT.IMAGE_BASE_URL || "").trim(),
+      },
+      // 10-24：把 selectImageRoute 的真实返回也摊开。
+      // 只回配置不跑路由 = 证明了 A、没证明 A 真的被用；这里直接用同一个函数跑四种典型任务，
+      // 线上任何人一眼能看出"普通/高质量/编辑/组图"分别落到哪个 model。
+      routes: (function () {
+        const cases = [
+          { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto", prompt: "", renderIntent: "" } },
+          { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro", prompt: "", renderIntent: "" } },
+          { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro", prompt: "", renderIntent: "" } },
+          { key: "series", args: { taskKind: "series", qualityTier: "auto", prompt: "", renderIntent: "" } },
+        ];
+        const out = {};
+        for (const c of cases) {
+          try {
+            const r = selectImageRoute(c.args);
+            out[c.key] = { model: r.model || "", reason: r.reason || "", unsupported: !!r.unsupported };
+          } catch (e) {
+            out[c.key] = { model: "", reason: "route-error", error: String((e && e.message) || e).slice(0, 80) };
+          }
+        }
+        return out;
+      })(),
+      requestId: currentRequestId(),
+    });
+  }
+
   // ── 10-24 P1-5：组图任务（start / step / status / cancel）──
   // 设计要点：云函数是请求驱动的，没有常驻 worker。所以状态机放在数据库，
   // 由客户端「多次 step」驱动（每次 step 只做一张，远低于函数超时），
