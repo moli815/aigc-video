@@ -2,8 +2,9 @@ import XCTest
 @testable import BossAIExpertCore
 
 final class ExpertCoreTests: XCTestCase {
-    func testAllFifteenExpertsAreConfigured() throws {
-        let expected: Set<String> = ["general", "decision", "strategy", "marketing", "traffic", "model", "funding", "equity", "performance", "speech", "legal", "boss_ip", "fire_safety", "security", "insurance"]
+    func testAllExpertsAreConfigured() throws {
+        // 10-24：新增 short_video（短视频脚本）。这份列表刻意写死，用来挡"改了 JSON 没同步用例"。
+        let expected: Set<String> = ["general", "decision", "strategy", "marketing", "traffic", "model", "funding", "equity", "performance", "speech", "short_video", "legal", "boss_ip", "fire_safety", "security", "insurance"]
         XCTAssertEqual(Set(try ExpertCapabilityCatalog.configuration.get().keys), expected)
     }
     func testWeightedMatrix() throws {
