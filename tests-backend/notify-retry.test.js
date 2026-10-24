@@ -106,3 +106,52 @@ test("NR-10 单轮有上限，避免一次拉爆", async () => {
   }, NOW, 10);
   assert.equal(delivered, 10, "limit 必须生效");
 });
+
+// ── C2 边界（用户点名的 4 个细节）────────────────────────────────────────────
+const fs2 = require("node:fs");
+const API_SRC = fs2.readFileSync(path.join(__dirname, "../cloudfunctions/bf-api/index.js"), "utf8");
+const ADMIN_SRC = fs2.readFileSync(path.join(__dirname, "../web/admin.html"), "utf8");
+
+test("BND-01 nextAt 必须参与数据库筛选，不能只在内存判", () => {
+  const start = API_SRC.indexOf("listPending:");
+  const body = API_SRC.slice(start, start + 700);
+  assert.ok(body.includes("notifyNextAt: db.command.lte(Date.now())"),
+    "查询未按 nextAt 过滤：退避中的文档会占满窗口，把到点的挤出去");
+});
+
+test("BND-02 稳定 ID 撞车 = 已投递，不能当失败重试", () => {
+  const start = API_SRC.indexOf("deliver: async (notice, id)");
+  const body = API_SRC.slice(start, start + 500);
+  assert.ok(body.includes("isDuplicateKeyError(e)"), "重复键未特殊处理");
+  assert.ok(/if \(isDuplicateKeyError\(e\)\) return;/.test(body), "重复键未按已投递处理");
+});
+
+test("BND-03 attempts 只在实际尝试时增加，跳过不消耗", () => {
+  const start = path.join(__dirname, "../cloudfunctions/bf-api/notify-retry.js");
+  const src = fs2.readFileSync(start, "utf8");
+  const sweepStart = src.indexOf("const attempts = Number(doc.notifyAttempts || 0) + 1;");
+  const skipBranch = src.indexOf('result.skipped += 1;');
+  assert.ok(sweepStart > 0, "没有 attempts 递增");
+  assert.ok(skipBranch > 0 && skipBranch < sweepStart, "跳过分支必须在递增之前 return");
+});
+
+test("BND-04 手动补发只动通知，且必须管理员 + 审计", () => {
+  const start = API_SRC.indexOf("async function handleRetryNotify");
+  const body = API_SRC.slice(start, start + 1600);
+  assert.ok(body.includes('auditLog(staff, "request.notify.retry"'), "补发没有审计");
+  assert.ok(!body.includes("doApprove("), "补发里不能调用开通逻辑");
+  assert.ok(!body.includes("approveRequest("), "补发里不能调用审核逻辑");
+  assert.ok(API_SRC.includes('sub[2] === "retry-notify"'), "缺少路由");
+  assert.ok(/retry-notify"[\s\S]{0,120}requireStaff\(req, res, true\)/.test(API_SRC), "补发接口未要求管理员");
+});
+
+test("BND-05 管理端把审核结果与通知状态分开呈现", () => {
+  assert.ok(ADMIN_SRC.includes('id="recentBox"'), "缺少已处理区块");
+  assert.ok(ADMIN_SRC.includes("function notifyBadge"), "缺少通知状态徽章");
+  assert.ok(ADMIN_SRC.includes("通知已送达") && ADMIN_SRC.includes("通知待重试") && ADMIN_SRC.includes("通知发送失败"),
+    "三种通知状态未完整呈现");
+  assert.ok(ADMIN_SRC.includes("data-act=\"retryNotify\""), "缺少补发入口");
+  assert.ok(ADMIN_SRC.includes("/retry-notify"), "未调用补发接口");
+  // 已处理列表不能混进待审核
+  assert.ok(ADMIN_SRC.includes("r.status!=='pending'"), "已处理列表未排除待审核");
+});

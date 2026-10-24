@@ -217,6 +217,13 @@
           <h3>待审核申请</h3>
           <div id="pendBox"><div class="empty">加载中…</div></div>
         </div>
+        <div class="blk">
+          <h3>已处理与恢复</h3>
+          <div style="font-size:11.5px;color:var(--t3);margin:-4px 0 8px">
+            审核结果与通知投递是两件事：审核通过但通知没发出去的，会在这里显示并可手动补发。
+          </div>
+          <div id="recentBox"><div class="empty">加载中…</div></div>
+        </div>
       </div>
 
       <div class="pbody hide" id="tab1">
@@ -480,8 +487,37 @@ function tab(i){
 /* ── 加载 ── */
 function refreshAll(){ loadPending(); loadAccounts(); loadDeliveries(); loadStaff(); }
 
+// C2.1：把"审核结果"和"通知投递"分开呈现。
+// 待审核列表只放 pending，已处理的单列一块，避免"通过了但通知没发"混在待办里看不见。
+function notifyBadge(r){
+  var st=String(r.notifyState||'');
+  if(st==='sent') return '<span class="st st-ok">通知已送达</span>';
+  if(st==='failed') return '<span class="st st-bad">通知发送失败 · 第'+(r.notifyAttempts||0)+'次</span>';
+  if(st==='pending') return '<span class="st st-warn">通知待重试 · 第'+(r.notifyAttempts||0)+'次</span>';
+  return '<span class="st" style="color:var(--t3)">旧数据无记录</span>';
+}
+function renderRecent(list){
+  var rows=(list||[]).filter(function(r){ return r.status!=='pending'; }).slice(0,12);
+  if(!rows.length){ q('recentBox').innerHTML='<div class="empty">暂无已处理申请</div>'; return; }
+  var h='<table class="tb"><thead><tr><th>客户</th><th>类型</th><th>审核结果</th><th>通知投递</th><th>处理时间</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var audit = r.status==='rejected'
+      ? '<span class="st st-bad">已驳回</span>'
+      : '<span class="st st-ok">已通过</span>';
+    var canRetry = (r.notifyState==='pending'||r.notifyState==='failed');
+    h+='<tr><td>'+esc(r.customerName)+'</td><td>'+(r.type==='renew'?'续费':'开通')+'</td>'
+      +'<td>'+audit+'</td><td>'+notifyBadge(r)+'</td>'
+      +'<td style="color:var(--t2)">'+fmtTime(r.reviewedAt||r.updatedAt||r.createdAt)+'</td>'
+      +'<td style="text-align:right">'
+      +(canRetry?'<button class="o-main" data-act="retryNotify" data-id="'+esc(r._id)+'">补发通知</button>':'<span style="color:var(--t3)">—</span>')
+      +'</td></tr>';
+  });
+  q('recentBox').innerHTML=h+'</tbody></table>';
+}
+
 function loadPending(){
   api('/admin/requests').then(function(j){
+    renderRecent(j.list||[]);
     PENDING=(j.list||[]).filter(function(r){return r.status==='pending';});
     var n=q('pendNum');
     if(PENDING.length){ n.textContent=PENDING.length; n.classList.remove('hide'); } else n.classList.add('hide');
@@ -658,6 +694,16 @@ function doApprove(){
     if(isNetworkish(e)){ afterUnknownResult(); } else { toast(e.message); }
   });
 }
+function doRetryNotify(id){
+  toast('正在补发…');
+  api('/admin/requests/'+id+'/retry-notify',{method:'POST'}).then(function(j){
+    if(j.alreadySent){ toast('这条通知早就发过了'); }
+    else if(j.notifyState==='sent'){ toast('补发成功'); }
+    else { toast('这次仍未成功，稍后会自动重试（也可稍后再点）'); }
+    refreshAll();
+  }).catch(function(e){ toast(e.message); });
+}
+
 function askReject(id){
   var r=findReq(id); if(!r) return; CUR={id:id,who:r.customerName,type:r.type};
   q('rjBody').innerHTML='将驳回「<b style="color:var(--t1)">'+esc(r.customerName)+'</b>」的'
@@ -1393,7 +1439,8 @@ document.addEventListener('click', function(e){
   var kind = b.getAttribute('data-kind') || '';
   var note = b.getAttribute('data-note') || '';
   var text = b.getAttribute('data-text') || '';
-  if(act==='approve') askApprove(id);
+  if(act==='retryNotify') doRetryNotify(id);
+  else if(act==='approve') askApprove(id);
   else if(act==='reject') askReject(id);
   else if(act==='del') askDel(kind, id, name);
   else if(act==='edit') openEdit(id);

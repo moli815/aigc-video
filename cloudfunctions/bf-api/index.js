@@ -3234,6 +3234,33 @@ async function handleListRequests(req, res, staff, url) {
   sendJson(res, 200, { ok: true, list: r.data || [], page, hasMore: (r.data || []).length === 100 });
 }
 
+/** POST /admin/requests/:id/retry-notify —— 只针对通知，不碰审核结果 */
+async function handleRetryNotify(req, res, staff, id) {
+  const r = await db.collection(C.requests).doc(id).get();
+  const doc = (r.data || [])[0];
+  if (!doc) return sendError(res, 404, "NOT_FOUND", "申请不存在");
+  if (doc.status === "pending" || doc.status === "processing") {
+    return sendError(res, 409, "NOT_REVIEWED_YET", "该申请还没审核完成，暂无通知可补发");
+  }
+  if (String(doc.notifyState || "") === "sent") {
+    return sendJson(res, 200, { ok: true, alreadySent: true, notifyState: "sent" });
+  }
+  // 手动补发：把退避清零并放宽一次尝试额度，让它立刻进队列；不重置 attempts 以外的东西
+  await db.collection(C.requests).doc(id).update({
+    notifyNextAt: Date.now(),
+    notifyAttempts: Math.max(0, Number(doc.notifyAttempts || 0) - 1),
+    notifyManualAt: new Date(),
+    notifyManualBy: String((staff && staff.sub) || ""),
+  });
+  const run = await sweepNotifications(5);
+  await auditLog(staff, "request.notify.retry", {
+    targetType: "request", targetId: String(id).slice(0, 64), result: run,
+  });
+  const after = await db.collection(C.requests).doc(id).get();
+  const now = (after.data || [])[0] || {};
+  sendJson(res, 200, { ok: true, notifyState: now.notifyState || "", result: run });
+}
+
 async function handleRejectRequest(req, res, staff, id) {
   const { reason, operationId } = await readJsonBody(req);
   if (!reason || !String(reason).trim()) return sendError(res, 400, "BAD_REQUEST", "请填写驳回原因");
@@ -3286,6 +3313,13 @@ async function handleRejectRequest(req, res, staff, id) {
  *   · 审核成功后做一次落地检测：通知不在 → 标 pending，交给补发扫
  *   · 补发只重建通知，绝不重跑开通
  */
+/** 判断是否为"唯一键冲突"（CloudBase 可能是 DuplicateKey / -502001 / 文案里带 duplicate） */
+function isDuplicateKeyError(e) {
+  const msg = String((e && e.message) || e || "");
+  const code = String((e && (e.code || e.errCode)) || "");
+  return /duplicate|already exists|E11000/i.test(msg) || /-?502001/.test(code);
+}
+
 async function markNotify(id, patch) {
   try {
     await db.collection(C.requests).doc(id).update(patch);
@@ -3331,14 +3365,26 @@ function buildNoticeFromRequest(doc) {
 async function sweepNotifications(limit = 20) {
   return notifyRetry.sweep({
     listPending: async () => {
+      // 10-25 C2 边界修复：nextAt 必须参与查询，不能只在内存里判。
+      // 否则"退避中"的文档会占满 limit 窗口，把真正到点的挤出去 —— 退避就变成了"永远不补发"。
       const r = await db.collection(C.requests)
-        .where({ notifyState: db.command.in(["pending", "failed"]) })
+        .where({
+          notifyState: db.command.in(["pending", "failed"]),
+          notifyNextAt: db.command.lte(Date.now()),
+        })
         .orderBy("notifyNextAt", "asc").limit(limit).get();
       return r.data || [];
     },
     buildNotice: buildNoticeFromRequest,
     deliver: async (notice, id) => {
-      await db.collection(C.notifications).add(Object.assign({ _id: id }, notice));
+      try {
+        await db.collection(C.notifications).add(Object.assign({ _id: id }, notice));
+      } catch (e) {
+        // 稳定 _id 撞车 = 这条通知其实已经存在（并发补发/上次成功但回写失败）。
+        // 幂等语义下这属于"已投递"，绝不能当失败去重试——否则会白烧 5 次然后标 failed。
+        if (isDuplicateKeyError(e)) return;
+        throw e;
+      }
     },
     mark: markNotify,
   }, Date.now(), limit);
@@ -4588,6 +4634,10 @@ const server = http.createServer(async (req, res) => {
           const staff = await requireStaff(req, res, true); if (!staff) return;
           if (sub[2] === "approve" && m === "POST") return handleApproveRequest(req, res, staff, sub[1]);
           if (sub[2] === "reject" && m === "POST") return handleRejectRequest(req, res, staff, sub[1]);
+          if (sub[2] === "retry-notify" && m === "POST") {
+            const st = await requireStaff(req, res, true); if (!st) return;
+            return handleRetryNotify(req, res, st, sub[1]);
+          }
         }
       }
 
