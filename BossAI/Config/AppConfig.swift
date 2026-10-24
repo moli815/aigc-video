@@ -48,11 +48,20 @@ enum AppConfig {
 
     // MARK: 云端账号服务（会员制）
     /// 账号与 AI 中转服务的地址。App 只与它通信，模型 Key 全部由服务端持有。
-    static let hostedAPIBase = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api"
-
-    /// 10-24：备用入口（CloudBase 默认域名，同一环境）。主域名 DNS/网关故障时兜底。
-    /// 备用地址必须内置在包里——不能由故障中的主域名下发，否则等于没有。
-    static let hostedAPIBaseFallback = "https://xmy-test-d5g8c0xcifcefcfd5.service.tcloudbase.com/api"
+    ///
+    /// 10-24 配置治理（审计 P0-1 / P2-4）：
+    /// · 地址允许在构建时注入（Info.plist 键 `BossAIAPIBase`），发版切环境不需要改代码；
+    /// · 未注入时回落到内置默认值，保证离线/测试环境照样能跑；
+    /// · **不再保留“备用地址”常量**：它此前只有定义、没有任何调用点，属于「看起来有容灾、
+    ///   实际没有」的误导。真要自动切换，必须先解决写请求重放（重复扣费）问题，
+    ///   属于独立课题，不能用常量假装已具备。
+    static let hostedAPIBase: String = {
+        if let injected = Bundle.main.object(forInfoDictionaryKey: "BossAIAPIBase") as? String {
+            let trimmed = injected.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.hasPrefix("https://") { return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed }
+        }
+        return "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api"
+    }()
 
     // MARK: 内置 Key（仅本人使用，写死在包内；如泄露可在各自平台重置）
     // 以 Base64 存放，避免明文入库被扫描；运行时解码。

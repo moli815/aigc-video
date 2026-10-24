@@ -81,7 +81,12 @@ test("ROUTE-09 bf-api 配置项与管理端 schema 同步", () => {
   }
 });
 
-test("ROUTE-10 旧转发路径的 fast 参数同样受模型约束", () => {
-  assert.match(API, /seedream-5-0-pro\|seedream-4-0/,
-    "bf-api 旧 /api/image 路径仍是无条件传 fast");
+test("ROUTE-10 旧 /api/image 已彻底停用：只剩 503 门禁，不留旧转发实现", () => {
+  // 10-24：审计指出 `__legacyHandleImageDisabled` 是 472 行死代码，被误启用会绕过
+  // bf-image 的额度/路由/幂等边界。现在它已从部署包移除，契约改为「只剩门禁」。
+  assert.match(API, /async function handleImage\(req, res\)[\s\S]{0,1500}sendError\(res, 503, "PLEASE_UPDATE"\)/,
+    "旧 /api/image 没有固定的升级门禁");
+  assert.doesNotMatch(API, /__legacyHandleImageDisabled/, "旧图片实现仍在部署包里（可被误调用）");
+  assert.doesNotMatch(API, /seedream-5-0-pro\|seedream-4-0/, "旧转发实现的上游分支仍然存在");
+  assert.doesNotMatch(API, /IMG_DEBOUNCE/, "旧防抖缓存仍在（说明旧实现没删干净）");
 });

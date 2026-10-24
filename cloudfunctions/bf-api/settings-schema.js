@@ -50,6 +50,7 @@ const SECTION_OF = {
     "CAP_CHAT_ENABLED", "CAP_IMAGE_ENABLED", "CAP_POSTER_ENABLED",
     "RATE_CHAT_PER_HOUR", "RATE_IMAGE_PER_HOUR",
     "SERVICE_START_HOUR", "SERVICE_END_HOUR", "AUTO_APPROVE_HOURS",
+    "REVEAL_DELIVERY_PASSWORD",
   ],
   storage_credentials: [
     "CHAT_API_KEY", "IMAGE_API_KEY", "EMBED_API_KEY", "DEEPSEEK_SEARCH_KEY",
@@ -153,6 +154,8 @@ const META = {
   COS_REGION: { title: "对象存储地域", widget: "text", risk: "high" },
 
   // 版本
+  REVEAL_DELIVERY_PASSWORD: { title: "发放存档回显初始密码", widget: "text", risk: "high",
+    description: "1=列表里可以查看初始密码（当前流程依赖）；0=列表只显示「已设置」，需要凭据时走重置。置 0 后历史密文仍留在库里，但不再通过接口回显。" },
   MIN_APP_VERSION: { title: "最低可用版本", widget: "text", maxLength: 20, risk: "high", description: "低于该版本的客户端会被提示升级；留空=不限制。" },
   LATEST_APP_VERSION: { title: "最新版本号", widget: "text", maxLength: 20, risk: "low" },
   UPDATE_MESSAGE: { title: "升级提示文案", widget: "textarea", maxLength: 500, risk: "low", description: "可包含下载链接。" },

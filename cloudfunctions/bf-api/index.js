@@ -69,6 +69,7 @@ const C = {
   syncMeta: "bf_sync_meta",     // 每账号最后同步时间
   schedules: "bf_schedules",    // P0-19 定时任务（早报/周报），Pro 3 个 / Ultra 10 个
   customExperts: "bf_custom_experts",  // P0-19 自定义专家（Ultra）：知识库分块存储
+  audit: "bf_audit_logs",       // 10-24：敏感操作审计（查看密码/重置/停用/发放）
 
 };
 
@@ -154,6 +155,9 @@ const RUNTIME_SPECS = {
   IMGPROG_STAGE3:     { type: "str", label: "生图动效·阶段3文案（45秒后）", def: () => process.env.IMGPROG_STAGE3 || "正在绘制中..." },
   IMGPROG_ETA:        { type: "str", label: "生图动效·预计时长提示", def: () => process.env.IMGPROG_ETA || "AI 生成约需 1 分钟" },
   APP_IMAGE_VERIFY:   { type: "str", label: "App·生图后视觉验证（1=开 / 0=关）：不符自动重试一次", def: () => process.env.APP_IMAGE_VERIFY || "1" },
+  // 10-24 安全整改（审计 P1-10）：发放存档默认仍回显初始密码（当前管理流程依赖它），
+  // 置 0 后列表不再解密密码，只回 masked 标记 —— 不改代码即可收紧，属可回滚的止损开关。
+  REVEAL_DELIVERY_PASSWORD: { type: "str", label: "发放存档回显初始密码（1=回显 / 0=只显示已设置，仅能重置）· 安全止损开关", def: () => process.env.REVEAL_DELIVERY_PASSWORD || "1" },
   CAP_IMAGE_ENABLED:  { type: "str", label: "能力开关 · 图片生成（1=开 / 0=关）", def: () => process.env.CAP_IMAGE_ENABLED || "1" },
   CAP_POSTER_ENABLED: { type: "str", label: "能力开关 · 海报生成（1=开 / 0=关）", def: () => process.env.CAP_POSTER_ENABLED || "1" },
   RATE_IMAGE_PER_HOUR:{ type: "num", label: "防刷 · 单账号生图上限（张/小时，0=不限）", def: () => Number(process.env.RATE_IMAGE_PER_HOUR || 60) },
@@ -678,6 +682,33 @@ function sendError(res, code, error, message) {
   sendJson(res, code, pub);
 }
 
+/**
+ * 10-24 敏感操作审计（审计 P1-10）。
+ *
+ * 背景：管理端可以回显员工/会员的初始密码，这是一个**产品上有意保留**的能力（老板要发给客户）。
+ * 审计指出真正的问题是「谁、什么时候、看了谁的密码」完全没有留痕。
+ * 这里补最小必要审计：只记操作人、动作、对象、结果，**绝不记录密码明文或密文**。
+ *
+ * 设计边界：
+ *   · 审计写失败不影响业务（吞异常，但要留日志）；
+ *   · 不阻塞主流程 —— 需要强一致的场景（如批量导出）由调用方自行 await；
+ *   · 集合 bf_audit_logs 需预先存在（CloudBase 不会自动建集合），已在部署清单里列出。
+ */
+async function auditLog(actor, action, extra) {
+  try {
+    await db.collection(C.audit).add(Object.assign({
+      at: new Date(),
+      action: String(action || "").slice(0, 64),
+      actorId: String((actor && (actor.sub || actor.id)) || "").slice(0, 64),
+      actorName: String((actor && (actor.name || actor.displayName)) || "").slice(0, 64),
+      role: String((actor && (actor.role || actor.t)) || "").slice(0, 16),
+      requestId: currentRequestId(),
+    }, extra || {}));
+  } catch (e) {
+    logSafe({ tag: "audit_failed", fn: "bf-api", action, err: String((e && e.message) || e).slice(0, 120) });
+  }
+}
+
 function readJsonBody(req, maxBytes = 12 * 1024 * 1024) {
   return new Promise((resolve) => {
     // 10-24 修复（REQ-01）：按**字节**计数。旧实现用 string.length 比较 maxBytes，
@@ -884,8 +915,8 @@ async function requireStaff(req, res, needAdmin) {
   }
 }
 
-// P0-36 生图防抖缓存（实例内内存，60 秒窗口；多实例不共享，够用于"重试/连点"场景）
-const IMG_DEBOUNCE = new Map();
+// 说明：旧 P0-36 的生图防抖缓存随旧 /api/image 实现一并移除。
+// 现在 /api/image 只返回 503 升级门禁，防抖由 bf-image 的幂等台账（bf_image_jobs）承担。
 
 // P0-39 防刷频控（内存滑窗，1 小时窗口）：防止脚本狂刷掏空额度池或造成异常成本
 const RATE_WINDOW = new Map();   // accountId -> { img:[ts], chat:[ts] }
@@ -2994,478 +3025,6 @@ async function handleImage(req, res) {
   //   不恢复旧代理是**有意为之**：恢复会引入双份计费与超时，代价大于收益。
   return sendError(res, 503, "PLEASE_UPDATE");
 }
-/* eslint-disable */
-async function __legacyHandleImageDisabled(req, res) {
-  const tImg = Date.now();
-  const auth = await requireMember(req, res);
-  if (!auth) return;
-  await refreshRuntime();   // P0-24
-  const rl = rateLimited(auth.sub, "image");
-  if (rl) return sendError(res, 429, "RATE_LIMITED", rl);
-  if (!RUNTIME.IMAGE_API_KEY) return sendError(res, 503, "UPSTREAM_NOT_CONFIGURED", "服务暂未就绪");
-
-  const r = await db.collection(C.accounts).doc(auth.sub).get();
-  let account = (r.data || [])[0];
-  if (!account) return sendError(res, 404, "NOT_FOUND", "账号不存在");
-  // 密码版本校验：管理员重置密码后，旧会话立即失效
-  if ((account.pwv || 0) !== (auth.pwv || 0)) {
-    return sendError(res, 401, "UNAUTHORIZED", "登录状态已更新，请重新登录");
-  }
-  if ((Number(account.sv || 0)) !== (Number(auth.sv || 0))) {
-    return sendError(res, 401, "SESSION_REPLACED", "账号已在其他设备登录，当前设备已退出");
-  }
-  account = await ensurePeriod(account);
-
-  if (account.status !== "active") return sendError(res, 403, "ACCOUNT_SUSPENDED", "该账号已停用");
-  if (!account.expiresAt || new Date(account.expiresAt).getTime() < nowMs()) {
-    return sendError(res, 403, "MEMBERSHIP_EXPIRED", "会员已到期，请联系续费");
-  }
-  const blocked = limitBlocked(account);
-  if (blocked) {
-    return sendError(res, blocked.status, blocked.code, blocked.message);
-  }
-
-  const body = await readJsonBody(req);
-  const tim = { tRead: Date.now() };
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  if (!prompt) return sendError(res, 400, "BAD_REQUEST", "缺少 prompt");
-  if (prompt.length > 1500) return sendError(res, 400, "BAD_REQUEST", "描述过长，请精简到 1500 字以内");
-
-  // P0-63 参考图校验：image 只接受合法 data:image base64 或 http(s) URL——
-  // 无效值（模型/客户端传错）直接剔除而不是透传上游（此前会引发上游 502，实机自测抓到）。
-  if (body.image !== undefined) {
-    const rawRefs = Array.isArray(body.image) ? body.image : [body.image];
-    const validRefs = rawRefs.filter((r) => typeof r === "string" &&
-      (/^data:image\/(png|jpe?g|webp);base64,/i.test(r) || /^https?:\/\//i.test(r)));
-    if (validRefs.length > 0) { body.image = validRefs; }
-    else { delete body.image; }
-  }
-  // 10-19 紧急保护：带参考图的请求在当前云函数运行时会触发进程级崩溃（未定位根因），
-  // 先早退返回友好提示——避免一次编辑请求把整个实例打挂、连带影响其他用户。
-  // 10-19 验证结论：空包重建实例后「进程崩溃」已消失（脏实例假设成立）；但编辑请求目前会超时（>310s），
-  // 先恢复保护性拦截让用户快速失败（而不是干等 5 分钟），待尺寸/自检/fast 调优后再放开。
-  if (body.image && (Array.isArray(body.image) ? body.image.length > 0 : true)) {
-    return sendError(res, 503, "EDIT_TEMPORARILY_UNAVAILABLE", "图片编辑正在优化中，暂时请用文字描述生成新图");
-  }
-
-
-
-  // 客户端参数原样透传（size / response_format / watermark / image 参考图等），
-  // 只把模型换成服务端指定的型号。
-  // ── P0-6 作图混合路由：先判复杂度，再选模型 ──
-  const probeHit = (() => { try { const h = (req.headers || {}); return String(h["x-probe"] || h["X-Probe"] || ""); } catch (e) { return ""; } })();
-  const hasReference = Array.isArray(body.image) ? body.image.length > 0 : !!body.image;
-  // P0-36 生图防抖：60 秒内"同一账号 + 同提示词 + 同尺寸 + 同参考图"的重复请求直接回放上次结果。
-  // 场景：客户端超时重试、客户连点 —— 每次拦截省 ¥0.30 且响应更快，用户体验无差异（本来就该是同一张图）。
-  const debounceKey = crypto.createHash("sha1").update(
-    String(auth.sub) + "|" + String(prompt || "") + "|" + String(body.size || "") + "|" + String(body.image ? JSON.stringify(body.image).slice(0, 300) : "")
-  ).digest("hex").slice(0, 24);
-  const cached = IMG_DEBOUNCE.get(debounceKey);
-  if (cached && Date.now() - cached.ts < 60000) {
-    try { await db.collection(C.usage).add({ accountId: auth.sub, kind: "image", costCny: 0, ts: nowMs(), model: cached.model, tier: "image-debounce" }); } catch { /* 忽略 */ }
-    return sendJson(res, 200, { data: [{ url: cached.url }], cached: true });
-  }
-  const tierName = await resolveImageTier(prompt, hasReference);
-  const imageTier = UPSTREAM.image.tiers[tierName];
-  // P0-30 参考图编辑保真：i2i 是"重绘"而非局部修补，服务端统一注入保真约束，防止 logo/人脸/文字被改
-  // 10-19 豆包官方意见落地：编辑场景由服务端**强制五段式拼装**（不交给 LLM 自由扩写，
-  // 否则会稀释"保持原图"约束 → 整体重绘/低质）。【阴影】单独成段是"P 得假"最高杠杆的一句。
-  // 前置视觉分析（仅编辑场景；拿不到就退回通用常量）
-  let editVisionNote = "";
-  if (hasReference && refUrls[0] && String(RUNTIME.IMAGE_PREP_VISION || "0") !== "0") {
-    editVisionNote = await analyzeImageForEdit(refUrls[0]);
-  }
-  // 10-19 方案B 结论：**云函数出网代理对"带 body 的出网请求（火山生图 / COS PUT）"一律 reset**，
-  // 服务端上传通道不可行（@cloudbase uploadFile 传二进制崩、COS 手签 PUT 也被 reset 致进程退出）。
-  // 现状：编辑场景仍走 base64 直传（受出网限制）；根治需**方案A：App 直传（云函数只签临时凭证，轻请求）**。
-  if (probeHit === "1") return sendJson(res, 200, { probe: 1, msTotal: Date.now() - tImg, hasReference, imgKeys: Object.keys(body || {}) });
-  tim.tRefUrls = Date.now();
-  let refUrls = [];
-  if (hasReference) {
-    const refsIn = Array.isArray(body.image) ? body.image : [body.image];
-    for (const r of refsIn) if (typeof r === "string") refUrls.push(r);
-  }
-
-  if (probeHit === "2") return sendJson(res, 200, { probe: 2, refCount: refUrls.length, firstIsUrl: /^https?:/i.test(String(refUrls[0] || "")) });
-  // 10-19 模板路由（文档 §4）：按意图选不同约束段——"改风格"绝不能用"保持原图"模板（会自相矛盾）
-  const EDIT_INTENT = (() => {
-    const t = String(prompt || "");
-    if (/插画|动漫|油画|水彩|卡通|赛博|像素|厚涂|风格|画风|变成|转成|改成.{0,8}(风|风格)/i.test(t)) return "restyle";
-    if (/延展|扩展|扩图|往外|加宽|拉长|补全画布/i.test(t)) return "extend";
-    if (/logo|标志|水印|贴纸|标签|二维码/i.test(t)) return "layer";
-    if (/去掉|删除|移除|不要这个|清掉/i.test(t)) return "remove";
-    return "edit";   // 默认：局部添加/替换
-  })();
-  const visionLine = editVisionNote ? `原图实测：${editVisionNote}；` : "";
-  const EDIT_CONSTRAINTS = EDIT_INTENT === "restyle"
-    // 改风格：只动画风与色调，构图/主体不动（绝不能写"保持原图色调"——那是自相矛盾）
-    ? "\n\n【风格】只改变画风与色调，保持画面构图、主体位置、人物身份与所有文字完全不变；\n【排除】不要改变画面比例；不要增删任何元素；不要出现水印。"
-    : EDIT_INTENT === "layer"
-    // 图层叠加（logo/水印）：平面贴图，不要求"接触阴影"（那会让 logo 变立体/发光）
-    ? "\n\n【一致性】" + visionLine + "色温与整体色调必须与原图一致；\n【保持】原图所有内容完全保留，仅叠加指定元素，不遮挡主体与关键信息；\n【排除】不要给叠加元素添加立体阴影或发光；不要改变画面比例。"
-    : EDIT_INTENT === "remove"
-    ? "\n\n【一致性】" + visionLine + "移除后填补的背景必须与原图光照、纹理、色调自然衔接；\n【保持】除被移除对象外，原图所有内容完全保留；\n【排除】不要留下糊斑、残影或重复纹理；不要改变画面比例。"
-    : EDIT_INTENT === "extend"
-    ? "\n\n【延展】延展区域的内容必须与原图场景、风格、光照自然衔接；\n【排除】不要出现拼接缝；不要改变原图已有区域。"
-    // 默认局部编辑/添加：五段式（一致性/阴影/保持/排除）
-    : "\n\n【一致性】" + visionLine + "光照方向、色温、景深与透视必须与原图完全一致；\n【阴影】新增或替换的主体必须在地面或相邻物体上产生与现有光照方向一致的接触阴影，阴影软硬程度与原图匹配；\n【保持】原图的构图、人物、背景、色调、光线和所有文字必须完全不变，画面其余部分保持原样；\n【排除】禁止抠图感、悬浮、生硬粘贴；不要添加任何未提及的元素；不要出现水印或额外文字。";
-  let bboxHint = "";
-  if (hasReference && refUrls[0] && String(RUNTIME.IMAGE_PREP_VISION || "0") !== "0" && (EDIT_INTENT === "edit" || EDIT_INTENT === "layer") && !/<(?:bbox|point)>/i.test(String(prompt || ""))) {
-    bboxHint = await locateEditRegion(refUrls[0], prompt);
-  }
-  const finalPrompt = hasReference ? prompt + (bboxHint ? "\n" + bboxHint : "") + EDIT_CONSTRAINTS : prompt;
-  // P0-31 文字渲染规范：prompt 含文字/海报意图时注入（行业实证可大幅降低乱码率；根本方案见 /api/poster 图文分离）
-  const wantsText = /海报|招贴|banner|封面|宣传|标语|文字|标题|文案|[“"「][^”"」]{1,20}[”"」]/i.test(prompt);
-  const textPrompt = wantsText
-    ? finalPrompt + "\n\n【文字渲染规范·必须严格遵守】画面中出现的所有文字必须逐字精确、不得有错字或多余笔画：每个字符串都要用引号原样引用并明确位置与字号（例：顶部居中大标题“消防安全”），单块文字不超过 8 个字，字号要大而清晰，禁止生成小字、密集文本或任何用户未指定的文字。"
-    : finalPrompt;
-  // P0-61 生图 prompt 增强：短提示词（<120字）由轻量模型补全细节（开关 IMAGE_PROMPT_ENHANCE，默认开）
-  let enhancedPrompt = textPrompt;
-  // 10-19：编辑场景**禁止 LLM 扩写**（扩写会引入用户没要求的细节并稀释【保持】约束 → 低质重绘）；
-  // 仅文生图启用美学增强（那里扩写是加分项）。
-  if (!hasReference && String(RUNTIME.IMAGE_PROMPT_ENHANCE || "1") !== "0" && prompt.length < 120) {
-    enhancedPrompt = await enhanceImagePrompt(textPrompt);
-  }
-  // 编辑场景的超长 prompt 保护：官方建议 150-250 字，超过 600 字会分散模型注意力
-  if (hasReference && enhancedPrompt.length > 600) {
-    enhancedPrompt = enhancedPrompt.slice(0, 600) + "…";
-  }
-  tim.tPrompt = Date.now();
-  const upstreamBody = Object.assign({}, body, { prompt: enhancedPrompt, model: imageTier.model });
-  delete upstreamBody.__timing;   // 诊断参数绝不能透传给上游
-  // 10-19：参考图替换为公网 URL（火山按 URL 取图，请求体回到几十字节 → 不再被出网代理重置）
-  if (refUrls.length > 0) upstreamBody.image = refUrls;
-  // P0-31 尺寸不锁死（像素预算制，火山官方规则）：
-  //  · 宽高比任意（[1/16, 16]），只限制"总像素"来控成本档
-  //  · 预算上限默认 2,360,000（≈1.5K 档；官方 1.5K 与 1K 同价且画质更优）
-  //  · 超预算等比缩小、不足下限等比放大，比例与构图意图不变；传档位（1K/1.5K/2K）则直接透传由模型按 prompt 选尺寸
-  const MIN_PX = 921600;                                  // 官方下限（1280x720）
-  const maxPx = Math.max(MIN_PX, Number(RUNTIME.IMAGE_MAX_PIXELS || 2360000));
-  const sizeRaw = String(upstreamBody.size || "").trim();
-  // P0-56 比例精确化（用户要求：只产出常规比例，杜绝 Seedream 自选怪比例）：
-  // ① prompt 含明确比例（4:3/16:9/1:1/9:16 等）→ 精确映射标准尺寸；
-  // ② 无明确比例 → 横竖判断 → 4:3（横）/ 3:4（竖）标准尺寸；
-  // ③ App 显式传像素 WxH → 尊重并归一化到像素预算。
-  // 全部标准尺寸 ≤ 261 万像素 = Seedream 1.5K 计价档（¥0.30/张）。
-  // P0-58 比例策略 v2（用户要求）：①常规比例优先（1:1/4:3/3:4/16:9/9:16）②场景智能默认
-  // ③不锁死——用户明确要其他比例（如 5:4/2:1/21:9）时按像素预算精确计算，不拒绝。
-  // P0-66 尺寸改用 Seedream 官方 1K 映射表（官方文档：模型对标准映射值效果更优；1424x800 等为官方值）
-  /**
-   * 10-19 参考图转存（根治云函数出网代理 reset）：base64 → CloudBase 存储（**内网上传**，
-   * 不走 127.0.0.1:9000 出网代理）→ 临时 URL → 火山/视觉模型按 URL 读图。
-   * 失败返回 null（调用方回退原 base64）。
-   */
-  /**
-   * 10-19 参考图直传 COS（手写签名，零 SDK 依赖）：
-   * @cloudbase/node-sdk 的 uploadFile 传二进制会让函数进程崩溃（实测），改用 COS PUT Object：
-   * 用云函数自带的 SCF 临时密钥（TENCENTCLOUD_SECRETID/KEY/SESSIONTOKEN）签 q-sign，直传对象存储。
-   */
-  async function uploadRefForArk(dataURL) {
-    try {
-      const m = String(dataURL || "").match(/^data:image\/(\w+);base64,(.+)$/);
-      if (!m) return null;
-      const ext = m[1] === "jpeg" ? "jpg" : m[1];
-      const contentType = m[1] === "jpeg" ? "image/jpeg" : "image/" + m[1];
-      const buf = Buffer.from(m[2], "base64");
-      if (!buf.length || buf.length > 6 * 1024 * 1024) return null;
-      const secretId = process.env.TENCENTCLOUD_SECRETID;
-      const secretKey = process.env.TENCENTCLOUD_SECRETKEY;
-      const token = process.env.TENCENTCLOUD_SESSIONTOKEN;
-      if (!secretId || !secretKey) return null;
-      const bucket = RUNTIME.COS_BUCKET || "786d-xmy-test-d5g8c0xcifcefcfd5-1449098021";
-      const region = RUNTIME.COS_REGION || "ap-shanghai";
-      const key = "tmp/editref/" + Date.now() + "-" + Math.random().toString(36).slice(2, 8) + "." + ext;
-      const host = bucket + ".cos." + region + ".myqcloud.com";
-      const now = Math.floor(Date.now() / 1000);
-      const keyTime = now + ";" + (now + 3600);
-      const signKey = crypto.createHmac("sha1", secretKey).update(keyTime).digest("hex");
-      const httpString = "put\n/" + key + "\n\ncontent-type=" + encodeURIComponent(contentType) + "&host=" + host + "\n";
-      const stringToSign = "sha1\n" + keyTime + "\n" + crypto.createHash("sha1").update(httpString).digest("hex") + "\n";
-      const signature = crypto.createHmac("sha1", signKey).update(stringToSign).digest("hex");
-      const auth = "q-sign-algorithm=sha1&q-ak=" + secretId + "&q-sign-time=" + keyTime + "&q-key-time=" + keyTime +
-        "&q-header-list=content-type;host&q-url-param-list=&q-signature=" + signature;
-      const headers = { "Content-Type": contentType, Host: host, Authorization: auth };
-      if (token) headers["x-cos-security-token"] = token;
-      const r = await fetchWithTimeout("https://" + host + "/" + key, { method: "PUT", headers, body: buf }, 30000);
-      if (!r.ok) return null;
-      return "https://" + host + "/" + key;
-    } catch { return null; }
-  }
-
-  /**
-   * 10-19 前置视觉分析（交接单 6.2 的"睁眼"）：编辑前用视觉模型量出原图的光照/色温/景深，
-   * 注入【一致性】段——模型重绘时会"自己发明一套光影"，显式测量值是对抗它的唯一手段。
-   * 失败/超时返回空串（不阻断出图，退回通用常量）。
-   */
-  async function analyzeImageForEdit(dataURL) {
-    try {
-      const vb = {
-        model: RUNTIME.CHAT_MODEL_VISION || RUNTIME.CHAT_MODEL,
-        messages: [{ role: "user", content: [
-          { type: "text", text: "用一句话（不超过40字）描述这张图：①光照方向与色温 ②景深 ③画面留白区域。只输出描述，不要解释。" },
-          { type: "image_url", image_url: { url: dataURL } },
-        ] }],
-        max_tokens: 200,
-      };
-      setThinking(vb, "disabled");   // 关思考：快且省（火山默认思考会吃 token）
-      const r = await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}` },
-        body: JSON.stringify(vb),
-      }, 25000);
-      if (!r.ok) return "";
-      const j = await r.json().catch(() => null);
-      const txt = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
-      return String(txt).trim().replace(/\s+/g, " ").slice(0, 80);
-    } catch { return ""; }
-  }
-
-  /**
-   * 10-19 bbox 视觉定位（文档 §6.2）：DeepSeek 算坐标经常不准，让视觉模型先给出"应放置区域"，
-   * 再把 0-999 归一坐标注入 prompt。prompt 里已有 <bbox> 时不覆盖（模型给的优先）。
-   * 失败返回空串（不阻断）。
-   */
-  async function locateEditRegion(dataURL, userPrompt) {
-    try {
-      const vb = {
-        model: RUNTIME.CHAT_MODEL_VISION || RUNTIME.CHAT_MODEL,
-        messages: [{ role: "user", content: [
-          { type: "text", text: `用户想在这张图上：${String(userPrompt || "").slice(0, 120)}。请判断新元素应放在哪个区域，输出 JSON：{"bbox":[x1,y1,x2,y2]}，坐标为 0-999 归一化（左上 0,0 / 右下 999,999），只输出 JSON。` },
-          { type: "image_url", image_url: { url: dataURL } },
-        ] }],
-        max_tokens: 120,
-      };
-      setThinking(vb, "disabled");
-      const r = await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}` },
-        body: JSON.stringify(vb),
-      }, 25000);
-      if (!r.ok) return "";
-      const j = await r.json().catch(() => null);
-      const txt = String((j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
-      const m = txt.match(/\[\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\]/);
-      if (!m) return "";
-      const b = [m[1], m[2], m[3], m[4]].map((x) => Math.max(0, Math.min(999, Number(x))));
-      if (!(b[2] > b[0] && b[3] > b[1])) return "";
-      return `【建议区域（视觉定位）】把新增元素放在 <bbox>${b[0]} ${b[1]} ${b[2]} ${b[3]}</bbox> 区域；`;
-    } catch { return ""; }
-  }
-
-  /**
-   * 10-19 生成后自检（文档 §5）：让视觉模型按清单检查生成图，返回 { ok, issues }。
-   * 用**图片 URL**（火山返回的链接公网可达）而不是 base64——省掉一次大包传输。
-   * 任何失败都返回 ok:true（自检是增强不是依赖，绝不因质检挂了就出不了图）。
-   */
-  async function checkEditResult(imgUrl, userPrompt) {
-    try {
-      const vb = {
-        model: RUNTIME.CHAT_MODEL_VISION || RUNTIME.CHAT_MODEL,
-        messages: [{ role: "user", content: [
-          { type: "text", text: `你是图像质检员。用户要求：${String(userPrompt || "").slice(0, 180)}。检查这张生成图：①用户要求的元素是否确实出现在要求的位置 ②原图主体/文字/水印是否被意外改动 ③光影与色调是否自然一致。只输出 JSON：{"ok":true/false,"issues":"一句话问题描述，无问题填空字符串"}` },
-          { type: "image_url", image_url: { url: imgUrl } },
-        ] }],
-        max_tokens: 200,
-      };
-      setThinking(vb, "disabled");
-      const r = await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}` },
-        body: JSON.stringify(vb),
-      }, 30000);
-      if (!r.ok) return { ok: true, issues: "" };
-      const j = await r.json().catch(() => null);
-      const txt = String((j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
-      try {
-        const parsed = JSON.parse(txt.replace(/^```json|```$/g, "").trim());
-        return { ok: parsed.ok !== false, issues: String(parsed.issues || "").slice(0, 120) };
-      } catch {
-        const bad = /不通过|未通过|没有出现|缺少|被改动|不一致|fail/i.test(txt);
-        return { ok: !bad, issues: bad ? txt.slice(0, 120) : "" };
-      }
-    } catch { return { ok: true, issues: "" }; }
-  }
-
-  /** P0-79 解析 data:image base64 的像素宽高（PNG/JPEG；失败返回 null）——编辑场景比例继承用 */
-  const parseImageRatio = (dataURL) => {
-    try {
-      if (typeof dataURL !== "string") return null;
-      const comma = dataURL.indexOf(",");
-      if (comma < 0) return null;
-      const buf = Buffer.from(dataURL.slice(comma + 1), "base64");
-      if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) {
-        const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
-        if (w > 0 && h > 0) return { w, h };
-      }
-      if (buf.length > 4 && buf[0] === 0xFF && buf[1] === 0xD8) {
-        let i = 2;
-        while (i + 9 < buf.length) {
-          if (buf[i] !== 0xFF) { i += 1; continue; }
-          const marker = buf[i + 1];
-          if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
-            const h = buf.readUInt16BE(i + 5), w = buf.readUInt16BE(i + 7);
-            if (w > 0 && h > 0) return { w, h };
-          }
-          const segLen = buf.readUInt16BE(i + 2);
-          if (segLen <= 0) break;
-          i += 2 + segLen;
-        }
-      }
-      return null;
-    } catch { return null; }
-  };
-  // 优化（官方文档）：1.5K 与 1K 同价且效果更优 —— 全面升级到官方 1.5K 映射表（清晰度 +50%，价格不变）
-  const RATIOS = { "1:1":[1536,1536], "4:3":[1792,1344], "3:4":[1344,1792], "16:9":[2048,1152], "9:16":[1152,2048], "3:2":[1872,1248], "2:3":[1248,1872], "5:4":[1680,1344], "4:5":[1344,1680], "2:1":[2352,1176], "21:9":[2352,1008] };
-  // 场景 → 比例（命中即用；顺序敏感：先具体后宽泛）
-  const SCENE_RATIOS = [
-    { re: /海报|宣传|招贴|立牌|展板|易拉宝|单页/, ratio: "3:4" },
-    { re: /PPT|幻灯片|演示|横版|汇报|封面页|banner|横幅|宽屏/i, ratio: "16:9" },
-    { re: /头像|图标|徽标|方图|正方形|logo|icon/i, ratio: "1:1" },
-    { re: /朋友圈|微博|小红书|配图|卡片|社交/, ratio: "4:3" },
-    { re: /手机壁纸|竖屏|长图|开屏|竖版|故事/i, ratio: "9:16" },
-  ];
-  const imgProv = String(RUNTIME.IMAGE_PROVIDER || "ark").toLowerCase();
-  const sep = imgProv === "dashscope" ? "*" : "x";
-  // P0-81 比例正则健壮性：①要求前有边界（行首/空白/标点），避免把编号"12345："误判为"45:4"；
-  // ②只采信合理范围（1:8 ~ 8:1）内的比例，超出视为普通文字（此前误匹配会生成 3:1 这种畸形画幅）
-  let rm = prompt.match(/(?<![0-9])(\d{1,2})\s*[:：]\s*(\d{1,2})(?![0-9])/);
-  // 只采信标准比例表（RATIOS）：①避免把编号"12345："误判为"45:4"（数字前有数字→已被后视排除）
-  // ②避免把时间"20:30"误判为比例（非标准比例→忽略，走场景/兜底）——两条共同防止畸形画幅
-  if (rm && !RATIOS[`${rm[1]}:${rm[2]}`]) { rm = null; }
-  const pxm0 = sizeRaw.match(/^(\d{2,5})\s*[xX×\*]\s*(\d{2,5})$/);
-  let finalSize = "";
-  if (rm) {
-    // ① 用户明确说了比例：标准表命中用表；非标准（如 5:4 未列）按预算计算（不锁死）
-    const key = `${rm[1]}:${rm[2]}`;
-    if (RATIOS[key]) { const wh = RATIOS[key]; finalSize = `${wh[0]}${sep}${wh[1]}`; }
-    else {
-      const rw = Number(rm[1]), rh = Number(rm[2]);
-      if (rw > 0 && rh > 0 && rw / rh >= 1 / 16 && rw / rh <= 16) {
-        const targetPx = Math.min(maxPx, 1200000);   // 1.5K 计价档内
-        const k = Math.sqrt(targetPx / (rw * rh));
-        let w = Math.max(64, Math.round((rw * k) / 16) * 16), h = Math.max(64, Math.round((rh * k) / 16) * 16);
-        if (w * h < MIN_PX) { const k2 = Math.sqrt(MIN_PX / (w * h)); w = Math.ceil((w * k2) / 16) * 16; h = Math.ceil((h * k2) / 16) * 16; }
-        finalSize = `${w}${sep}${h}`;
-      }
-    }
-  }
-  if (!finalSize) {
-    // P0-79 编辑场景比例继承（最高优先级·在场景映射之前）：请求带参考图时，比例跟随参考图——
-    // 根治「给 4:3 的图加 logo 被重生成成 1:1」（"logo"一词被下方场景映射误判为作品类型 1:1）。
-    const refs0 = Array.isArray(payload.image) ? payload.image : (payload.image ? [payload.image] : []);
-    const refWH = refs0.length > 0 ? parseImageRatio(refs0[0]) : null;
-    if (refWH) {
-      const targetPx = Math.min(maxPx, 1200000);
-      const k = Math.sqrt(targetPx / (refWH.w * refWH.h));
-      let w = Math.max(64, Math.round((refWH.w * k) / 16) * 16);
-      let h = Math.max(64, Math.round((refWH.h * k) / 16) * 16);
-      if (w * h < MIN_PX) { const k2 = Math.sqrt(MIN_PX / (w * h)); w = Math.ceil((w * k2) / 16) * 16; h = Math.ceil((h * k2) / 16) * 16; }
-      finalSize = `${w}${sep}${h}`;
-    } else {
-      const scene = SCENE_RATIOS.find((x) => x.re.test(prompt));
-      const wh = RATIOS[scene ? scene.ratio : "3:4"];   // ② 场景映射；③ 兜底 3:4（无参考图时）
-      finalSize = `${wh[0]}${sep}${wh[1]}`;
-    }
-  }
-  // App 显式传像素 WxH 且 prompt 无比例表达 → 尊重客户端并归一化
-  if (!rm && pxm0) {
-    let w = Number(pxm0[1]), h = Number(pxm0[2]);
-    const ratio = w / h;
-    if (!Number.isFinite(ratio) || ratio < 1 / 16 || ratio > 16) { w = 1024; h = 1024; }
-    let px = w * h;
-    if (px > maxPx) { const k = Math.sqrt(maxPx / px); w = Math.floor(w * k); h = Math.floor(h * k); }
-    else if (px < MIN_PX) { const k = Math.sqrt(MIN_PX / px); w = Math.ceil(w * k); h = Math.ceil(h * k); }
-    finalSize = `${w}${sep}${h}`;
-  }
-  upstreamBody.size = finalSize;
-  delete upstreamBody.api_key;
-
-  if (probeHit === "3") return sendJson(res, 200, { probe: 3, finalPromptLen: String(upstreamBody.prompt || "").length, hasImage: !!upstreamBody.image, imgArr: Array.isArray(upstreamBody.image) ? upstreamBody.image.length : 0 });
-  tim.tBeforeCall = Date.now();
-  let out;
-  try {
-    const directPayload = {
-      model: upstreamBody.model || RUNTIME.IMAGE_MODEL || "doubao-seedream-5-0-pro-260628",
-      prompt: String(upstreamBody.prompt || ""),
-      size: String(upstreamBody.size || "2K"),
-      response_format: "url",
-      watermark: false,
-    };
-    if (upstreamBody.image) directPayload.image = upstreamBody.image;
-    // 10-24 参数兼容：只有 Pro / 4.0 支持 fast，Flash / Lite 只支持 standard
-    if (String(RUNTIME.IMAGE_FAST_MODE || "1") !== "0" && !directPayload.image
-        && /seedream-5-0-pro|seedream-4-0/.test(String(directPayload.model || ""))) {
-      directPayload.optimize_prompt_options = { mode: "fast" };
-    }
-    // 10-19 验证：/api/image 转发到 bf-image 新函数（新路由 /img/image，绕开本路径的异常策略）
-    const fr = await fetchWithTimeout(`https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/img/image`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(directPayload),
-    }, 280000);
-    const fj = await fr.json().catch(() => null);
-    out = (fj && fj.ok && fj.url) ? { ok: true, status: 200, url: fj.url } : { ok: false, status: (fj && fj.code) || 502, url: "" };
-  } catch (e) {
-    out = { ok: false, status: 504, url: "" };
-  }
-  if (false) {
-    return sendError(res, e && e.name === "AbortError" ? 504 : 502,
-      e && e.name === "AbortError" ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR",
-      e && e.name === "AbortError" ? "上游响应超时，请重试" : "上游服务连接失败");
-  }
-  tim.tAfterCall = Date.now();
-  if (body.__timing) {
-    return sendJson(res, 200, {
-      timing: true,
-      ms: {
-        readBody: tim.tRefUrls - tim.tRead,
-        refUrls: tim.tPrompt - tim.tRefUrls,
-        promptBuild: tim.tBeforeCall - tim.tPrompt,
-        callUpstream: tim.tAfterCall - tim.tBeforeCall,
-        total: Date.now() - tim.tRead,
-      },
-      ok: out.ok, status: out.status,
-    });
-  }
-  if (!out.ok) {
-    // 优化：友好文案（不暴露 430/439 等天书）；瞬时限流提示"稍等再试"
-    const busy = [429, 430, 439, 503, 504].includes(out.status);
-    return sendError(res, 502, "UPSTREAM_ERROR", busy ? "服务繁忙，请稍等片刻再试" : "图片生成服务暂时不可用，请稍后重试");
-  }
-  // 10-19 自检闭环（文档 §5）：编辑场景先质检再交付；不通过带具体问题重试**一次**（最多 2 次生成）
-  if (hasReference && String(RUNTIME.IMAGE_SELF_CHECK || "1") !== "0") {
-    const check = await checkEditResult(out.url, prompt);
-    if (!check.ok && check.issues) {
-      try {
-        const retryBody = Object.assign({}, upstreamBody, {
-          prompt: String(upstreamBody.prompt || "") + "\n\n【上一次生成被发现的问题】" + check.issues + "。这次务必修正该问题，其余要求保持不变。",
-        });
-        const retry = await callImageUpstream(retryBody);
-        if (retry.ok && retry.url) out = retry;   // 用重试结果交付
-      } catch { /* 重试失败：保留第一次结果（不阻断） */ }
-    }
-  }
-  const data = { created: Math.floor(Date.now() / 1000), data: [{ url: out.url }] };
-
-  // P0-30/P0-31 按尺寸分档计价：以最终请求的"总像素"判档，1.5K 档（≤阈值）按标准价、2K 档按 2K 价
-  const sizeStr = String(upstreamBody.size || "");
-  const pxm = sizeStr.match(/^(\d{2,5})x(\d{2,5})$/);
-  const sizePx = pxm ? Number(pxm[1]) * Number(pxm[2]) : 2360000;   // 档位值按 1.5K 估算
-  const is2K = sizePx > Number(RUNTIME.IMAGE_2K_PIXELS || 3000000);
-  const unitPrice = is2K ? RUNTIME.IMAGE_PRICE_2K : imageTier.price;
-  try { await addImageCost(auth.sub, unitPrice, { model: imageTier.model, tier: "image-" + imageTier.name, size: sizeStr }); } catch { /* ignore */ }
-  // P0-36 记录防抖缓存（60 秒内同参重复请求直接回放，省一次上游费用）
-  try {
-    const u = data.data[0] && (data.data[0].url || (data.data[0].b64_json ? "data:image/png;base64," + data.data[0].b64_json : ""));
-    if (u) {
-      if (IMG_DEBOUNCE.size > 300) IMG_DEBOUNCE.clear();   // 简单上限保护，防内存增长
-      IMG_DEBOUNCE.set(debounceKey, { url: u, ts: Date.now(), model: imageTier.model });
-    }
-  } catch { /* 忽略 */ }
-  // 直接回 OpenAI 形状 { created, data: [...] } —— App 端按 data[0] 解析，不能包一层
-  sendJson(res, 200, data);
-}
-
 // ───────────────────────── 业务：管理端 ─────────────────────────
 
 /**
@@ -4345,7 +3904,7 @@ async function handleRenewAccount(req, res, id) {
   sendJson(res, 200, { ok: true, from: account.expiresAt, to });
 }
 
-async function handleSuspendAccount(req, res, id) {
+async function handleSuspendAccount(req, res, staff, id) {
   const { suspend } = await readJsonBody(req);
   const r = await db.collection(C.accounts).doc(id).get();
   const account = (r.data || [])[0];
@@ -4355,7 +3914,7 @@ async function handleSuspendAccount(req, res, id) {
   sendJson(res, 200, { ok: true, status: next });
 }
 
-async function handleResetPassword(req, res, id) {
+async function handleResetPassword(req, res, staff, id) {
   const r = await db.collection(C.accounts).doc(id).get();
   const account = (r.data || [])[0];
   if (!account) return sendError(res, 404, "NOT_FOUND", "账号不存在");
@@ -4380,17 +3939,24 @@ async function handleResetPassword(req, res, id) {
 async function handleListDeliveries(req, res, staff) {
   const q = staff.role === "admin" ? {} : { staffId: staff.sub };
   const r = await db.collection(C.deliveries).where(q).orderBy("chargedAt", "desc").limit(200).get();
+  // 10-24 审计 P1-10：一次列表就会解密 200 条初始密码。开关置 0 后只回「已设置」标记，
+  // 需要凭据时走重置；默认保持 1 以不打断现有发放流程，但每次访问都留审计。
+  const reveal = String(RUNTIME.REVEAL_DELIVERY_PASSWORD || "1") !== "0";
   const list = (r.data || []).map((d) => ({
     id: d._id,
     chargedAt: d.chargedAt,
     username: d.username,
-    password: decryptPwd(d.passwordCipher),
+    password: reveal ? decryptPwd(d.passwordCipher) : "",
+    passwordMasked: !reveal && !!d.passwordCipher,
     issuedAt: d.issuedAt,
     note: d.note || "",
     staffName: d.staffName || "",
     autoApproved: !!d.autoApproved,
   }));
-  sendJson(res, 200, { ok: true, list });
+  await auditLog(staff, reveal ? "deliveries.list.reveal" : "deliveries.list.masked", {
+    targetType: "deliveries", count: list.length,
+  });
+  sendJson(res, 200, { ok: true, list, revealPassword: reveal });
 }
 
 /** 只允许改备注 —— 其余字段一律忽略 */
@@ -4486,7 +4052,7 @@ async function handleListStaff(req, res) {
   sendJson(res, 200, { ok: true, list });
 }
 
-async function handleCreateStaff(req, res) {
+async function handleCreateStaff(req, res, staff) {
   const { displayName, username, password } = await readJsonBody(req);
   if (!displayName) return sendError(res, 400, "BAD_REQUEST", "请填写员工姓名");
   // P0-9：支持自定义登录名与密码（留空则自动生成）
@@ -4501,20 +4067,26 @@ async function handleCreateStaff(req, res) {
     displayName: String(displayName).trim(), role: "staff", status: "active",
     createdAt: new Date(),
   });
+  await auditLog(staff, "staff.create", {
+    targetType: "staff", targetId: String(uname).slice(0, 64), targetRole: "staff",
+  });
   sendJson(res, 200, { ok: true, username: uname, password: pwd });
 }
 
 /** P0-9：管理员查看员工当前密码（创建/重置时以密文留存） */
-async function handleStaffPassword(req, res, id) {
+async function handleStaffPassword(req, res, staff, id) {
   const r = await db.collection(C.staff).doc(id).get();
   const s = (r.data || [])[0];
   if (!s) return sendError(res, 404, "NOT_FOUND", "员工不存在");
   if (!s.passwordCipher) return sendError(res, 404, "NO_CIPHER", "该员工创建于旧版本未留存密码，请先重置密码");
+  await auditLog(staff, "staff.password.view", {
+    targetType: "staff", targetId: String(id).slice(0, 64), targetName: s.displayName || s.username || "",
+  });
   sendJson(res, 200, { ok: true, username: s.username, password: decryptPwd(s.passwordCipher) });
 }
 
 /** P0-9：管理员重置员工密码（可自定义，留空随机生成），重置后可随时查看 */
-async function handleResetStaffPassword(req, res, id) {
+async function handleResetStaffPassword(req, res, staff, id) {
   const { password } = await readJsonBody(req);
   const r = await db.collection(C.staff).doc(id).get();
   const s = (r.data || [])[0];
@@ -4525,15 +4097,21 @@ async function handleResetStaffPassword(req, res, id) {
   await db.collection(C.staff).doc(id).update({
     passwordHash: hashPassword(pwd), passwordCipher: encryptPwd(pwd),
   });
+  await auditLog(staff, "staff.password.reset", {
+    targetType: "staff", targetId: String(id).slice(0, 64), targetName: s.displayName || s.username || "",
+  });
   sendJson(res, 200, { ok: true, username: s.username, password: pwd });
 }
 
-async function handleDisableStaff(req, res, id) {
+async function handleDisableStaff(req, res, staff, id) {
   const r = await db.collection(C.staff).doc(id).get();
   const s = (r.data || [])[0];
   if (!s) return sendError(res, 404, "NOT_FOUND", "员工不存在");
   if (s.role === "admin") return sendError(res, 403, "FORBIDDEN", "不能禁用管理员账号");
   await db.collection(C.staff).doc(id).update({ status: "disabled" });
+  await auditLog(staff, "staff.disable", {
+    targetType: "staff", targetId: String(id).slice(0, 64), targetName: s.displayName || s.username || "",
+  });
   sendJson(res, 200, { ok: true });
 }
 
@@ -4832,7 +4410,7 @@ const server = http.createServer(async (req, res) => {
           // P0-9：停用/启用放开到员工级（员工也能临时停用/恢复客户账号）
           if (sub[2] === "suspend" && m === "POST") {
             const st = await requireStaff(req, res, false); if (!st) return;
-            return handleSuspendAccount(req, res, sub[1]);
+            return handleSuspendAccount(req, res, st, sub[1]);
           }
           // P0-21：管理员直接编辑账号信息（档位/到期/姓名/电话等）
           if (sub[2] === "update" && m === "POST") {
@@ -4842,7 +4420,7 @@ const server = http.createServer(async (req, res) => {
           // 其余账户操作仅管理员
           const staff = await requireStaff(req, res, true); if (!staff) return;
           if (sub[2] === "renew" && m === "POST") return handleRenewAccount(req, res, sub[1]);
-          if (sub[2] === "reset-password" && m === "POST") return handleResetPassword(req, res, sub[1]);
+          if (sub[2] === "reset-password" && m === "POST") return handleResetPassword(req, res, staff, sub[1]);
         }
       }
 
@@ -4933,7 +4511,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (sub.length === 1 && m === "POST") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
-          return handleCreateStaff(req, res);
+          return handleCreateStaff(req, res, staff);
         }
         if (sub.length === 2 && m === "DELETE") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
@@ -4941,16 +4519,16 @@ const server = http.createServer(async (req, res) => {
         }
         if (sub.length === 3 && sub[2] === "disable" && m === "POST") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
-          return handleDisableStaff(req, res, sub[1]);
+          return handleDisableStaff(req, res, staff, sub[1]);
         }
         // P0-9：管理员查看/重置员工密码
         if (sub.length === 3 && sub[2] === "password" && m === "GET") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
-          return handleStaffPassword(req, res, sub[1]);
+          return handleStaffPassword(req, res, staff, sub[1]);
         }
         if (sub.length === 3 && sub[2] === "reset-password" && m === "POST") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
-          return handleResetStaffPassword(req, res, sub[1]);
+          return handleResetStaffPassword(req, res, staff, sub[1]);
         }
       }
     }

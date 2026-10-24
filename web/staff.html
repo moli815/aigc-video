@@ -286,7 +286,18 @@
 
 <script>
 /* ══════════════ 配置 ══════════════ */
-var API = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
+// 10-24 配置治理（审计 P0-1 / P1-9）：API 地址不再只靠一处硬编码。
+// 解析优先级：① 部署时注入的 window.BOSSAI_API_BASE → ② 与本页同域的 /api（页面托管在同一网关时）
+//           → ③ 内置默认值（本地 file:// 打开或独立静态托管时兜底）。
+// 这样切换到正式环境只需在注入脚本/部署配置里改一处，不用同时改三个页面。
+var API = (function () {
+  var injected = (typeof window !== "undefined" && window.BOSSAI_API_BASE) ? String(window.BOSSAI_API_BASE) : "";
+  if (injected) return injected.replace(/\/+$/, "");
+  var isHttp = location.protocol === "https:" || location.protocol === "http:";
+  var sameGateway = isHttp && /\.tcloudbase\.com$/.test(location.hostname);
+  if (sameGateway) return location.origin + "/api";
+  return "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
+})();
 
 /* ══════════════ 基础 ══════════════ */
 var TOKEN = null, ME = null, pending = { type: 'create', accountId: null, who: '' };

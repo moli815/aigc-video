@@ -1,0 +1,45 @@
+{
+  "$schema": "https://framework-1258016615.tcloudbaseapp.com/schema/latest.json",
+  "version": "2.0",
+  "envId": "xmy-test-d5g8c0xcifcefcfd5",
+  "functionRoot": "./cloudfunctions",
+  "functions": [
+    {
+      "name": "bf-api",
+      "type": "HTTP",
+      "runtime": "Nodejs18.15",
+      "timeout": 300,
+      "memorySize": 256,
+      "installDependency": true,
+      "handler": "",
+      "ignore": ["node_modules", "node_modules/**/*", "*.bak*", ".DS_Store"]
+    },
+    {
+      "name": "bf-image",
+      "type": "HTTP",
+      "runtime": "Nodejs18.15",
+      "timeout": 300,
+      "memorySize": 256,
+      "installDependency": true,
+      "handler": "",
+      "ignore": ["node_modules", "node_modules/**/*", "*.bak*", ".DS_Store"]
+    },
+    {
+      "name": "bf-jobs",
+      "type": "Event",
+      "runtime": "Nodejs18.15",
+      "timeout": 120,
+      "memorySize": 256,
+      "installDependency": true,
+      "handler": "index.main",
+      "ignore": ["node_modules", "node_modules/**/*", "*.bak*", ".DS_Store"],
+      "triggers": [
+        {
+          "name": "daily-cleanup",
+          "type": "timer",
+          "config": "0 30 3 * * * *"
+        }
+      ]
+    }
+  ]
+}
