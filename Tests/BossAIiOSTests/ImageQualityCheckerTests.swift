@@ -46,9 +46,12 @@ final class ImageQualityCheckerTests: XCTestCase {
         XCTAssertTrue(report.issues.contains(.unexpectedRatio), "要 3:4 给了 1:2 必须拦")
     }
 
-    func testAspectValueParsing() {
-        XCTAssertEqual(ImageQualityChecker.aspectValue("3:4"), 0.75, accuracy: 0.0001)
-        XCTAssertEqual(ImageQualityChecker.aspectValue("16：9"), 16.0 / 9.0, accuracy: 0.0001)
+    func testAspectValueParsing() throws {
+        // aspectValue 返回 Double?，带 accuracy 的断言必须先解包（CI 上一版就死在这里）
+        let square = try XCTUnwrap(ImageQualityChecker.aspectValue("3:4"))
+        XCTAssertEqual(square, 0.75, accuracy: 0.0001)
+        let wide = try XCTUnwrap(ImageQualityChecker.aspectValue("16：9"))
+        XCTAssertEqual(wide, 16.0 / 9.0, accuracy: 0.0001)
         XCTAssertNil(ImageQualityChecker.aspectValue("随便"))
     }
 
