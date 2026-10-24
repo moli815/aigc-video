@@ -75,6 +75,8 @@ const C = {
 
 // P0-24 专家目录内置默认（云端可覆盖；App 端也会拉取云端版本）
 const EXPERTS_SEED = require("./experts.json");
+// 10-25：成本看板的纯聚合层（可单测）
+const { aggregateCostRows: buildCostReport } = require("./cost-report");
 // 10-23 配置中心：分组/标题/控件/范围/校验统一由 settings-schema 提供，前端只渲染
 const { SECTIONS, describeSettings, validateValue } = require("./settings-schema");
 // 内置目录升级时 +1；DB 版本落后会自动用种子覆盖（v3：新增 short_video 短视频脚本专家）
@@ -3827,63 +3829,65 @@ async function handleUpdateExperts(req, res) {
 async function handleCostReport(req, res, url) {
   await refreshRuntime();
   const days = Math.min(90, Math.max(1, Number((url && url.searchParams.get("days")) || 7)));
-  const startMs = nowMs() - days * 86400000;
-  let rows = [];
-  try {
-    for (let page = 0; page < 5; page++) {
-      const r = await db.collection(C.usage).where({ ts: db.command.gte(startMs) })
-        .orderBy("ts", "desc").skip(page * 1000).limit(1000).get();
-      const batch = r.data || [];
-      rows = rows.concat(batch);
-      if (batch.length < 1000) break;
-    }
-  } catch { /* 查询失败返回空报表 */ }
+  const endMs = nowMs();
+  const startMs = endMs - days * 86400000;
+  const t0 = Date.now();
 
-  const byDay = {}, byKind = {}, byTier = {}, byAccount = {}, byModel = {};
-  let total = 0;
-  for (const r of rows) {
-    const c = Number(r.costCny) || 0;
-    total += c;
-    const w = cnWall(Number(r.ts) || Date.now());
-    const dk = `${w.getUTCMonth() + 1}/${w.getUTCDate()}`;
-    byDay[dk] = (byDay[dk] || 0) + c;
-    const kind = r.kind === "image" ? "image" : "chat";
-    byKind[kind] = (byKind[kind] || 0) + c;
-    if (r.tier) byTier[r.tier] = (byTier[r.tier] || 0) + c;
-    if (r.model) byModel[r.model] = (byModel[r.model] || 0) + c;
-    if (r.accountId) byAccount[r.accountId] = (byAccount[r.accountId] || 0) + c;
+  // 10-25 P0：查询失败**不能**伪装成"零成本"。
+  // 旧实现 `catch {}` 吞异常后照常返回 ok:true + 全 0，运营看到的是"这个月没花钱"，
+  // 实际可能是数据库挂了——这比报错危险得多。
+  const PAGE = 1000;
+  const MAX_ROWS = 20000;          // 安全上限：超过就标记 truncated，绝不假装完整
+  let rows = [];
+  let truncated = false;
+  try {
+    for (let page = 0; page * PAGE < MAX_ROWS; page++) {
+      const r = await db.collection(C.usage)
+        .where({ ts: db.command.gte(startMs) })
+        .orderBy("ts", "desc").skip(page * PAGE).limit(PAGE).get();
+      const batch = (r && r.data) || [];
+      rows = rows.concat(batch);
+      if (batch.length < PAGE) break;
+      if (rows.length >= MAX_ROWS) { truncated = true; break; }
+    }
+  } catch (e) {
+    logSafe({ ts: new Date().toISOString(), fn: "bf-api", tag: "cost_report_failed",
+              err: String((e && e.message) || e).slice(0, 160) });
+    return sendError(res, 500, "COST_REPORT_QUERY_FAILED", "成本数据读取失败，请稍后重试（这不是零成本）");
   }
 
-  // TOP 客户（附显示名；最多查 10 个账号）
-  const topIds = Object.entries(byAccount).sort((a, b) => b[1] - a[1]).slice(0, 10);
-  const topAccounts = [];
-  for (const [id, cost] of topIds) {
-    let name = id.slice(0, 8);
+  const report = buildCostReport(rows, { startMs, endMs, truncated, queryMs: Date.now() - t0 });
+
+  // TOP 客户补显示名（拿不到就用 id 前缀，不编名字）
+  const accounts = [];
+  for (const item of report.topAccounts) {
+    let name = item.accountId.slice(0, 8);
     try {
-      const ar = await db.collection(C.accounts).doc(id).get();
+      const ar = await db.collection(C.accounts).doc(item.accountId).get();
       const acc = (ar.data || [])[0];
       if (acc) name = acc.displayName || name;
-    } catch { /* 忽略 */ }
-    topAccounts.push({ name, cost: Number(cost.toFixed(4)) });
+    } catch (e) { /* 单个名字取不到不影响金额 */ }
+    accounts.push({ name, accountId: item.accountId, cost: item.cost });
   }
 
-  sendJson(res, 200, {
-    ok: true, days, calls: rows.length,
-    totalCny: Number(total.toFixed(4)),
-    avgCnyPerCall: rows.length ? Number((total / rows.length).toFixed(5)) : 0,
-    byKind: Object.fromEntries(Object.entries(byKind).map(([k, v]) => [k, Number(v.toFixed(4))])),
-    byDay: Object.entries(byDay).map(([date, cost]) => ({ date, cost: Number(cost.toFixed(4)) })),
-    byTier: Object.fromEntries(Object.entries(byTier).map(([k, v]) => [k, Number(v.toFixed(4))])),
-    byModel: Object.fromEntries(Object.entries(byModel).map(([k, v]) => [k, Number(v.toFixed(4))])),
-    topAccounts,
-    // 当前单价快照（便于对照看板解释成本结构）
+  sendJson(res, 200, Object.assign({}, report, {
+    ok: true,
+    days,
+    // 兼容旧字段：calls 原本是账务行数，这里保留但显式标注语义，避免再次误读
+    calls: report.ledgerEvents,
+    callsSemantics: "ledger_events",
+    avgCnyPerCall: report.avgCnyPerLedgerEvent,
+    topAccounts: accounts,
+    dataStatus: truncated ? "truncated" : "complete",
+    generatedAt: new Date().toISOString(),
+    // 当前单价快照只解释"现在"的价格，不代表历史成本（历史以每条事件的 costCny 为准）
     priceSnapshot: {
       chatStandard: [RUNTIME.CHAT_PRICE_STANDARD_IN, RUNTIME.CHAT_PRICE_STANDARD_OUT],
       chatHigh: [RUNTIME.CHAT_PRICE_HIGH_IN, RUNTIME.CHAT_PRICE_HIGH_OUT],
       chatUltra: [RUNTIME.CHAT_PRICE_ULTRA_IN, RUNTIME.CHAT_PRICE_ULTRA_OUT],
       image: RUNTIME.IMAGE_PRICE, image2K: RUNTIME.IMAGE_PRICE_2K,
     },
-  });
+  }));
 }
 
 async function handleRenewAccount(req, res, id) {
