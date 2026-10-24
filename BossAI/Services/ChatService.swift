@@ -63,11 +63,14 @@ final class ChatService {
     }
 
     /// 对话请求错误，均带用户可读的中文描述
-    enum ChatError: LocalizedError {
+    enum ChatError: LocalizedError, APIErrorCarrying {
         // 未配置 Key / 手动 Key 模式的服务端异常
         case missingKey, badResponse(Int, String)
         /// 云端会员模式的结构化错误：状态码 / 服务端错误码 / 服务端中文消息（不泄露上游细节）
         case hosted(Int, String, String)
+        /// 10-24：带完整信封（actions / requestId / retryable）的云端错误。
+        /// 有了它，对话类错误也能在 UI 上给出「再试一次 / 修改描述 / 去续费」这些真实按钮。
+        case envelope(APIErrorEnvelope)
         /// 输出未正常完成（截断/内容过滤/连接提前断开等），附原因
         case incomplete(String)
         /// 错误的用户可读文案
@@ -76,15 +79,23 @@ final class ChatService {
             case .missingKey: return "未配置对话 API Key"
             case .badResponse(let code, let body): return "请求失败（\(code)）：\(body.prefix(300))"
             case .hosted(_, _, let message): return message
+            case .envelope(let e): return e.message
             case .incomplete(let reason): return "输出尚未完成（\(reason)）。"
             }
         }
         /// 会话失效（重置密码/封停/到期）——调用方据此强制登出
         var isSessionFailure: Bool {
+            if case .envelope(let e) = self { return e.isSessionFailure }
             if case .hosted(let status, let code, _) = self {
                 return status == 401 || code == "ACCOUNT_SUSPENDED" || code == "MEMBERSHIP_EXPIRED"
             }
             return false
+        }
+
+        /// 结构化信封（旧服务端为 nil）
+        var envelope: APIErrorEnvelope? {
+            if case .envelope(let e) = self { return e }
+            return nil
         }
     }
 
@@ -178,14 +189,24 @@ final class ChatService {
                         // 不泄露上游细节；会话失效（重置密码/封停/到期）统一强制登出
                         if profile.id == "hosted",
                            let data = errBody.data(using: .utf8),
-                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let message = obj["message"] as? String {
-                            let code = (obj["error"] as? String) ?? ""
-                            let hostedErr = ChatError.hosted(http.statusCode, code, message)
-                            if hostedErr.isSessionFailure {
-                                await HostedAccount.shared.handleSessionFailure(message)
+                           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            // 10-24：先尝试完整信封（含 actions / requestId），
+                            // 拿不到再退回旧的两字段形态，保证老服务端兼容。
+                            if let env = APIErrorEnvelope.parse(status: http.statusCode, json: obj) {
+                                let err = ChatError.envelope(env)
+                                if err.isSessionFailure {
+                                    await HostedAccount.shared.handleSessionFailure(env.message)
+                                }
+                                throw err
                             }
-                            throw hostedErr
+                            if let message = obj["message"] as? String {
+                                let code = (obj["error"] as? String) ?? ""
+                                let hostedErr = ChatError.hosted(http.statusCode, code, message)
+                                if hostedErr.isSessionFailure {
+                                    await HostedAccount.shared.handleSessionFailure(message)
+                                }
+                                throw hostedErr
+                            }
                         }
                         // 手动 Key 模式：脱敏——不回显 baseURL / 模型名 / 完整上游报文
                         throw ChatError.badResponse(

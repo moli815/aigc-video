@@ -103,7 +103,9 @@ struct SeriesImageGrid: View {
             if !meta.statusLine.isEmpty {
                 Text(meta.statusLine)
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(meta.failedIndices.isEmpty ? .secondary : .orange)
+                    // 必须写全 Color.：.secondary 是 HierarchicalShapeStyle，
+                    // 与 .orange(Color) 在同一个三元表达式里类型不一致，编译不过。
+                    .foregroundStyle(meta.failedIndices.isEmpty ? Color.secondary : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if meta.partial {

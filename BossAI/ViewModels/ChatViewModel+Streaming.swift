@@ -711,6 +711,9 @@ extension ChatViewModel {
             assistantMessage.text = fullText + (currentTextCommitted ? "" : assistantText)
             let isCancel = error is CancellationError
                 || (error as? URLError)?.code == .cancelled
+            // 10-24：对话/额度/鉴权类错误同样保留结构化信封，UI 才能给出真实动作按钮。
+            // 用户主动停止不算错误；产物已落库的部分成功场景也不弹红错（有专门的橙色提示）。
+            if !isCancel && !artifactFlag.isSet { adopt(error) }
             if !isCancel, artifactFlag.isSet {
                 // 10-23 P0：产物已落库（图片/文档），后续"最终说明"失败只做部分成功提示。
                 // 不设置 failedUserMessageID —— 避免"重新生成"再次触发生图、重复扣费。

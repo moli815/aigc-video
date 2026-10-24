@@ -130,8 +130,9 @@ extension ChatViewModel {
     /// 统一吸收错误：写文案 + 保留信封（供 UI 渲染按钮）+ 记录组图重试上下文。
     func adopt(_ error: Error) {
         errorMessage = error.localizedDescription
-        guard let imageError = error as? ImageService.ImageError,
-              let env = imageError.envelope else { return }
+        // 图片与对话两类错误都实现了 APIErrorCarrying：这里只认协议、不认具体类型，
+        // 以后新增模块只要带上信封就自动获得按钮能力。
+        guard let env = (error as? any APIErrorCarrying)?.envelope else { return }
         errorEnvelope = env
         if !env.failedIndices.isEmpty {
             pendingSeriesRetry = SeriesRetryContext(requestId: env.requestId,

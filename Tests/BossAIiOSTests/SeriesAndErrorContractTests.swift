@@ -70,6 +70,16 @@ final class SeriesAndErrorContractTests: XCTestCase {
         XCTAssertTrue(env?.partial ?? false)
     }
 
+    /// 对话类错误也要能带信封（否则对话失败只显示一句话，没有可点的下一步）
+    func testChatErrorCarriesEnvelope() {
+        let env = APIErrorEnvelope(status: 429, code: "POOL_EXHAUSTED",
+                                   message: "本月额度已用完", actions: ["renew"], retryable: false)
+        let err = ChatService.ChatError.envelope(env)
+        XCTAssertEqual(err.envelope?.actions, ["renew"])
+        XCTAssertEqual(err.errorDescription, "本月额度已用完")
+        XCTAssertFalse(err.isSessionFailure)
+    }
+
     // MARK: - 动作白名单
 
     func testActionWhitelistDropsUnknown() {
