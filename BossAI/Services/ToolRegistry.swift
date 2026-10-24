@@ -138,15 +138,21 @@ enum ToolRegistry {
         ),
         CapabilityPlugin(
             id: "image_series", toolset: "media", displayName: "组图生成", executor: .local,
-            abilities: [],
-            // 10-23 官方核实：Seedream 5.0 pro 的「文生组图 / 单多图生组图」均标注暂不支持，
-            // 传 sequential_image_generation=auto 会直接报错；组图需 5.0 lite / 4.5 / 4.0 模型。
-            limits: ["当前使用的 Seedream 5.0 Pro 不支持组图（官方能力表标注「暂不支持」）；如需组图需切换到 5.0 Lite 模型，但 Lite 不支持交互编辑与图层拆分"],
-            requiresEnv: [],
-            availability: { false },
-            maxResultChars: 4000, executionTimeout: 180,
+            abilities: ["一次生成 2~4 张内容关联的图片（分镜、一套物料、品牌视觉系列）"],
+            // 10-24：改为服务端编排，不再依赖原生 sequential_image_generation（那是 Lite 专属能力）。
+            // bf-image 会把 series 拆成 N 个独立单图子任务：各自 requestId、各自记账、可部分成功。
+            // 因此 pro / flash 都能用，availability 不再需要为模型能力让步。
+            limits: [
+                "一次最多 4 张（串行生成，4×25s 仍在云函数超时内）",
+                "单张失败不影响其他张，返回已成功张数与失败张数",
+                "风格一致性由提示词约束，弱于原生组图；每张构图会刻意做出差异",
+                "失败的那几张可以单独重试，已成功的不会重复生成或扣费",
+            ],
+            requiresEnv: ["生图 API Key"],
+            availability: { true },
+            maxResultChars: 4000, executionTimeout: 300,
             retryOnTransient: false, producesArtifact: false,
-            failureAdvice: "如实告知用户该能力暂未开放"
+            failureAdvice: "如实告知用户已成功几张、哪几张失败，并给出「重试剩余」与「保留已完成」两个选项；不要重跑已成功的图"
         ),
         CapabilityPlugin(
             id: "generate_image", toolset: "media", displayName: "图片生成", executor: .local,
