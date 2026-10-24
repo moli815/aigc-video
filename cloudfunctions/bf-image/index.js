@@ -1370,6 +1370,45 @@ const server = http.createServer(async (req, res) => {
     return send(200, { ok: true, fn: "bf-image" });
   }
 
+  /**
+   * GET /img/models —— 把「配置里写了什么」和「实际会用哪个模型」摊开。
+   *
+   * 审计多次提到同一个问题：配置里存在 IMAGE_MODEL_PRO，不代表请求真的走了 pro 模型。
+   * 这条端点只读运行态，不需要鉴权（不含密钥），用于发布前自检与线上排查：
+   *   · 三个档位最终解析成哪个 model id；
+   *   · 每个模型的能力位（是否支持组图/图层/图生图）；
+   *   · 当前路由模式（auto / flash_only / pro_only）。
+   * 密钥类配置只回「是否已配置」，不回值。
+   */
+  if (req.method === "GET" && u.indexOf("/models") >= 0) {
+    await refreshRuntime();
+    const m = modelsOf();
+    const caps = {};
+    for (const [tier, model] of Object.entries(m)) {
+      if (!model) { caps[tier] = null; continue; }
+      const c = capsOf(model);
+      caps[tier] = {
+        model,
+        edit: !!c.edit,
+        series: !!c.series,
+        layers: !!c.layers,
+        fastPromptMode: !!c.fastPromptMode,
+        unknown: !!c.unknown,
+      };
+    }
+    return send(200, {
+      ok: true,
+      routingMode: String(RT.IMAGE_ROUTING_MODE || "auto"),
+      models: m,
+      caps,
+      keys: {
+        IMAGE_API_KEY: !!String(RT.IMAGE_API_KEY || "").trim(),
+        IMAGE_BASE_URL: !!String(RT.IMAGE_BASE_URL || "").trim(),
+      },
+      requestId: currentRequestId(),
+    });
+  }
+
   // ── 10-24 P1-5：组图任务（start / step / status / cancel）──
   // 设计要点：云函数是请求驱动的，没有常驻 worker。所以状态机放在数据库，
   // 由客户端「多次 step」驱动（每次 step 只做一张，远低于函数超时），
