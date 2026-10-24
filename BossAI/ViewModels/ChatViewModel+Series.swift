@@ -93,7 +93,7 @@ extension ChatViewModel {
             let msg = try? persistSeriesImages(conversation: conversation,
                                                messageID: messageID,
                                                images: images,
-                                               meta: meta(from: started, images: images))
+                                               meta: makeSeriesMeta(from: started, images: images))
             outcome.message = msg
             messageID = msg?.id ?? messageID
         }
@@ -120,7 +120,7 @@ extension ChatViewModel {
                 let msg = try? persistSeriesImages(conversation: conversation,
                                                    messageID: messageID,
                                                    images: images,
-                                                   meta: meta(from: snap, images: images))
+                                                   meta: makeSeriesMeta(from: snap, images: images))
                 if let msg { outcome.message = msg; messageID = msg.id }
             }
         } catch is CancellationError {
@@ -153,14 +153,14 @@ extension ChatViewModel {
         let msg = try? persistSeriesImages(conversation: conversation,
                                            messageID: messageID,
                                            images: images,
-                                           meta: meta(from: final, images: images))
+                                           meta: makeSeriesMeta(from: final, images: images))
         if let msg { outcome.message = msg }
         return outcome
     }
 
     /// 续跑：只处理服务端标记为「还没开始」的序号，已成功的不会重跑
     func resumeSeries(message: Message) async {
-        guard let meta = message.seriesMeta, meta.canResume, !isRetryingSeries, !isStreaming else { return }
+        guard let metaInfo = message.seriesMeta, metaInfo.canResume, !isRetryingSeries, !isStreaming else { return }
         isRetryingSeries = true
         statusText = "正在继续生成…"
         defer {
@@ -168,7 +168,7 @@ extension ChatViewModel {
             statusText = nil
         }
         do {
-            let snap = try await imageService.seriesStatus(taskId: meta.taskId)
+            let snap = try await imageService.seriesStatus(taskId: metaInfo.taskId)
             var images: [Int: Data] = [:]
             for item in snap.items where item.ok {
                 if let d = item.imageData { images[item.index] = d }
@@ -184,7 +184,7 @@ extension ChatViewModel {
             }
             try ToolPipeline.updateSeriesArtifact(message,
                                                  images: orderedImages(images),
-                                                 meta: meta(from: final, images: images),
+                                                 meta: makeSeriesMeta(from: final, images: images),
                                                  context: modelContext)
             let newly = final.items.filter { $0.ok && !$0.reused }.count
             if newly > 0 { BudgetTracker.addImageGeneration(newly) }
@@ -278,7 +278,7 @@ extension ChatViewModel {
         map.keys.sorted().compactMap { map[$0] }
     }
 
-    private func meta(from snap: ImageService.SeriesTaskSnapshot, images: [Int: Data]) -> SeriesMeta {
+    private func makeSeriesMeta(from snap: ImageService.SeriesTaskSnapshot, images: [Int: Data]) -> SeriesMeta {
         var m = SeriesMeta()
         m.requestId = snap.requestId
         m.taskId = snap.taskId
