@@ -161,7 +161,7 @@ final class MemoryService {
         // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
         let memKey = HostedAccount.scopeKey
         var descriptor = FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { $0.ownerKey == memKey },
+            predicate: #Predicate { $0.ownerKey == memKey && !$0.isDeleted },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         descriptor.fetchLimit = 100

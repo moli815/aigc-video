@@ -82,7 +82,8 @@ enum CrashReporter {
     /// 注意：不能关闭 markerFD —— 那会让后续崩溃无法再写标记；用独立读句柄 + truncate 清空。
     private static func drainSignalMarkers() {
         let path = crashDir().appendingPathComponent(signalMarkerName)
-        let readFD = open(path, O_RDONLY)
+        // open(2) 需要 C 字符串；URL 必须先取 .path
+        let readFD = open(path.path, O_RDONLY)
         guard readFD >= 0 else { return }
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 512)
