@@ -77,6 +77,8 @@ const C = {
 const EXPERTS_SEED = require("./experts.json");
 // 10-25：成本看板的纯聚合层（可单测）
 const { aggregateCostRows: buildCostReport } = require("./cost-report");
+// 10-25 C1.4：通知补发策略（纯逻辑可单测）
+const notifyRetry = require("./notify-retry");
 // 10-23 配置中心：分组/标题/控件/范围/校验统一由 settings-schema 提供，前端只渲染
 const { SECTIONS, describeSettings, validateValue } = require("./settings-schema");
 // 内置目录升级时 +1；DB 版本落后会自动用种子覆盖（v3：新增 short_video 短视频脚本专家）
@@ -3223,6 +3225,8 @@ async function handleCreateRequest(req, res, staff) {
 
 async function handleListRequests(req, res, staff, url) {
   await runAutoApprove();   // 顺带跑超时自动通过
+  // 10-25 C1.4：顺带补发一次通知。它幂等（已 sent 跳过），重复跑不会重复投递。
+  try { await sweepNotifications(10); } catch (e) { /* 补发失败不影响列表 */ }
   const q = staff.role === "admin" ? {} : { submittedBy: staff.sub };
   const page = Math.max(1, parseInt((url.searchParams.get("page") || "1"), 10) || 1);
   const r = await db.collection(C.requests).where(q).orderBy("createdAt", "desc")
@@ -3256,6 +3260,7 @@ async function handleRejectRequest(req, res, staff, id) {
       reviewedAt: new Date(), reviewedBy: staff.sub,
     });
   if (!rejectClaim.updated) return sendError(res, 409, "ALREADY_REVIEWED", "该申请已被其他操作处理，请刷新");
+  await ensureNotified(reqDoc, "reject");
   await rememberOperation(id, staff, operationId, "reject", { status: "rejected" });
   await db.collection(C.notifications).add({
     toStaffId: reqDoc.submittedBy,
@@ -3267,6 +3272,76 @@ async function handleRejectRequest(req, res, staff, id) {
     createdAt: new Date(),
   });
   sendJson(res, 200, { ok: true });
+}
+
+/**
+ * 通知投递状态（10-25 C1.4）。
+ *
+ * 事实：通知是 `bf_notifications.add()`，属于"第二笔写"。审核状态已经落库、
+ * 但这次 add 失败（或进程在两步之间被杀）时，旧代码没有任何痕迹——
+ * 管理员以为通知已发，员工其实没收到。
+ *
+ * 这里把"审核结果"和"通知投递"彻底分开：
+ *   · 请求文档上记 notifyState / notifyAttempts / notifyLastError / notifyNextAt
+ *   · 审核成功后做一次落地检测：通知不在 → 标 pending，交给补发扫
+ *   · 补发只重建通知，绝不重跑开通
+ */
+async function markNotify(id, patch) {
+  try {
+    await db.collection(C.requests).doc(id).update(patch);
+  } catch (e) {
+    logSafe({ tag: "mark_notify_failed", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
+  }
+}
+
+/** 审核完成后确认通知是否真的落库；没落库就排进补发队列 */
+async function ensureNotified(reqDoc, kind) {
+  try {
+    const cnt = await db.collection(C.notifications).where({ refRequestId: reqDoc._id }).count();
+    if ((cnt && cnt.total) > 0) {
+      await markNotify(reqDoc._id, { notifyState: "sent" });
+    } else {
+      await markNotify(reqDoc._id, {
+        notifyState: "pending", notifyAttempts: 0, notifyNextAt: Date.now(), notifyKind: kind,
+      });
+    }
+  } catch (e) {
+    // 检测本身失败也要留痕，且不能把审核结果改坏
+    logSafe({ tag: "notify_check_failed", fn: "bf-api", id: String(reqDoc._id), err: String((e && e.message) || e).slice(0, 120) });
+  }
+}
+
+/** 由申请文档重建通知体（补发用；不涉及开通） */
+function buildNoticeFromRequest(doc) {
+  const rejected = doc.status === "rejected";
+  return {
+    toStaffId: doc.submittedBy,
+    type: rejected ? "request_rejected" : "request_approved",
+    title: rejected ? "开通申请未通过" : (doc.type === "renew" ? "续费已开通" : "开通申请已通过"),
+    body: rejected
+      ? `「${doc.customerName}」的申请被驳回：${doc.rejectReason || "未填写原因"}`
+      : `「${doc.customerName}」的${doc.type === "renew" ? "续费" : "开通"}已处理完成`,
+    refRequestId: doc._id,
+    read: false,
+    createdAt: new Date(),
+  };
+}
+
+/** 扫一轮待补发（幂等：已 sent 跳过；失败退避；超限转终态） */
+async function sweepNotifications(limit = 20) {
+  return notifyRetry.sweep({
+    listPending: async () => {
+      const r = await db.collection(C.requests)
+        .where({ notifyState: db.command.in(["pending", "failed"]) })
+        .orderBy("notifyNextAt", "asc").limit(limit).get();
+      return r.data || [];
+    },
+    buildNotice: buildNoticeFromRequest,
+    deliver: async (notice, id) => {
+      await db.collection(C.notifications).add(Object.assign({ _id: id }, notice));
+    },
+    mark: markNotify,
+  }, Date.now(), limit);
 }
 
 /**
@@ -3476,6 +3551,7 @@ async function handleApproveRequest(req, res, staff, id) {
   if (reqDoc.status !== "pending") return sendError(res, 409, "ALREADY_REVIEWED", "该申请已处理");
   try {
     const result = await approveRequest(reqDoc, staff, false);
+    await ensureNotified(reqDoc, "approve");
     await rememberOperation(id, staff, operationId, "approve", result || {});
     sendJson(res, 200, { ok: true, result });
   } catch (e) {
