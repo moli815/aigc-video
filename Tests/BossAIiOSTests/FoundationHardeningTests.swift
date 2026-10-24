@@ -156,7 +156,9 @@ final class FoundationHardeningTests: XCTestCase {
         context.insert(removed)
         try context.save()
 
-        let fragment = MemoryService.shared.injectionFragment(context: context)
+        // MemoryService 没有单例：按 ChatViewModel 的用法构造（注入片段不触发网络）
+        let service = MemoryService(profile: ProviderCatalog.currentChat(), apiKeyProvider: { nil })
+        let fragment = service.injectionFragment(context: context)
         XCTAssertTrue(fragment.contains("保留事实"))
         XCTAssertFalse(fragment.contains("已删除事实"), "已删除记忆仍被注入：\(fragment)")
     }
