@@ -622,9 +622,21 @@ function askApprove(id){
     : '将通过「<b style="color:var(--t1)">'+esc(r.customerName)+'</b>」的建号申请。<br>系统会立即生成会员账号并通知提交人。';
   openM('mApprove');
 }
+// 10-25 C1.3：每次点击生成一个操作标识，重试时复用同一个 →
+// 服务端可判定"这是同一次操作的重放"，返回真实结果而不是"已处理"。
+function newOpId(){ return 'op-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8); }
+// 网络类错误（超时/断线）不等于业务失败：结果可能是成功，必须去查真实状态
+function isNetworkish(e){ return /超时|网络|连接|断开|fetch|timeout/i.test(String((e&&e.message)||e||'')); }
+function afterUnknownResult(){
+  toast('正在确认操作结果…');
+  refreshAll();                       // 重新拉列表，以服务端状态为准
+  setTimeout(function(){ toast('已刷新为最新状态，请以列表为准'); }, 1200);
+}
+
 function doApprove(){
+  if(!CUR.op) CUR.op = newOpId();      // 同一次点击的失败重试复用同一个标识
   busy(q('apBtn'),true,'处理中');
-  api('/admin/requests/'+CUR.id+'/approve',{method:'POST'}).then(function(j){
+  api('/admin/requests/'+CUR.id+'/approve',{method:'POST',body:{operationId:CUR.op}}).then(function(j){
     busy(q('apBtn'),false); closeM();
     var res=(j.result)||{};
     if(res.type==='renew'){
@@ -639,8 +651,12 @@ function doApprove(){
       q('rsNote').textContent='已通知'+CUR.by+'，他可在员工端查看并转发给客户。';
       RS_COPY=res.username||''; q('rsCopy').classList.remove('hide');
     }
+    CUR.op=null;
     openM('mResult'); refreshAll();
-  }).catch(function(e){ busy(q('apBtn'),false); toast(e.message); });
+  }).catch(function(e){
+    busy(q('apBtn'),false);
+    if(isNetworkish(e)){ afterUnknownResult(); } else { toast(e.message); }
+  });
 }
 function askReject(id){
   var r=findReq(id); if(!r) return; CUR={id:id,who:r.customerName,type:r.type};
@@ -651,10 +667,14 @@ function askReject(id){
 function doReject(){
   var v=q('rejectInput').value.trim();
   if(!v){ toast('请填写驳回原因'); return; }
+  if(!CUR.op) CUR.op = newOpId();
   busy(q('rjBtn'),true,'处理中');
-  api('/admin/requests/'+CUR.id+'/reject',{method:'POST',body:{reason:v}})
-    .then(function(){ busy(q('rjBtn'),false); closeM(); toast('已驳回并通知提交人'); refreshAll(); })
-    .catch(function(e){ busy(q('rjBtn'),false); toast(e.message); });
+  api('/admin/requests/'+CUR.id+'/reject',{method:'POST',body:{reason:v,operationId:CUR.op}})
+    .then(function(){ CUR.op=null; busy(q('rjBtn'),false); closeM(); toast('已驳回并通知提交人'); refreshAll(); })
+    .catch(function(e){
+      busy(q('rjBtn'),false);
+      if(isNetworkish(e)){ afterUnknownResult(); } else { toast(e.message); }
+    });
 }
 
 /* ── 会员操作 ── */

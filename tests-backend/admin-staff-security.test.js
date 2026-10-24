@@ -146,3 +146,56 @@ test("UI-02 写操作失败不能提示成功（必须判 ok 再提示）", () =
   }
   assert.match(ADMIN, /j\.ok/, "管理端写操作未检查响应 ok");
 });
+
+// ── C1.3 幂等重放（服务端成功但响应丢失） ────────────────────────────────────
+
+function fnSlice(name, len) {
+  const start = API.indexOf(name);
+  assert.ok(start > 0, `找不到 ${name}`);
+  return API.slice(start, start + len);
+}
+
+test("IDEM-01 重放判断必须早于终态判断（否则重试仍报已处理）", () => {
+  for (const name of ["async function handleApproveRequest", "async function handleRejectRequest"]) {
+    const body = fnSlice(name, 1600);
+    const replayAt = body.indexOf("matchOperation(");
+    const terminalAt = body.indexOf('reqDoc.status !== "pending"');
+    assert.ok(replayAt > 0, `${name} 没有幂等判断`);
+    assert.ok(terminalAt > 0, `${name} 没有终态判断`);
+    assert.ok(replayAt < terminalAt, `${name} 的幂等判断在终态判断之后，重放会失败`);
+  }
+});
+
+test("IDEM-02 同一 opId + 同一动作 → 返回 idempotent 标记且不重复执行", () => {
+  const body = fnSlice("function matchOperation", 800);
+  assert.ok(body.includes('last.id || ""'), "未比对 opId");
+  assert.ok(body.includes('return "same-op"'), "缺少同操作判定");
+  assert.ok(API.includes("idempotent: true"), "重放响应没有 idempotent 标记");
+});
+
+test("IDEM-03 同一 opId 换动作 → 409，不能把不同操作合并", () => {
+  const body = fnSlice("function matchOperation", 800);
+  assert.ok(body.includes('op-id-reused'), "未拦截同一标识换动作");
+  assert.ok(API.includes("OPERATION_ID_REUSED"), "缺少冲突错误码");
+});
+
+test("IDEM-04 幂等键绑定操作人：换账号不能借用别人的键", () => {
+  const body = fnSlice("function matchOperation", 800);
+  assert.ok(body.includes("last.staffId"), "未校验操作人，幂等键可被跨账号复用");
+  assert.ok(body.includes("staff.sub"), "未取当前操作人");
+});
+
+test("IDEM-05 未带 operationId 时保持原行为（兼容老客户端）", () => {
+  const body = fnSlice("function matchOperation", 800);
+  assert.ok(body.includes("!opId"), "没有 opId 时未短路");
+  assert.ok(body.includes('return "none"'), "缺少 none 分支");
+});
+
+test("IDEM-06 前端必须发送 operationId，并在网络错误时去查真实状态", () => {
+  assert.ok(ADMIN.includes("body:{operationId:CUR.op}"), "通过未携带操作标识");
+  assert.ok(ADMIN.includes("body:{reason:v,operationId:CUR.op}"), "驳回未携带操作标识");
+  assert.ok(ADMIN.includes("function isNetworkish"), "缺少网络错误判定");
+  assert.ok(ADMIN.includes("function afterUnknownResult"), "缺少结果未知处理");
+  assert.ok(ADMIN.includes("if(isNetworkish(e)){ afterUnknownResult(); }"), "网络错误未走确认流程");
+  assert.ok(ADMIN.includes("CUR.op=null;"), "成功后未清空操作标识");
+});

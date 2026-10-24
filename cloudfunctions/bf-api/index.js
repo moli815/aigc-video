@@ -3231,12 +3231,18 @@ async function handleListRequests(req, res, staff, url) {
 }
 
 async function handleRejectRequest(req, res, staff, id) {
-  const { reason } = await readJsonBody(req);
+  const { reason, operationId } = await readJsonBody(req);
   if (!reason || !String(reason).trim()) return sendError(res, 400, "BAD_REQUEST", "请填写驳回原因");
   const reasonText = String(reason).trim().slice(0, 200);
   const r = await db.collection(C.requests).doc(id).get();
   const reqDoc = (r.data || [])[0];
   if (!reqDoc) return sendError(res, 404, "NOT_FOUND", "申请不存在");
+  // 10-25 C1.3：幂等重放必须放在"状态已是终态"判断之前。
+  // 否则"服务端已成功、客户端没收到响应"后的重试会被当成"已处理"而报 409，
+  // 管理员看到的仍是失败——这正是要消灭的体验。
+  const replay = matchOperation(reqDoc, staff, operationId, "reject");
+  if (replay === "op-id-reused") return sendError(res, 409, "OPERATION_ID_REUSED", "该操作标识已用于其他操作，请刷新后重试");
+  if (replay === "same-op") return sendJson(res, 200, idempotentPayload(reqDoc));
   if (reqDoc.status !== "pending") return sendError(res, 409, "ALREADY_REVIEWED", "该申请已处理");
 
   // 10-25：驳回也要走 CAS，和审核通过一样把 pending 抢成终态。
@@ -3250,6 +3256,7 @@ async function handleRejectRequest(req, res, staff, id) {
       reviewedAt: new Date(), reviewedBy: staff.sub,
     });
   if (!rejectClaim.updated) return sendError(res, 409, "ALREADY_REVIEWED", "该申请已被其他操作处理，请刷新");
+  await rememberOperation(id, staff, operationId, "reject", { status: "rejected" });
   await db.collection(C.notifications).add({
     toStaffId: reqDoc.submittedBy,
     type: "request_rejected",
@@ -3260,6 +3267,52 @@ async function handleRejectRequest(req, res, staff, id) {
     createdAt: new Date(),
   });
   sendJson(res, 200, { ok: true });
+}
+
+/**
+ * 操作幂等（10-25 C1.3）：把"这次点击"变成一个可判定重放的标识。
+ *
+ * 背景：单管理员点"通过"后网络断了，服务端其实已经开通；客户端重试时，
+ * 旧逻辑只会在 status !== pending 时报 409，管理员看到"失败"，于是再点一次、再报错——
+ * 他不知道账号其实早就开通了，还可能去手工重复开号。
+ *
+ * 规则：
+ *   · operationId 相同 + 动作相同 → 视为重放，返回当前真实状态（不重复执行副作用）；
+ *   · operationId 相同 + 动作不同 → 409，防止一个标识被拿去干别的；
+ *   · 没带 operationId（老客户端） → 保持原行为，不做幂等，只靠 CAS 兜底。
+ * 绑定关系：operationId 由客户端生成，但记录里同时存 staffId 与 action，
+ * 换人/换动作都无法借用别人的幂等键。
+ */
+function matchOperation(reqDoc, staff, operationId, action) {
+  const opId = String(operationId || "").trim();
+  const last = reqDoc && reqDoc.lastOp;
+  if (!opId || !last || String(last.id || "") !== opId) return "none";
+  if (String(last.staffId || "") !== String(staff && staff.sub)) return "none";
+  if (String(last.action || "") !== action) return "op-id-reused";
+  return "same-op";
+}
+
+function idempotentPayload(reqDoc) {
+  const last = (reqDoc && reqDoc.lastOp) || {};
+  return {
+    ok: true,
+    idempotent: true,          // 告诉前端：这是重放，不是"又执行了一次"
+    status: reqDoc.status,
+    result: last.result || {},
+  };
+}
+
+/** 记录操作标识；失败只留日志，不影响已经完成的业务结果 */
+async function rememberOperation(id, staff, operationId, action, result) {
+  const opId = String(operationId || "").trim();
+  if (!opId) return;
+  try {
+    await db.collection(C.requests).doc(id).update({
+      lastOp: { id: opId, action, staffId: String((staff && staff.sub) || ""), at: new Date(), result: result || {} },
+    });
+  } catch (e) {
+    logSafe({ tag: "remember_operation_failed", fn: "bf-api", action, err: String((e && e.message) || e).slice(0, 120) });
+  }
 }
 
 /**
@@ -3411,12 +3464,19 @@ async function doApprove(reqDoc, staff, auto) {
 }
 
 async function handleApproveRequest(req, res, staff, id) {
+  let body = {};
+  try { body = (await readJsonBody(req)) || {}; } catch (e) { body = {}; }
+  const operationId = body.operationId;
   const r = await db.collection(C.requests).doc(id).get();
   const reqDoc = (r.data || [])[0];
   if (!reqDoc) return sendError(res, 404, "NOT_FOUND", "申请不存在");
+  const replay = matchOperation(reqDoc, staff, operationId, "approve");
+  if (replay === "op-id-reused") return sendError(res, 409, "OPERATION_ID_REUSED", "该操作标识已用于其他操作，请刷新后重试");
+  if (replay === "same-op") return sendJson(res, 200, idempotentPayload(reqDoc));
   if (reqDoc.status !== "pending") return sendError(res, 409, "ALREADY_REVIEWED", "该申请已处理");
   try {
     const result = await approveRequest(reqDoc, staff, false);
+    await rememberOperation(id, staff, operationId, "approve", result || {});
     sendJson(res, 200, { ok: true, result });
   } catch (e) {
     sendError(res, 400, "APPROVE_FAILED", e.message);
