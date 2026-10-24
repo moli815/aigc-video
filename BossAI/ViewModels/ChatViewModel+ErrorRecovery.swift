@@ -141,24 +141,6 @@ extension ChatViewModel {
         }
     }
 
-    /// 组图回注文案：真实报告张数与失败序号，禁止重跑已成功的图。
-    /// 放在扩展里而不是 Streaming（那里已有 800 行，越加越难读）。
-    nonisolated static func seriesNote(outcome: ImageService.SeriesOutcome, meta: SeriesMeta) -> String {
-        let okList = outcome.items.filter { $0.ok }.map { "#\($0.index)" }.joined(separator: "、")
-        var lines = ["组图已完成 \(outcome.succeededCount)/\(outcome.requested) 张并已保存到本地。"]
-        if !okList.isEmpty { lines.append("成功：\(okList)") }
-        if !meta.failedIndices.isEmpty {
-            let failed = meta.failedIndices.map { "#\($0)" }.joined(separator: "、")
-            lines.append("失败：\(failed)")
-            lines.append("必须如实告诉用户成功几张、哪几张失败，并给出两个选项：「重试失败的几张」或「保留已完成的」；禁止重跑已成功的图。")
-        }
-        if !meta.downloadFailedIndices.isEmpty {
-            let dl = meta.downloadFailedIndices.map { "#\($0)" }.joined(separator: "、")
-            lines.append("\(dl) 已生成但下载到本机失败——不要重新生成，提示用户稍后重新保存。")
-        }
-        return lines.joined(separator: "\n")
-    }
-
     /// 清空错误状态（用户切会话、重新发送时调用）
     func clearErrorState() {
         errorEnvelope = nil

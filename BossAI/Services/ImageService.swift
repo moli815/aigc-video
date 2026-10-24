@@ -299,7 +299,7 @@ final class ImageService {
     // MARK: - 组图（10-24 新增：N 张逐张下载，不再只取第一张）
 
     /// 单张子任务的结果（成功或失败的**用户可见**信息）
-    struct SeriesItemResult: Equatable {
+    struct SeriesItemResult: Equatable, Sendable {
         let index: Int
         let ok: Bool
         /// 已下载到本机的图片（ok=true 且下载成功时非空）
@@ -317,7 +317,7 @@ final class ImageService {
     }
 
     /// 组图结果：请求 N 张时，成功几张、失败哪几张、花了多少，全部结构化。
-    struct SeriesOutcome: Equatable {
+    struct SeriesOutcome: Equatable, Sendable {
         let requestId: String
         let requested: Int
         let items: [SeriesItemResult]
@@ -421,6 +421,222 @@ final class ImageService {
             size: (json["size"] as? String) ?? "",
             qualityTier: (json["quality_tier"] as? String) ?? (qualityTier ?? "")
         )
+    }
+
+    // MARK: - 组图任务（10-24 P1-5：服务端状态机 + 客户端驱动）
+
+    /// 任务快照：服务端持久化的状态 + 已成功项的图片
+    struct SeriesTaskSnapshot: Equatable, Sendable {
+        let taskId: String
+        let requestId: String
+        /// queued / running / partial / done / failed / cancelled
+        let status: String
+        let requested: Int
+        let items: [SeriesItemResult]
+        let pendingIndices: [Int]
+        let failedIndices: [Int]
+        let pricedCny: Double
+        let committedCny: Double
+        let pendingCostCount: Int
+        let partial: Bool
+        let size: String
+        let qualityTier: String
+
+        var succeededItems: [SeriesItemResult] { items.filter { $0.imageData != nil } }
+        var isFinished: Bool { ["done", "partial", "failed", "cancelled"].contains(status) }
+        var isCancelled: Bool { status == "cancelled" }
+    }
+
+    private func seriesEndpoint(_ suffix: String) -> URL? {
+        URL(string: AppConfig.hostedAPIBase.replacingOccurrences(of: "/api", with: "/img") + suffix)
+    }
+
+    /// 把服务端任务 JSON 解析成快照；`downloadIndices` 指定要下载哪几张（其余只保留 URL）
+    private func parseTaskSnapshot(_ json: [String: Any], downloadIndices: Set<Int>) async -> SeriesTaskSnapshot {
+        var items: [SeriesItemResult] = []
+        for (offset, raw) in ((json["items"] as? [[String: Any]]) ?? []).enumerated() {
+            let index = (raw["index"] as? Int) ?? (offset + 1)
+            let ok = (raw["ok"] as? Bool) ?? false
+            let remote = (raw["url"] as? String) ?? ""
+            var imageData: Data?
+            var downloadFailed = false
+            if ok, !remote.isEmpty, downloadIndices.contains(index) {
+                do { imageData = try await Self.downloadImage(remote) }
+                catch { downloadFailed = true }
+            }
+            items.append(SeriesItemResult(
+                index: index, ok: ok, imageData: imageData, remoteURL: remote,
+                model: (raw["model"] as? String) ?? "",
+                cost: (raw["cost"] as? Double) ?? Double((raw["cost"] as? NSNumber)?.doubleValue ?? 0),
+                message: (raw["message"] as? String) ?? "",
+                errorCategory: (raw["errorCategory"] as? String) ?? "",
+                downloadFailed: downloadFailed,
+                reused: (raw["reused"] as? Bool) ?? false
+            ))
+        }
+        var pending: [Int] = []
+        if let raw = json["pendingIndices"] as? [Int] { pending = raw }
+        else if let raw = json["pendingIndices"] as? [NSNumber] { pending = raw.map { $0.intValue } }
+        var failed: [Int] = []
+        if let raw = json["failedIndices"] as? [Int] { failed = raw }
+        else if let raw = json["failedIndices"] as? [NSNumber] { failed = raw.map { $0.intValue } }
+        return SeriesTaskSnapshot(
+            taskId: (json["taskId"] as? String) ?? "",
+            requestId: (json["requestId"] as? String) ?? "",
+            status: (json["status"] as? String) ?? "",
+            requested: (json["requested"] as? Int) ?? items.count,
+            items: items.sorted { $0.index < $1.index },
+            pendingIndices: pending,
+            failedIndices: failed,
+            pricedCny: (json["pricedCny"] as? Double) ?? 0,
+            committedCny: (json["committedCny"] as? Double) ?? 0,
+            pendingCostCount: (json["pendingCostCount"] as? Int) ?? 0,
+            partial: (json["partial"] as? Bool) ?? false,
+            size: (json["size"] as? String) ?? "",
+            qualityTier: (json["quality_tier"] as? String) ?? ""
+        )
+    }
+
+    private func taskRequest(path: String, body: [String: Any], timeout: Double) throws -> URLRequest {
+        guard let url = seriesEndpoint(path) else { throw ImageError.badResponse(400, "服务地址无效") }
+        guard let token = HostedAccount.currentToken, !token.isEmpty else { throw ImageError.missingKey }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = timeout
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    /// 创建任务（幂等：同一 requestId 重复调用返回同一任务）
+    func startSeries(prompt: String,
+                     requestId: String,
+                     requestedCount: Int,
+                     qualityTier: String? = nil,
+                     aspectRatio: String? = nil,
+                     renderIntent: String? = nil,
+                     structured: [String: Any]? = nil,
+                     size: String? = nil) async throws -> SeriesTaskSnapshot {
+        var body: [String: Any] = [
+            "requestId": requestId,
+            "prompt": prompt,
+            "requested_count": max(2, min(4, requestedCount)),
+        ]
+        if let qualityTier, !qualityTier.isEmpty { body["quality_tier"] = qualityTier }
+        if let aspectRatio, !aspectRatio.isEmpty { body["aspect_ratio"] = aspectRatio }
+        if let renderIntent, !renderIntent.isEmpty { body["render_intent"] = renderIntent }
+        if let structured, !structured.isEmpty { body["structured"] = structured }
+        if let size, !size.isEmpty { body["size"] = size }
+
+        let request = try taskRequest(path: "/series/start", body: body, timeout: 60)
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.chatSession,
+                                                                limit: 2 * 1024 * 1024)
+        if response.statusCode != 200 {
+            let err = error(from: data, response: response)
+            if err.isSessionFailure {
+                await HostedAccount.shared.handleSessionFailure(err.errorDescription ?? "")
+            }
+            throw err
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+        // 已成功的项（断点续跑）需要下载，否则用户看不到已有图片
+        let existing = Set(((json["items"] as? [[String: Any]]) ?? [])
+            .filter { ($0["ok"] as? Bool) == true }
+            .compactMap { ($0["index"] as? Int) })
+        return await parseTaskSnapshot(json, downloadIndices: existing)
+    }
+
+    /// 执行一张。服务端保证：已成功的不重跑、已取消的拒绝执行。
+    func stepSeries(taskId: String, index: Int) async throws -> SeriesTaskSnapshot {
+        let request = try taskRequest(path: "/series/step",
+                                      body: ["taskId": taskId, "index": index],
+                                      timeout: min(300, HostedAccount.cachedImageTimeout + 30))
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.imageSession,
+                                                                limit: 48 * 1024 * 1024)
+        if response.statusCode != 200 {
+            let err = error(from: data, response: response)
+            if err.isSessionFailure {
+                await HostedAccount.shared.handleSessionFailure(err.errorDescription ?? "")
+            }
+            throw err
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+        return await parseTaskSnapshot(json, downloadIndices: [index])
+    }
+
+    /// 查询任务状态（重开 App 后续跑/取消都靠它）
+    func seriesStatus(taskId: String) async throws -> SeriesTaskSnapshot {
+        guard let url = seriesEndpoint("/series/status?taskId=" + (taskId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? taskId)),
+              let token = HostedAccount.currentToken, !token.isEmpty else {
+            throw ImageError.missingKey
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.chatSession,
+                                                                limit: 2 * 1024 * 1024)
+        if response.statusCode != 200 {
+            throw error(from: data, response: response)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+        let existing = Set(((json["items"] as? [[String: Any]]) ?? [])
+            .filter { ($0["ok"] as? Bool) == true }
+            .compactMap { ($0["index"] as? Int) })
+        return await parseTaskSnapshot(json, downloadIndices: existing)
+    }
+
+    /// 取消：不再启动新的张数；已成功的保留
+    func cancelSeries(taskId: String) async throws -> SeriesTaskSnapshot {
+        let request = try taskRequest(path: "/series/cancel", body: ["taskId": taskId], timeout: 30)
+        let (data, response) = try await BoundedHTTPClient.data(for: request,
+                                                                session: BoundedHTTPClient.chatSession,
+                                                                limit: 2 * 1024 * 1024)
+        if response.statusCode != 200 { throw error(from: data, response: response) }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ImageError.noImage
+        }
+        return await parseTaskSnapshot(json, downloadIndices: [])
+    }
+
+    /// 批量执行未完成的张数（默认并发 2，单张失败不拖垮整批）
+    func runSteps(taskId: String, indices: [Int], maxConcurrent: Int = 2) async throws -> [SeriesItemResult] {
+        var remaining = indices
+        var out: [SeriesItemResult] = []
+        let width = max(1, min(2, maxConcurrent))
+        while !remaining.isEmpty {
+            try Task.checkCancellation()
+            let batch = Array(remaining.prefix(width))
+            remaining.removeFirst(min(width, remaining.count))
+            try await withThrowingTaskGroup(of: SeriesItemResult.self) { group in
+                for idx in batch {
+                    group.addTask { [weak self] in
+                        guard let self else {
+                            return SeriesItemResult(index: idx, ok: false, imageData: nil, remoteURL: "",
+                                                    model: "", cost: 0, message: "任务已取消。",
+                                                    errorCategory: "cancelled", downloadFailed: false, reused: false)
+                        }
+                        let snap = try await self.stepSeries(taskId: taskId, index: idx)
+                        return snap.items.first(where: { $0.index == idx })
+                            ?? SeriesItemResult(index: idx, ok: false, imageData: nil, remoteURL: "",
+                                                model: "", cost: 0, message: "这一张没有返回结果。",
+                                                errorCategory: "empty", downloadFailed: false, reused: false)
+                    }
+                }
+                for try await r in group { out.append(r) }
+            }
+        }
+        return out.sorted { $0.index < $1.index }
     }
 
     /// 只重试失败的子图（服务端保证已成功的不会重跑、也不重复扣费）

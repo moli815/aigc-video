@@ -400,7 +400,8 @@ struct ChatView: View {
                             } else {
                                 MessageRow(message: message, files: viewModel.files(for: message), onPreview: { previewFile = $0 },
                                            isLastAssistant: message.role == "assistant" && message.id == displayMessages.last?.id,
-                                           onRegenerate: viewModel.canRegenerateLast ? { viewModel.regenerateLastReply() } : nil)
+                                           onRegenerate: viewModel.canRegenerateLast ? { viewModel.regenerateLastReply() } : nil,
+                                           onResumeSeries: { msg in Task { await viewModel.resumeSeries(message: msg) } })
                             }
                         }
                         .id(message.id)

@@ -117,9 +117,15 @@ final class Message {
 /// 不在这里估算金额（费用只在服务端有账本数据时才可信）。
 struct SeriesMeta: Codable, Equatable {
     var requestId: String = ""
+    /// 服务端任务 ID（组图任务状态机的句柄）：重开后「继续生成 / 取消」都用它
+    var taskId: String = ""
+    /// queued / running / partial / done / failed / cancelled
+    var status: String = ""
     var requested: Int = 0
     var succeeded: Int = 0
     var failedIndices: [Int] = []
+    /// 还没开始生成的序号（服务端权威）：非空即「可继续」
+    var pendingIndices: [Int] = []
     var downloadFailedIndices: [Int] = []
     var pricedCny: Double = 0
     var committedCny: Double = 0
@@ -132,23 +138,35 @@ struct SeriesMeta: Codable, Equatable {
     /// 一句话状态摘要（用于消息头部；只报真实数字，不虚构进度百分比）
     var statusLine: String {
         guard requested > 0 else { return "" }
-        if failedIndices.isEmpty {
-            return "已完成 \(succeeded)/\(requested) 张"
+        var parts = ["已完成 \(succeeded)/\(requested) 张"]
+        if !failedIndices.isEmpty {
+            parts.append("失败 " + failedIndices.map { "#\($0)" }.joined(separator: "、"))
         }
-        let failed = failedIndices.map { "#\($0)" }.joined(separator: "、")
-        return "已完成 \(succeeded)/\(requested) 张 · 失败 \(failed)"
+        if !pendingIndices.isEmpty {
+            parts.append("还有 \(pendingIndices.count) 张待生成")
+        }
+        if status == "cancelled" {
+            parts.append("已取消")
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// 是否还有可重试的失败项（基于当前记录的状态；重试成功后由服务端结果覆盖）
     var canRetryFailed: Bool { !failedIndices.isEmpty && !requestId.isEmpty }
 
+    /// 是否还能继续生成（服务端还有未开始的序号）
+    var canResume: Bool { !taskId.isEmpty && !pendingIndices.isEmpty && status != "cancelled" }
+
     /// 显式全参初始化（带默认值）。
     /// 说明：一旦写了自定义 init(from:)，编译器就不再合成逐成员初始化器，
     /// 所以这里必须自己提供一个，否则 `SeriesMeta(requestId:...)` 全部编译失败。
     init(requestId: String = "",
+         taskId: String = "",
+         status: String = "",
          requested: Int = 0,
          succeeded: Int = 0,
          failedIndices: [Int] = [],
+         pendingIndices: [Int] = [],
          downloadFailedIndices: [Int] = [],
          pricedCny: Double = 0,
          committedCny: Double = 0,
@@ -158,9 +176,12 @@ struct SeriesMeta: Codable, Equatable {
          qualityTier: String = "",
          createdAt: Date = Date()) {
         self.requestId = requestId
+        self.taskId = taskId
+        self.status = status
         self.requested = requested
         self.succeeded = succeeded
         self.failedIndices = failedIndices
+        self.pendingIndices = pendingIndices
         self.downloadFailedIndices = downloadFailedIndices
         self.pricedCny = pricedCny
         self.committedCny = committedCny
@@ -180,9 +201,12 @@ struct SeriesMeta: Codable, Equatable {
             (try? c.decodeIfPresent(String.self, forKey: k)) ?? def
         }
         requestId = str(.requestId)
+        taskId = str(.taskId)
+        status = str(.status)
         requested = (try? c.decodeIfPresent(Int.self, forKey: .requested)) ?? 0
         succeeded = (try? c.decodeIfPresent(Int.self, forKey: .succeeded)) ?? 0
         failedIndices = (try? c.decodeIfPresent([Int].self, forKey: .failedIndices)) ?? []
+        pendingIndices = (try? c.decodeIfPresent([Int].self, forKey: .pendingIndices)) ?? []
         downloadFailedIndices = (try? c.decodeIfPresent([Int].self, forKey: .downloadFailedIndices)) ?? []
         pricedCny = (try? c.decodeIfPresent(Double.self, forKey: .pricedCny)) ?? 0
         committedCny = (try? c.decodeIfPresent(Double.self, forKey: .committedCny)) ?? 0

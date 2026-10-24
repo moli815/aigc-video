@@ -23,6 +23,8 @@ struct SeriesImageGrid: View {
     let firstImage: Data?
     /// 第 2 张起（Message.extraImagesJSON）
     let extraImagesJSON: Data?
+    /// 「继续生成剩余 X 张」：服务端还有未开始的序号时才可点
+    var onResume: (() -> Void)? = nil
 
     @State private var images: [UIImage] = []
     @State private var preview: SeriesPreviewPayload?
@@ -83,6 +85,22 @@ struct SeriesImageGrid: View {
                 .transition(reduceMotion ? .identity : .opacity)
             }
 
+            if meta.canResume, let onResume {
+                Button {
+                    onResume()
+                } label: {
+                    Label("继续生成剩余 \(meta.pendingIndices.count) 张", systemImage: "arrow.clockwise")
+                        .font(.footnote.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 34)
+                }
+                .buttonStyle(.plain)
+                .background(theme.surface, in: Capsule())
+                .overlay(Capsule().stroke(theme.border, lineWidth: 0.8))
+                .foregroundStyle(theme.accent)
+                .accessibilityIdentifier("series-resume")
+            }
+
             if !meta.downloadFailedIndices.isEmpty {
                 Text("第 \(meta.downloadFailedIndices.map { "#\($0)" }.joined(separator: "、")) 张已生成，但没能下载到这台设备。不用重新生成，稍后重新保存即可。")
                     .font(.caption)
@@ -107,6 +125,14 @@ struct SeriesImageGrid: View {
                     // 与 .orange(Color) 在同一个三元表达式里类型不一致，编译不过。
                     .foregroundStyle(meta.failedIndices.isEmpty ? Color.secondary : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if meta.status == "cancelled" {
+                Text("已取消")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.16), in: Capsule())
+                    .foregroundStyle(Color.secondary)
             }
             if meta.partial {
                 Text("部分成功")

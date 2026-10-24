@@ -38,6 +38,8 @@ struct MessageRow: View {
     var isLastAssistant: Bool = false
     /// 「重新生成」回调；为 nil 时不显示按钮
     var onRegenerate: (() -> Void)? = nil
+    /// 组图「继续生成剩余」回调；为 nil 时不显示按钮（历史消息也可用）
+    var onResumeSeries: ((Message) -> Void)? = nil
     /// P0-68 深度思考中（最高档推理模型首字延迟 ~11s）：流式且无正文时显示"深度思考中…"
     var isReasoning: Bool = false
     /// 10-23 P0：这条消息是否仍处于"活跃流式"回合。
@@ -66,7 +68,8 @@ struct MessageRow: View {
             SeriesImageGrid(messageID: message.id,
                             meta: meta,
                             firstImage: message.imageData,
-                            extraImagesJSON: message.extraImagesJSON)
+                            extraImagesJSON: message.extraImagesJSON,
+                            onResume: onResumeSeries == nil ? nil : { onResumeSeries?(message) })
         } else if let original = message.imageData {
             MessageImageView(thumbnailData: message.thumbnailData,
                              originalData: original,

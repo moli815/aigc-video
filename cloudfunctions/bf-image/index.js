@@ -281,6 +281,180 @@ async function runSeriesChild(opts) {
   return { index, ok: true, url: r.url, model, cost: price, costState };
 }
 
+// ── 10-24 P1-12：额度预留（reserve / release）──
+// 说明：这不是数据库事务级的原子预留，而是「带 TTL 的登记 + 读侧扣减」：
+//   · start 时登记一笔 amountCny，30 分钟有效；
+//   · quotaExhausted 把生效中的预留从余额里扣掉，避免并发两次组图各自都通过预检；
+//   · 任务结束（done/partial/failed）或取消时释放。
+// 残余风险：进程在「登记成功、任务未开始」之间被杀，预留会占额度到 TTL 过期（最多 30 分钟），
+// 不会造成少收或多收。
+const RESERVE_COLL = "bf_quota_reservations";
+const SERIES_COLL = "bf_image_series";
+const RESERVE_TTL_MS = 30 * 60 * 1000;
+
+function authSubOf(req) {
+  try {
+    const payload = verifyToken(bearer(req));
+    return (payload && payload.sub) || "";
+  } catch (e) { return ""; }
+}
+
+async function activeReservedCny(accountId) {
+  if (!accountId) return 0;
+  try {
+    const r = await getDb().collection(RESERVE_COLL)
+      .where({ accountId, state: "active" }).limit(50).get();
+    const now = Date.now();
+    let sum = 0;
+    for (const d of (r && r.data) || []) {
+      if (Number(d.expiresAt || 0) > now) sum += Number(d.amountCny || 0);
+    }
+    return Number(sum.toFixed(4));
+  } catch (e) {
+    logStage("reserve_read_failed", { err: String((e && e.message) || e).slice(0, 120) });
+    return 0;   // 读不到预留时按 0 处理（宁可放行，不阻断正常用户）
+  }
+}
+
+async function reserveQuota(taskId, accountId, amountCny) {
+  if (!(Number(amountCny) > 0)) return false;
+  await ensureCollection(RESERVE_COLL);
+  try {
+    await getDb().collection(RESERVE_COLL).add({
+      _id: taskId, accountId, amountCny: Number(amountCny),
+      state: "active", createdAt: Date.now(), expiresAt: Date.now() + RESERVE_TTL_MS,
+    });
+    return true;
+  } catch (e) {
+    logStage("reserve_create_failed", { taskId: String(taskId).slice(0, 20), err: String((e && e.message) || e).slice(0, 120) });
+    return false;
+  }
+}
+
+async function releaseQuota(taskId, reason) {
+  if (!taskId) return;
+  try {
+    await getDb().collection(RESERVE_COLL).doc(taskId).update({
+      state: "released", releasedAt: Date.now(), releaseReason: String(reason || "").slice(0, 40),
+    });
+  } catch (e) { /* 释放失败：等 TTL 过期，不影响用户 */ }
+}
+
+// ── 10-24 P1-5：组图任务状态机（服务端持久化，可轮询、可取消、可断点续跑）──
+function seriesTaskIdOf(accountId, clientRid) {
+  return crypto.createHash("sha256")
+    .update("series:" + String(accountId) + ":" + String(clientRid))
+    .digest("hex").slice(0, 40);
+}
+
+/** 由 items 推导状态：pending 非空 = 还没跑完；跑完按成功数定 done/partial/failed */
+function deriveTaskState(items, requested, cancelled) {
+  const list = (items || []).filter(Boolean);
+  const okCount = list.filter((x) => x.ok).length;
+  const done = new Set(list.map((x) => Number(x.index)));
+  const pendingIndices = [];
+  for (let i = 1; i <= requested; i++) if (!done.has(i)) pendingIndices.push(i);
+  const failedIndices = list.filter((x) => !x.ok).map((x) => Number(x.index));
+  let status;
+  if (cancelled) status = "cancelled";
+  else if (pendingIndices.length > 0) status = okCount > 0 ? "running" : "queued";
+  else status = okCount === requested ? "done" : (okCount > 0 ? "partial" : "failed");
+  return { status, okCount, pendingIndices, failedIndices, items: list };
+}
+
+/** 任务对外结构：与旧 series 响应同构，额外带 taskId/status/pendingIndices */
+function seriesTaskPayload(doc) {
+  const requested = Number(doc.requested || 0);
+  const st = deriveTaskState(doc.items, requested, doc.status === "cancelled");
+  const priced = st.items.reduce((sum, x) => sum + (x.ok ? Number(x.cost || 0) : 0), 0);
+  const committed = st.items.filter((x) => x.ok && x.costState === "committed")
+    .reduce((sum, x) => sum + Number(x.cost || 0), 0);
+  return {
+    ok: st.okCount > 0,
+    task_kind: "series",
+    taskId: doc._id,
+    requestId: doc.clientRequestId || doc._id,
+    status: st.status,
+    requested,
+    succeeded: st.okCount,
+    failed: st.failedIndices.length,
+    partial: st.status === "partial" || (st.okCount > 0 && st.pendingIndices.length > 0),
+    failedIndices: st.failedIndices,
+    pendingIndices: st.pendingIndices,
+    items: st.items,
+    billedCny: Number(priced.toFixed(4)),
+    pricedCny: Number(priced.toFixed(4)),
+    committedCny: Number(committed.toFixed(4)),
+    pendingCostCount: st.items.filter((x) => x.ok && x.costState !== "committed").length,
+    size: doc.sizeResolved || doc.size || "",
+    quality_tier: doc.qualityTier || "",
+    reservedCny: Number(doc.reservedCny || 0),
+    createdAt: doc.createdAt || 0,
+    updatedAt: doc.updatedAt || 0,
+    ms: 0,
+  };
+}
+
+async function readSeriesTask(taskId) {
+  return await readOne(SERIES_COLL, taskId);
+}
+
+/** 写回单项 + 重算状态；两个 step 并发时用点路径更新，不会互相覆盖 items */
+async function recordSeriesItem(taskId, index, item) {
+  const col = getDb().collection(SERIES_COLL);
+  try {
+    await col.doc(taskId).update({
+      ["items." + (index - 1)]: item,
+      updatedAt: Date.now(),
+      status: "running",
+    });
+  } catch (e) {
+    // 点路径不被支持时退化为整数组写回（读-改-写，仍有极小的并发窗口）
+    logStage("series_item_path_update_failed", { taskId: String(taskId).slice(0, 20), err: String((e && e.message) || e).slice(0, 120) });
+    const cur = await readOne(SERIES_COLL, taskId);
+    if (!cur) return;
+    const items = Array.isArray(cur.items) ? cur.items.slice() : [];
+    while (items.length < Number(cur.requested || 0)) items.push(null);
+    items[index - 1] = item;
+    await col.doc(taskId).update({ items, updatedAt: Date.now(), status: "running" }).catch(() => {});
+  }
+}
+
+async function refreshTaskState(taskId) {
+  const doc = await readOne(SERIES_COLL, taskId);
+  if (!doc) return null;
+  const st = deriveTaskState(doc.items, Number(doc.requested || 0), doc.status === "cancelled");
+  const patch = {
+    status: st.status,
+    succeeded: st.okCount,
+    failedIndices: st.failedIndices,
+    pendingIndices: st.pendingIndices,
+    updatedAt: Date.now(),
+  };
+  try { await getDb().collection(SERIES_COLL).doc(taskId).update(patch); } catch (e) { /* 状态写失败：下次读时重算 */ }
+  // 终态释放预留
+  if (["done", "partial", "failed", "cancelled"].includes(st.status)) {
+    await releaseQuota(taskId, st.status);
+  }
+  return Object.assign({}, doc, patch);
+}
+
+/** 执行一张（幂等：已成功的直接返回，不再调上游） */
+async function executeSeriesStep(task, index, accountId) {
+  const items = Array.isArray(task.items) ? task.items : [];
+  const existing = items[index - 1];
+  if (existing && existing.ok) return existing;
+  const item = await runSeriesChild({
+    parentRid: task._id, index, total: Number(task.requested || 0), accountId,
+    prompt: task.prompt, image: undefined, size: task.size,
+    structured: task.structured, renderIntent: task.renderIntent,
+    aspectRatio: task.aspectRatio, qualityTier: task.qualityTier,
+    resolved: task.sizeResolved,
+  });
+  await recordSeriesItem(task._id, index, item);
+  return item;
+}
+
 /** flushJobs 之后再读一次子任务，把 queued 更新成真实 committed —— 响应里的金额必须是账本状态 */
 async function refreshSeriesCostStates(parentRid, accountId, items) {
   for (const it of items) {
@@ -405,15 +579,20 @@ async function quotaExhausted(req) {
     const pct = month && month.remainingPct;
     const usedCny = j && j.usage && j.usage.pool && j.usage.pool.usedCny;
     const capCny = j && j.usage && j.usage.pool && j.usage.pool.capCny;
+    // 10-24 P1-12：生效中的组图预留也要占额度，否则并发两次组图都能通过预检（超额）。
+    const reserved = await activeReservedCny(authSubOf(req));
     if (month && month.enabled && typeof pct === "number" && pct <= 0) {
-      return { exhausted: true, resetAt: month.resetAt || null, usedCny, capCny };
+      return { exhausted: true, resetAt: month.resetAt || null, usedCny, capCny, reservedCny: reserved };
     }
     // 有额度池但拿不到剩余比例：无法确认，按不可用处理（不放行）
     if (typeof capCny === "number" && capCny > 0 && typeof pct !== "number") {
       logStage("quota_check_missing_pct", { capCny });
       return { exhausted: true, unavailable: true, reason: "missing-quota", resetAt: null };
     }
-    return { exhausted: false, remainingPct: pct, usedCny, capCny };
+    const remainingCny = (typeof capCny === "number" && typeof usedCny === "number")
+      ? Number((capCny - usedCny - reserved).toFixed(4))
+      : undefined;
+    return { exhausted: false, remainingPct: pct, usedCny, capCny, reservedCny: reserved, remainingCny };
   } catch (e) {
     // 超时 / 网络异常：无法确认授权与额度 → 拒绝，避免成本敞口
     logStage("quota_check_failed", { err: String((e && e.message) || e).slice(0, 120) });
@@ -473,6 +652,36 @@ function billingEventIdOf(accountId, jobKey) {
     .digest("hex").slice(0, 48);
 }
 
+/**
+ * 10-24 关键修复：CloudBase 不会在 add 时自动建集合 —— 集合不存在会直接抛
+ * [ResourceNotFound] Db or Table not exist，而 addImageCost 吞掉异常后只返回 false，
+ * 表现为「账一直没记上、也没人发现」。所以在写入前显式确保集合存在。
+ *
+ * 60 秒内失败不重试（避免每次请求都多一次管理 API 调用），成功后进程内缓存。
+ */
+const ENSURED_COLLECTIONS = new Map();
+async function ensureCollection(name) {
+  const now = Date.now();
+  const hit = ENSURED_COLLECTIONS.get(name);
+  if (hit && (hit.ok || now - hit.at < 60 * 1000)) return hit.ok;
+  try {
+    await getDb().createCollection(name);
+    ENSURED_COLLECTIONS.set(name, { ok: true, at: now });
+    logStage("collection_created", { name });
+    return true;
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    // 已存在（并发创建 / 之前建过）也算成功
+    if (/exist/i.test(msg)) {
+      ENSURED_COLLECTIONS.set(name, { ok: true, at: now });
+      return true;
+    }
+    ENSURED_COLLECTIONS.set(name, { ok: false, at: now });
+    logStage("collection_ensure_failed", { name, err: msg.slice(0, 140) });
+    return false;
+  }
+}
+
 async function readOne(coll, id) {
   try {
     const r = await getDb().collection(coll).doc(id).get();
@@ -498,6 +707,7 @@ async function addImageCost(accountId, costCny, meta) {
     accountId,
     jobKey || ("anon-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8))
   );
+  await ensureCollection(BILLING_COLL);
   const col = getDb().collection(BILLING_COLL);
 
   // ① 领取事件（_id 唯一 → 只有一个调用点能成功）
@@ -1103,10 +1313,12 @@ const server = http.createServer(async (req, res) => {
         actions: pub.actions,
       });
       if (!pub.actions.includes("retry")) delete body.retryable;
-      // 内部诊断字段绝不进响应（reason/detail/status/raw 可能含模型名、上游原文）
+      // 内部诊断字段绝不进响应（reason/detail/raw 可能含模型名、上游原文）。
+      // 注意：status 只在它是数字（上游 HTTP 状态）时删除 —— 组图任务的 status 是
+      // queued/running/done… 这类业务状态，客户端要靠它渲染，删了会让 409 响应失去上下文。
       delete body.reason;
       delete body.detail;
-      delete body.status;
+      if (typeof body.status === "number") delete body.status;
       delete body.raw;
       console.log(JSON.stringify({
         tag: "image_error", fn: "bf-image", requestId: rid,
@@ -1122,6 +1334,209 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && u.indexOf("/ping") >= 0) {
     return send(200, { ok: true, fn: "bf-image" });
+  }
+
+  // ── 10-24 P1-5：组图任务（start / step / status / cancel）──
+  // 设计要点：云函数是请求驱动的，没有常驻 worker。所以状态机放在数据库，
+  // 由客户端「多次 step」驱动（每次 step 只做一张，远低于函数超时），
+  // 这样关掉 App 后任务仍在库里，重开可以 status 查询、继续或取消。
+
+  if (req.method === "POST" && u.indexOf("/series/start") >= 0) {
+    const tStart = Date.now();
+    await refreshRuntime();
+    const auth = await requireMember(req);
+    if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
+
+    const q = await quotaExhausted(req);
+    if (q.unavailable) {
+      return send(503, {
+        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
+        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
+      });
+    }
+    if (q.exhausted) {
+      return send(429, {
+        ok: false, code: 429, error: "POOL_EXHAUSTED",
+        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
+      });
+    }
+
+    const body = (await readBody(req)) || {};
+    const prompt = String(body.prompt || "").trim();
+    const hasStructured = !!(body.structured && typeof body.structured === "object" && Object.keys(body.structured).length);
+    if (!prompt && !hasStructured) {
+      return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" });
+    }
+    if (prompt.length > 1500) {
+      return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "描述过长，请精简到 1500 字以内" });
+    }
+
+    const n = Math.min(SERIES_MAX, Math.max(2, Math.floor(Number(body.requested_count || body.requestedCount) || 2)));
+    const resolved = resolveSize(body.size, body.aspect_ratio || body.aspectRatio);
+    const renderIntent = String(body.render_intent || body.renderIntent || "");
+    const aspectRatio = String(body.aspect_ratio || body.aspectRatio || "");
+    const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
+    const clientRid = normalizeRid(body.requestId);
+    const taskId = seriesTaskIdOf(auth.sub, clientRid);
+
+    // 幂等：同一 requestId 重复 start 返回同一任务，不新建、不重复预留
+    const existing = await readSeriesTask(taskId);
+    if (existing) {
+      return send(200, Object.assign(seriesTaskPayload(existing), { idempotent: true, ms: Date.now() - tStart }));
+    }
+
+    const models = modelsOf();
+    const unitWorst = Math.max(
+      priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
+      priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
+    );
+    const need = Number((unitWorst * n).toFixed(4));
+    if (typeof q.remainingCny === "number" && q.remainingCny + 1e-6 < need) {
+      logStage("series_start_quota_short", { sub: auth.sub, n, remaining: q.remainingCny, need });
+      return send(402, {
+        ok: false, code: 402, error: "QUOTA_INSUFFICIENT",
+        msg: `本次要生成 ${n} 张，剩余额度不足以覆盖（约需 ¥${need.toFixed(2)}）。可以先做 1 张，或续费后再试。`,
+        requested: n, remainingCny: q.remainingCny, needCny: need,
+        actions: ["single_only", "renew", "cancel"],
+      });
+    }
+
+    const pendingIndices = [];
+    for (let i = 1; i <= n; i++) pendingIndices.push(i);
+    const doc = {
+      _id: taskId,
+      accountId: auth.sub,
+      clientRequestId: clientRid,
+      requested: n,
+      status: "queued",
+      items: new Array(n).fill(null),
+      prompt: prompt.slice(0, 1600),
+      structured: hasStructured ? body.structured : null,
+      size: String(body.size || ""),
+      sizeResolved: resolved,
+      renderIntent, aspectRatio, qualityTier,
+      hasImage: !!body.image,
+      reservedCny: need,
+      succeeded: 0,
+      failedIndices: [],
+      pendingIndices,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 24 * 3600 * 1000,
+    };
+    try {
+      await ensureCollection(SERIES_COLL);
+      await getDb().collection(SERIES_COLL).add(doc);
+    } catch (e) {
+      // 并发 start：另一个请求刚建好 → 返回已有的那份
+      const again = await readSeriesTask(taskId);
+      if (again) return send(200, Object.assign(seriesTaskPayload(again), { idempotent: true }));
+      logStage("series_start_create_failed", { sub: auth.sub, err: String((e && e.message) || e).slice(0, 120) });
+      return send(500, { ok: false, code: 500, error: "INTERNAL", msg: "任务创建失败，请稍后重试。" });
+    }
+    await reserveQuota(taskId, auth.sub, need);
+    logStage("series_started", { sub: auth.sub, taskId: taskId.slice(0, 16), n, need });
+    return send(200, Object.assign(seriesTaskPayload(doc), { ms: Date.now() - tStart }));
+  }
+
+  if (req.method === "POST" && u.indexOf("/series/step") >= 0) {
+    const tStep = Date.now();
+    await refreshRuntime();
+    const auth = await requireMember(req);
+    if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
+    const body = (await readBody(req)) || {};
+    const taskId = String(body.taskId || "").trim().slice(0, 64);
+    if (!taskId) return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 taskId" });
+
+    let task = await readSeriesTask(taskId);
+    if (!task) {
+      return send(404, { ok: false, code: 404, error: "SERIES_NOT_FOUND", msg: "没有找到这次组图任务，请重新开始。" });
+    }
+    if (String(task.accountId || "") !== String(auth.sub)) {
+      return send(403, { ok: false, code: 403, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" });
+    }
+
+    const requested = Number(task.requested || 0);
+    const idx = Number(body.index);
+    if (!Number.isInteger(idx) || idx < 1 || idx > requested) {
+      return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "序号超出范围" });
+    }
+
+    // 已取消：不再启动新的生成
+    if (task.status === "cancelled") {
+      return send(409, Object.assign(seriesTaskPayload(task), { code: 409, error: "TASK_CANCELLED" }));
+    }
+
+    // 幂等：这一张已经成功，或整个任务已经结束 → 直接返回当前状态
+    const existing = (Array.isArray(task.items) ? task.items : [])[idx - 1];
+    if (existing && existing.ok) {
+      return send(200, Object.assign(seriesTaskPayload(task), { step: idx, reused: true, ms: Date.now() - tStep }));
+    }
+    if (["done", "failed", "partial"].includes(task.status)) {
+      return send(200, Object.assign(seriesTaskPayload(task), { step: idx, reused: true, ms: Date.now() - tStep }));
+    }
+
+    try {
+      const item = await executeSeriesStep(task, idx, auth.sub);
+      await flushJobs(2);
+      // 记账状态回读：queued → committed 必须反映到 items 上，否则客户端显示的金额不可信
+      if (item && item.ok) {
+        const child = await readOne(JOB_COLL, idemKey(task._id + "::s" + idx, auth.sub));
+        item.costState = child && child.costCommitted ? "committed" : (child ? "queued" : "pending");
+        await recordSeriesItem(task._id, idx, item);
+      }
+      const updated = await refreshTaskState(task._id);
+      logStage("series_step_done", {
+        sub: auth.sub, taskId: taskId.slice(0, 16), index: idx,
+        ok: !!(item && item.ok), status: (updated && updated.status) || "",
+        ms: Date.now() - tStep,
+      });
+      return send(200, Object.assign(seriesTaskPayload(updated || task), { step: idx, ms: Date.now() - tStep }));
+    } catch (e) {
+      logStage("series_step_failed", { index: idx, err: String((e && e.message) || e).slice(0, 160) });
+      return send(500, { ok: false, code: 500, error: "INTERNAL", msg: "这一张执行出错，可以稍后重试。" });
+    }
+  }
+
+  if (req.method === "GET" && u.indexOf("/series/status") >= 0) {
+    await refreshRuntime();
+    const auth = await requireMember(req);
+    if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
+    const m = u.match(/[?&]taskId=([^&]+)/);
+    const taskId = m ? decodeURIComponent(m[1]).slice(0, 64) : "";
+    if (!taskId) return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 taskId" });
+    const task = await readSeriesTask(taskId);
+    if (!task || String(task.accountId || "") !== String(auth.sub)) {
+      return send(404, { ok: false, code: 404, error: "SERIES_NOT_FOUND", msg: "没有找到这次组图任务。" });
+    }
+    // 读的时候顺手把 pending/status 修正一遍（上一轮可能写到一半）
+    const fixed = await refreshTaskState(taskId);
+    return send(200, seriesTaskPayload(fixed || task));
+  }
+
+  if (req.method === "POST" && u.indexOf("/series/cancel") >= 0) {
+    await refreshRuntime();
+    const auth = await requireMember(req);
+    if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
+    const body = (await readBody(req)) || {};
+    const taskId = String(body.taskId || "").trim().slice(0, 64);
+    if (!taskId) return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 taskId" });
+    const task = await readSeriesTask(taskId);
+    if (!task || String(task.accountId || "") !== String(auth.sub)) {
+      return send(404, { ok: false, code: 404, error: "SERIES_NOT_FOUND", msg: "没有找到这次组图任务。" });
+    }
+    const finished = ["done", "partial", "failed", "cancelled"].includes(task.status);
+    if (!finished) {
+      try {
+        await getDb().collection(SERIES_COLL).doc(taskId).update({
+          status: "cancelled", cancelledAt: Date.now(), updatedAt: Date.now(),
+        });
+      } catch (e) { /* 取消失败：不阻断，用户重试 */ }
+      await releaseQuota(taskId, "cancelled");
+    }
+    const updated = await readSeriesTask(taskId);
+    logStage("series_cancel", { sub: auth.sub, taskId: taskId.slice(0, 16), alreadyFinished: finished });
+    return send(200, Object.assign(seriesTaskPayload(updated || task), { cancelled: !finished }));
   }
 
   // ── 10-24 新增：只重试失败的子图（P0-2/P1-5 的最小可用闭环）──

@@ -1584,6 +1584,95 @@ async function handleSyncPush(req, res) {
   });
 }
 
+/**
+ * POST /admin/sync/dedupe —— 同步数据去重与确定性 _id 迁移（仅管理员）。
+ *
+ * 背景（P1-7）：新写入已经用确定性 _id，但历史记录是随机 _id，同一逻辑记录可能有多条。
+ * 建唯一索引前必须先清掉重复，否则建索引会失败。这里提供**默认只读**的盘点 + 显式执行。
+ *
+ * 安全设计：
+ *   · dryRun 默认 true —— 不带参数调用只会返回报告，不会删任何东西；
+ *   · 每组保留 updatedAt 最大的一条，其余删除；
+ *   · _id 迁移用「先写新文档、再删旧文档」，写失败时旧数据仍在；
+ *   · 单次最多扫描 2000 条，避免一次请求跑太久。
+ */
+async function handleSyncDedupe(req, res) {
+  const auth = await requireStaff(req, res, true);
+  if (!auth) return;
+  const body = await readJsonBody(req);
+  const dryRun = body.dryRun !== false;
+  const limit = Math.min(2000, Math.max(1, Number(body.limit) || 500));
+
+  let rows = [];
+  try {
+    const r = await db.collection(C.userData).orderBy("accountId", "asc").limit(limit).get();
+    rows = r.data || [];
+  } catch (e) {
+    return sendError(res, 500, "SYNC_FAILED", "读取同步数据失败，请稍后重试");
+  }
+
+  const groups = new Map();
+  for (const row of rows) {
+    const k = [row.accountId || "", row.kind || "", row.refId || ""].join("|");
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(row);
+  }
+
+  const plan = [];
+  for (const [key, list] of groups) {
+    if (list.length < 2) continue;
+    const sorted = list.slice().sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    plan.push({
+      key,
+      keep: sorted[0]._id,
+      remove: sorted.slice(1).map((d) => d._id),
+      updatedAt: sorted[0].updatedAt,
+    });
+  }
+
+  if (dryRun) {
+    return sendJson(res, 200, {
+      ok: true, dryRun: true,
+      scanned: rows.length,
+      duplicateGroups: plan.length,
+      removable: plan.reduce((n, x) => n + x.remove.length, 0),
+      // 只回前 50 组，避免响应过大
+      plan: plan.slice(0, 50),
+    });
+  }
+
+  let removed = 0, migrated = 0, failed = 0;
+  for (const item of plan) {
+    for (const id of item.remove) {
+      try { await db.collection(C.userData).doc(id).remove(); removed++; }
+      catch (e) { failed++; }
+    }
+    const [accountId, kind, refId] = item.key.split("|");
+    const detId = crypto.createHash("sha256")
+      .update(accountId + "|" + kind + "|" + refId).digest("hex").slice(0, 40);
+    if (item.keep === detId) continue;
+    try {
+      const cur = await db.collection(C.userData).doc(item.keep).get();
+      const row = (cur.data || [])[0];
+      if (!row) continue;
+      const copy = Object.assign({}, row);
+      delete copy._id;
+      await db.collection(C.userData).add(Object.assign({ _id: detId }, copy));
+      await db.collection(C.userData).doc(item.keep).remove();
+      migrated++;
+    } catch (e) {
+      // 迁移失败：旧记录仍在，下次再试（不阻断其它组）
+      failed++;
+      console.log(JSON.stringify({ tag: "sync_dedupe_migrate_failed", fn: "bf-api", key: item.key, err: String((e && e.message) || e).slice(0, 120) }));
+    }
+  }
+  console.log(JSON.stringify({ tag: "sync_dedupe_done", fn: "bf-api", scanned: rows.length, removed, migrated, failed }));
+  return sendJson(res, 200, {
+    ok: true, dryRun: false,
+    scanned: rows.length, duplicateGroups: plan.length, removed, migrated, failed,
+  });
+}
+
 /** GET /sync/pull?since=毫秒&limit=条数&cursor=游标：增量拉取（含删除标记），支持分页 */
 async function handleSyncPull(req, res, url) {
   const auth = await requireMember(req, res);
@@ -4611,6 +4700,8 @@ const server = http.createServer(async (req, res) => {
     if (m === "POST" && p === "/api/memories/extract") return handleMemoryExtract(req, res);
     if (m === "POST" && p === "/api/sync/push") return handleSyncPush(req, res);
     if (m === "GET" && p === "/api/sync/pull") return handleSyncPull(req, res, url);
+    // 10-24 P1-7：历史重复清理 + 确定性 _id 迁移（仅管理员；dryRun 默认）
+    if (m === "POST" && p === "/api/admin/sync/dedupe") return handleSyncDedupe(req, res);
     // P0-19 定时任务
     if (m === "GET" && p === "/api/schedules") return handleSchedulesList(req, res);
     if (m === "POST" && p === "/api/schedules") return handleScheduleCreate(req, res);
