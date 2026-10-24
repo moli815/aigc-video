@@ -3239,10 +3239,17 @@ async function handleRejectRequest(req, res, staff, id) {
   if (!reqDoc) return sendError(res, 404, "NOT_FOUND", "申请不存在");
   if (reqDoc.status !== "pending") return sendError(res, 409, "ALREADY_REVIEWED", "该申请已处理");
 
-  await db.collection(C.requests).doc(id).update({
-    status: "rejected", rejectReason: reasonText,
-    reviewedAt: new Date(), reviewedBy: staff.sub,
-  });
+  // 10-25：驳回也要走 CAS，和审核通过一样把 pending 抢成终态。
+  // 旧实现是"先读 status 再 update"，与通过操作并发时两边都能过：
+  // 通过方已把申请置为 processing、驳回方用旧的 pending 判断仍然放行，
+  // 结果同一条申请先被开通又被标成"已驳回"。以 updated 计数为准才可靠。
+  const rejectClaim = await db.collection(C.requests)
+    .where({ _id: id, status: "pending" })
+    .update({
+      status: "rejected", rejectReason: reasonText,
+      reviewedAt: new Date(), reviewedBy: staff.sub,
+    });
+  if (!rejectClaim.updated) return sendError(res, 409, "ALREADY_REVIEWED", "该申请已被其他操作处理，请刷新");
   await db.collection(C.notifications).add({
     toStaffId: reqDoc.submittedBy,
     type: "request_rejected",
