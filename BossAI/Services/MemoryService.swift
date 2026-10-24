@@ -30,7 +30,7 @@ final class MemoryService {
         // 10-22 P1 隔离修复：记忆注入必须只取当前账号，否则 A 的偏好会被注入 B 的提示词
         let injectKey = HostedAccount.scopeKey
         var descriptor = FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { $0.ownerKey == injectKey },
+            predicate: #Predicate { $0.ownerKey == injectKey && !$0.isDeleted },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         descriptor.fetchLimit = AppConfig.memoryInjectLimit
@@ -60,7 +60,7 @@ final class MemoryService {
         // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
         let memKey = HostedAccount.scopeKey
         var descriptor = FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { $0.ownerKey == memKey },
+            predicate: #Predicate { $0.ownerKey == memKey && !$0.isDeleted },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
         descriptor.fetchLimit = 100
@@ -197,7 +197,11 @@ final class MemoryService {
             case "delete":
                 // 10-23 P1 修复：delete 前也必须校验账号归属，防止跨账号删除记忆。
                 guard HostedAccount.scopeKey == ownerAtStart else { return }
-                if let index, existing.indices.contains(index) { context.delete(existing[index]) }
+                // 10-24 P1：软删除 + 推墓碑，否则云端旧记录会在下次 pull 把记忆复活。
+                if let index, existing.indices.contains(index) {
+                    existing[index].isDeleted = true
+                    existing[index].updatedAt = Date()
+                }
             default:
                 continue
             }

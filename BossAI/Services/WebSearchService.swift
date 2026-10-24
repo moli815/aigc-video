@@ -963,10 +963,11 @@ enum WebSearchService {
             ordered = hits.enumerated().sorted { lhs, rhs in
                 let ld = Self.parseDateToken(lhs.element.publishedAt)
                 let rd = Self.parseDateToken(rhs.element.publishedAt)
-                if ld == nil && rd == nil { return lhs.offset < rhs.offset }
-                if ld == nil { return false }
-                if rd == nil { return true }
-                return ld! > rd!
+                // 10-24 P0：用 guard 代替强制解包。前面已排除 nil，这里再兜一层，
+                // 未来若排序逻辑调整不会变成崩溃点。
+                guard let l = ld else { return false }
+                guard let r = rd else { return true }
+                return l > r
             }.map(\.element)
         } else {
             ordered = hits

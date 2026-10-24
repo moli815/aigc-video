@@ -11,8 +11,25 @@ import Foundation
 //    与 Keychain 中敏感凭证严格分离。
 /// 全局常量。服务商端点与模型见 Services/ProviderProfiles.swift（按 Key 自动识别）。
 enum AppConfig {
-    // MARK: 构建版本标识（每次交付 overlay 时递增，显示在对话标题右下角）
-    static let appVersion = "v1.2.0"
+    // MARK: 构建版本标识
+    // 10-24 P0：单一版本来源 = Bundle（值由 project.yml 的 MARKETING_VERSION /
+    // CURRENT_PROJECT_VERSION 注入）。此前这里写死 "v1.2.0"，与 project.yml 的 "1.0"、
+    // "2026100901" 三处不一致——服务端 minVersion 判定和崩溃归因都会错。
+
+    /// 纯版本号（1.0 / 1.2.0），用于版本比较，绝不能混入构建号
+    static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
+    }
+
+    /// 构建号（2026100901），用于崩溃归因与交付对账
+    static var appBuild: String {
+        (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0"
+    }
+
+    /// 展示用：版本 + 构建号
+    static var displayVersion: String {
+        "\(appVersion)（\(appBuild)）"
+    }
 
     // MARK: P0-46 版本比较（强制升级：云端下发 minVersion，本地低于则提示更新）
     /// 解析 "v1.2.0" / "1.2.0" / "1.2" 形式为数字三元组；无法解析返回 nil。
@@ -32,6 +49,10 @@ enum AppConfig {
     // MARK: 云端账号服务（会员制）
     /// 账号与 AI 中转服务的地址。App 只与它通信，模型 Key 全部由服务端持有。
     static let hostedAPIBase = "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api"
+
+    /// 10-24：备用入口（CloudBase 默认域名，同一环境）。主域名 DNS/网关故障时兜底。
+    /// 备用地址必须内置在包里——不能由故障中的主域名下发，否则等于没有。
+    static let hostedAPIBaseFallback = "https://xmy-test-d5g8c0xcifcefcfd5.service.tcloudbase.com/api"
 
     // MARK: 内置 Key（仅本人使用，写死在包内；如泄露可在各自平台重置）
     // 以 Base64 存放，避免明文入库被扫描；运行时解码。

@@ -1,0 +1,11 @@
+{
+  "name": "bf-api",
+  "version": "1.0.0",
+  "description": "中防AI 账号与会员系统 - HTTP 云函数（登录 / AI 中转 / 记账 / 审批）",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@cloudbase/node-sdk": "^3.5.0",
+    "pinyin-pro": "^3.25.0"
+  }
+}

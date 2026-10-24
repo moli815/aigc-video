@@ -99,6 +99,17 @@ enum ProviderCatalog {
         model: "cloud",
         style: .volc)
 
+    /// 10-24：候选数组意外为空时的兜底档案（正常路径不会用到）。
+    /// 宁可给一个必然失败的配置（调用时报"未配置 Key"），也不能数组下标崩溃。
+    static let fallbackChat = ChatProfile(
+        id: "unconfigured", displayName: "未配置服务商",
+        baseURL: "https://api.deepseek.com/v1", model: "deepseek-flash",
+        memoryModel: "deepseek-flash", searchStyle: .none)
+    static let fallbackImage = ImageProfile(
+        id: "unconfigured", displayName: "未配置服务商",
+        baseURL: "https://ark.cn-beijing.volces.com/api/v3",
+        model: "doubao-seedream-4-0-20260415", style: .volc)
+
     /// 是否正在使用云端账号（已登录且未切回手动 Key 模式）
     static var isHosted: Bool {
         HostedAccount.isHostedActive && HostedAccount.hasToken
@@ -146,7 +157,8 @@ enum ProviderCatalog {
         // 云端账号模式优先：Key 由服务端持有，客户端只带 token
         if isHosted { return hostedChat }
         let id = UserDefaults.standard.string(forKey: chatProviderKey)
-        var profile = chatCandidates.first { $0.id == id } ?? chatCandidates[0]
+        // 10-24 P0：候选数组为空时不再 [0] 越界；返回内置兜底档案
+        var profile = chatCandidates.first { $0.id == id } ?? chatCandidates.first ?? Self.fallbackChat
         let override = chatModelOverride()
         if !override.isEmpty {
             profile = ChatProfile(id: profile.id, displayName: profile.displayName,
@@ -161,7 +173,8 @@ enum ProviderCatalog {
     static func currentImage() -> ImageProfile {
         if isHosted { return hostedImage }
         let id = UserDefaults.standard.string(forKey: imageProviderKey)
-        var profile = imageCandidates.first { $0.id == id } ?? imageCandidates[0]
+        // 10-24 P0：同上，避免空数组下标崩溃
+        var profile = imageCandidates.first { $0.id == id } ?? imageCandidates.first ?? Self.fallbackImage
         let override = imageModelOverride()
         if !override.isEmpty {
             profile = ImageProfile(id: profile.id, displayName: profile.displayName,

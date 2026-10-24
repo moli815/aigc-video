@@ -92,9 +92,10 @@ extension ChatViewModel {
         streamingText = ""
         isStreaming = true
 
-        streamTask = Task { [self] in
-            await runLoop(userText: text, attachments: attachments, conv: conv,
-                          assistantMessage: assistantMessage)
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runLoop(userText: text, attachments: attachments, conv: conv,
+                               assistantMessage: assistantMessage)
         }
     }
 
@@ -123,8 +124,9 @@ extension ChatViewModel {
         streamingMessageId = assistant.id
         streamingText = ""
         isStreaming = true
-        streamTask = Task { [self] in
-            await runLoop(userText: user.text, attachments: attachments, conv: conv, assistantMessage: assistant)
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runLoop(userText: user.text, attachments: attachments, conv: conv, assistantMessage: assistant)
         }
     }
 
@@ -174,8 +176,9 @@ extension ChatViewModel {
         streamingMessageId = assistant.id
         streamingText = ""
         isStreaming = true
-        streamTask = Task { [self] in
-            await runLoop(userText: lastUser.text, attachments: attachments, conv: conv, assistantMessage: assistant)
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runLoop(userText: lastUser.text, attachments: attachments, conv: conv, assistantMessage: assistant)
         }
     }
 

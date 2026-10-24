@@ -29,7 +29,7 @@ struct IdentitySheet: View {
     @Query(sort: \MemoryItem.createdAt, order: .reverse) private var memories: [MemoryItem]
     /// 10-22 P1 隔离修复：@Query 拿的是全量（跨账号），展示与清空都必须限定当前账号
     private var scopedMemories: [MemoryItem] {
-        memories.filter { $0.ownerKey == HostedAccount.scopeKey }
+        memories.filter { $0.ownerKey == HostedAccount.scopeKey && !$0.isDeleted }
     }
 
     // 初始化身份：优先本机已存身份；称呼为空时回退到云端账号昵称（P0-19），

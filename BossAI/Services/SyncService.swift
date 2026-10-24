@@ -133,6 +133,7 @@ final class SyncService {
                 ])
             }
         }
+        // 墓碑也必须推送：否则「A 设备删除 → B 设备 pull 到旧记录 → 记忆复活」
         let memoriesToPush = try context.fetch(FetchDescriptor<MemoryItem>(
             predicate: #Predicate { $0.ownerKey == key }
         ))
@@ -151,7 +152,20 @@ final class SyncService {
         while index < items.count {
             let slice = Array(items[index..<min(index + 100, items.count)])
             let body: [String: Any] = ["items": slice]
-            _ = try await HostedAccount.shared.syncPush(items: body)
+            let resp = try await HostedAccount.shared.syncPush(items: body)
+            // 10-24 P1：服务端已改为逐条回执。旧实现只看 HTTP 2xx，
+            // 部分条目写库失败也当成功 → 直接推进游标 → 那几条永远不再推。
+            // 兼容旧服务端：没有 acceptedIds 字段时退回「saved 必须等于本批条数」。
+            if let failed = resp["failedItems"] as? [[String: Any]], !failed.isEmpty {
+                let ids = failed.compactMap { $0["refId"] as? String }.prefix(5).joined(separator: ",")
+                throw SyncError.invalidResponse("本轮有 \(failed.count) 条未写入云端（\(ids)…），稍后重试")
+            }
+            if resp["acceptedIds"] == nil {
+                let saved = (resp["saved"] as? NSNumber)?.intValue ?? (resp["saved"] as? Int) ?? -1
+                if saved >= 0 && saved < slice.count {
+                    throw SyncError.invalidResponse("云端仅接收 \(saved)/\(slice.count) 条，稍后重试")
+                }
+            }
             index += 100
         }
     }
@@ -163,28 +177,44 @@ final class SyncService {
     private func pull(context: ModelContext) async throws {
         let key = HostedAccount.scopeKey
         let since = Int((lastSyncAt?.timeIntervalSince1970 ?? 0) * 1000)
-        let json = try await HostedAccount.shared.syncPull(since: since)
-        // 10-23 P1：结构错误（items 缺失或类型不对）必须抛错，不能当空列表处理——
-        // 否则 syncNow 会推进游标，这批数据永远不会再被拉取。
-        guard let list = json["items"] as? [[String: Any]] else {
-            throw SyncError.invalidResponse("缺少或格式错误的 items 数组")
-        }
-        guard !list.isEmpty else { return }
-
-        for item in list {
-            let kind = item["kind"] as? String ?? ""
-            let payload = item["payload"] as? String ?? ""
-            let deleted = (item["deleted"] as? Bool) ?? false
-            switch kind {
-            case "conversation":
-                try mergeConversation(payload: payload, deleted: deleted, key: key, context: context)
-            case "memory":
-                try mergeMemory(payload: payload, deleted: deleted, key: key, context: context)
-            default:
-                // 10-23 P1：未知 kind 不能静默跳过，否则服务端格式升级时客户端会丢数据
-                throw SyncError.invalidPayload("未知同步条目类型：\(kind)")
+        // 10-24 P1：分页拉取。服务端单页有上限（默认 500），旧实现只拉一页就推进游标，
+        // 数据超过一页时剩余记录永远拉不到。现在循环到 hasMore == false，
+        // 任何一页失败都抛错（syncNow 不推进游标），全部成功才提交。
+        var cursor: String? = nil
+        var page = 0
+        let maxPages = 40          // 40 × 200 = 8000 条；超过说明数据异常，先停下等人工确认
+        let pageLimit = 200
+        repeat {
+            page += 1
+            if page > maxPages {
+                throw SyncError.invalidResponse("同步分页超过 \(maxPages) 页，已中止本轮（请联系客服）")
             }
-        }
+            let json = try await HostedAccount.shared.syncPull(since: since, limit: pageLimit, cursor: cursor)
+            // 10-23 P1：结构错误（items 缺失或类型不对）必须抛错，不能当空列表处理——
+            // 否则 syncNow 会推进游标，这批数据永远不会再被拉取。
+            guard let list = json["items"] as? [[String: Any]] else {
+                throw SyncError.invalidResponse("缺少或格式错误的 items 数组")
+            }
+            for item in list {
+                let kind = item["kind"] as? String ?? ""
+                let payload = item["payload"] as? String ?? ""
+                let deleted = (item["deleted"] as? Bool) ?? false
+                switch kind {
+                case "conversation":
+                    try mergeConversation(payload: payload, deleted: deleted, key: key, context: context)
+                case "memory":
+                    try mergeMemory(payload: payload, deleted: deleted, key: key, context: context)
+                default:
+                    // 10-23 P1：未知 kind 不能静默跳过，否则服务端格式升级时客户端会丢数据
+                    throw SyncError.invalidPayload("未知同步条目类型：\(kind)")
+                }
+            }
+            // 旧服务端没有 hasMore/nextCursor：视为单页结束
+            let hasMore = (json["hasMore"] as? Bool) ?? false
+            let next = json["nextCursor"] as? String ?? ""
+            cursor = (hasMore && !next.isEmpty) ? next : nil
+            if cursor == nil { break }
+        } while true
         // 10-22 P1：保存失败必须抛出——否则 syncNow 会把 lastSyncAt 推进，
         // 这批没落库的数据永远不会再被拉取（用户看不到消息却以为"已同步"）。
         try context.save()
@@ -252,6 +282,9 @@ final class SyncService {
         conv.rollingSummary = dict["rollingSummary"] as? String ?? ""
         conv.updatedAt = remoteUpdated
         conv.createdAt = Self.date(fromMilliseconds: dict["createdAt"]) ?? remoteUpdated
+        // 10-24 P1：新建路径必须恢复 isDeleted。旧实现只在「本地已存在」分支处理墓碑，
+        // 新设备首次拉取时已删除的会话会被当作正常会话重新建出来（复活）。
+        conv.isDeleted = (dict["isDeleted"] as? Bool) ?? false
         context.insert(conv)
         // 10-23 P1：新建会话同样对同一 payload 内的重复消息 ID 去重
         var insertedMessageIDs = Set<UUID>()
@@ -281,11 +314,17 @@ final class SyncService {
         }
         // 10-23 P0：记忆合并必须同时匹配 ownerKey，防止不同账号 UUID 碰撞导致跨账号覆盖/误删
         let existing = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.id == uuid && $0.ownerKey == key })).first
-        if deleted { if let existing { context.delete(existing) }; return }
+        // 服务端行级墓碑（deleted:true）或 payload 内墓碑（isDeleted:true）都按删除处理
+        let tombstone = deleted || ((dict["isDeleted"] as? Bool) ?? false)
+        if tombstone {
+            if let existing { existing.isDeleted = true; existing.updatedAt = Date() }
+            return
+        }
         guard existing == nil else { return }
         let item = MemoryItem(content: dict["content"] as? String ?? "")
         item.id = uuid
         item.ownerKey = key
+        item.isDeleted = false
         if let created = Self.date(fromMilliseconds: dict["createdAt"]) { item.createdAt = created }
         if let updated = Self.date(fromMilliseconds: dict["updatedAt"]) { item.updatedAt = updated }
         context.insert(item)
@@ -328,7 +367,8 @@ final class SyncService {
             "id": m.id.uuidString,
             "content": String(m.content.prefix(10_000)),
             "createdAt": Int(m.createdAt.timeIntervalSince1970 * 1000),
-            "updatedAt": Int(m.updatedAt.timeIntervalSince1970 * 1000),
+            "updatedAt": Int(max(m.updatedAt, m.createdAt).timeIntervalSince1970 * 1000),
+            "isDeleted": m.isDeleted,
         ]
         let data = (try? JSONSerialization.data(withJSONObject: dict)) ?? Data()
         return String(data: data, encoding: .utf8) ?? "{}"

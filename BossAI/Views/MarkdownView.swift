@@ -255,10 +255,14 @@ struct MarkdownView: View, Equatable {
         }
 
         func flushParagraph(endLine: Int) {
-            guard !paragraph.isEmpty else { return }
+            // 10-24 P0：paragraph 与 paragraphRanges 必须同时非空，否则 [0] 直接崩溃。
+            guard !paragraph.isEmpty,
+                  let startRange = paragraphRanges.first,
+                  let endRange = paragraphRanges.last else {
+                paragraph = []; paragraphRanges = []
+                return
+            }
             let content = paragraph.joined(separator: "\n")
-            let startRange = paragraphRanges[0]
-            let endRange = paragraphRanges[paragraphRanges.count - 1]
             let range = startRange.lowerBound..<endRange.upperBound
             result.append(LocatedBlock(block: .paragraph(content), range: range))
             paragraph = []
@@ -275,9 +279,11 @@ struct MarkdownView: View, Equatable {
             // 代码围栏开/闭：``` 行本身不进内容；未闭合时把余下内容整块当代码输出（容错）
             if line.hasPrefix("```") {
                 if inCode {
-                    let startRange = codeRanges[0]
-                    let range = startRange.lowerBound..<currentRange.upperBound
-                    result.append(LocatedBlock(block: .code(language: codeLanguage, codeBuf.joined(separator: "\n")), range: range))
+                    // 10-24 P0：围栏刚开就闭合时 codeRanges 可能为空
+                    if let startRange = codeRanges.first {
+                        let range = startRange.lowerBound..<currentRange.upperBound
+                        result.append(LocatedBlock(block: .code(language: codeLanguage, codeBuf.joined(separator: "\n")), range: range))
+                    }
                     codeBuf = []
                     codeRanges = []
                     inCode = false
@@ -307,11 +313,13 @@ struct MarkdownView: View, Equatable {
                     rowRanges.append(cellRange)
                     let cells = MarkdownTableCore.cells(lines[index])
                     // 短行右侧补空字符串，把所有行补齐到同一列数，方便表格视图按列取值
-                    rows.append(cells + Array(repeating: "", count: max(0, rows[0].count - cells.count)))
+                    // 10-24 P0：以首行列数为基准补齐；首行缺失时按本行列数兜底
+                    let baseCount = rows.first?.count ?? cells.count
+                    rows.append(cells + Array(repeating: "", count: max(0, baseCount - cells.count)))
                     index += 1
                 }
                 let range = headerRange.lowerBound..<(rowRanges.last?.upperBound ?? headerRange.upperBound)
-                let width = rows.map(\.count).max() ?? rows[0].count
+                let width = rows.map(\.count).max() ?? 0
                 rows = rows.map { $0 + Array(repeating: "", count: width - $0.count) }
                 result.append(LocatedBlock(block: .table(rows), range: range))
                 continue
@@ -355,8 +363,8 @@ struct MarkdownView: View, Equatable {
         }
         // 收尾：清掉残余段落；未闭合的代码围栏也整体输出，避免流式期间内容"消失"
         flushParagraph(endLine: lines.count)
-        if inCode && !codeBuf.isEmpty {
-            let startRange = codeRanges[0]
+        if inCode && !codeBuf.isEmpty, let startRange = codeRanges.first {
+            // 10-24 P0：同上，围栏异常时 codeRanges 可能为空——直接跳过而不是崩溃
             let endRange = codeRanges.last ?? startRange
             let range = startRange.lowerBound..<endRange.upperBound
             result.append(LocatedBlock(block: .code(language: codeLanguage, codeBuf.joined(separator: "\n")), range: range))

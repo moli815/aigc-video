@@ -268,15 +268,41 @@ final class HostedAccount: ObservableObject {
         guard isHostedActive else { return nil }
         return UserDefaults.standard.dictionary(forKey: infoKeyLiteral)?[key]
     }
+    /// 10-24：客户端第二道闸。服务端已有 min/max，但历史脏配置、绕过校验的写入、
+    /// 以及未来新增 key 都可能带来越界值。越界时回退默认值而不是裁成边界值——
+    /// 静默裁剪会得到一个"看起来正常但语义完全不同"的参数，更难排查。
+    nonisolated private static let behaviorRanges: [String: ClosedRange<Double>] = [
+        "chatTimeout": 10...600,
+        "imageTimeout": 10...900,
+        "chatFirstTokenTimeout": 5...600,
+        "streamRetry": 0...5,
+        "imageRetry": 0...5,
+        "maxToolIterations": 1...20,
+    ]
+
     nonisolated static func behaviorDouble(_ key: String, default def: Double) -> Double {
-        if let v = behaviorValue(key) as? NSNumber, v.doubleValue > 0 { return v.doubleValue }
-        if let s = behaviorValue(key) as? String, let d = Double(s), d > 0 { return d }
-        return def
+        let raw: Double?
+        if let v = behaviorValue(key) as? NSNumber, v.doubleValue > 0 { raw = v.doubleValue }
+        else if let s = behaviorValue(key) as? String, let d = Double(s), d > 0 { raw = d }
+        else { raw = nil }
+        guard let value = raw else { return def }
+        if let range = behaviorRanges[key], !range.contains(value) {
+            NSLog("[RemoteConfig] %@ 越界(%@)，回退默认 %@", key, String(value), String(def))
+            return def
+        }
+        return value
     }
     nonisolated static func behaviorInt(_ key: String, default def: Int) -> Int {
-        if let v = behaviorValue(key) as? NSNumber, v.intValue >= 0 { return v.intValue }
-        if let s = behaviorValue(key) as? String, let i = Int(s), i >= 0 { return i }
-        return def
+        let raw: Int?
+        if let v = behaviorValue(key) as? NSNumber, v.intValue >= 0 { raw = v.intValue }
+        else if let s = behaviorValue(key) as? String, let i = Int(s), i >= 0 { raw = i }
+        else { raw = nil }
+        guard let value = raw else { return def }
+        if let range = behaviorRanges[key], !range.contains(Double(value)) {
+            NSLog("[RemoteConfig] %@ 越界(%d)，回退默认 %d", key, value, def)
+            return def
+        }
+        return value
     }
     nonisolated static func behaviorBool(_ key: String, default def: Bool) -> Bool {
         if let v = behaviorValue(key) as? Bool { return v }
@@ -405,6 +431,12 @@ final class HostedAccount: ObservableObject {
         // 每次启动把镜像标志与 Keychain 对齐（老版本升级上来时标志可能缺失）
         UserDefaults.standard.set(!(token ?? "").isEmpty, forKey: Self.loggedInKey)
         if let dict = UserDefaults.standard.dictionary(forKey: infoKey) {
+            // 10-24 P0 修复：恢复 accountName。此前漏读这一项，冷启动后实例属性为空串，
+            // 下一次 persistInfo() 会把空串写回 profile → scopeKey 退化为 hosted-anonymous，
+            // 按 ownerKey 过滤的会话/记忆/文件全部"看不见"。
+            let cachedAccount = (dict["accountName"] as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cachedAccount.isEmpty { accountName = cachedAccount }
             displayName = dict["displayName"] as? String ?? ""
             if let s = dict["memberUntil"] as? String {
                 memberUntil = ISO8601DateFormatter().date(from: s)
@@ -425,7 +457,6 @@ final class HostedAccount: ObservableObject {
     private func persistInfo() {
         var dict: [String: Any] = [
             "displayName": displayName,
-            "accountName": accountName,
             "daysLeft": daysLeft ?? -1,
             "exportDoc": features?["exportDoc"] as? Bool ?? false,
             "deepResearch": features?["deepResearch"] as? Bool ?? false,
@@ -459,6 +490,17 @@ final class HostedAccount: ObservableObject {
             "weekRemainingPct": weekRemainingPct,
             "monthRemainingPct": monthRemainingPct,
         ]
+        // 10-24 P0：账号标识为空时绝不覆盖已有有效值。
+        // 冷启动未恢复 / 异常路径 / 服务端未回传 都可能让实例属性为空，
+        // 一旦写回就成了数据作用域漂移的根源。
+        let trimmedAccount = accountName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAccount.isEmpty {
+            dict["accountName"] = trimmedAccount
+        } else {
+            let previous = (UserDefaults.standard.dictionary(forKey: infoKey)?["accountName"] as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !previous.isEmpty { dict["accountName"] = previous }
+        }
         // P0-77 通用行为通道：appBehavior 全量平铺（任意新 key 自动写入，无需改代码）
         if let ab = appBehavior {
             for (k, v) in ab where dict[k] == nil { dict[k] = v }
@@ -885,9 +927,18 @@ final class HostedAccount: ObservableObject {
         try await request("/sync/push", method: "POST", body: items)
     }
 
-    /// P0-18 云端同步：增量拉取（since 为毫秒时间戳）
-    func syncPull(since: Int) async throws -> [String: Any] {
-        try await request("/sync/pull?since=\(since)")
+    /// P0-18 云端同步：增量拉取（since 为毫秒时间戳）。
+    /// 10-24：支持分页——服务端每页最多 limit 条，用 nextCursor 续页；
+    /// 不传 limit 时服务端按 500 返回（兼容旧行为）。
+    func syncPull(since: Int, limit: Int? = nil, cursor: String? = nil) async throws -> [String: Any] {
+        var path = "/sync/pull?since=\(since)"
+        if let limit { path += "&limit=\(limit)" }
+        if let cursor, !cursor.isEmpty {
+            // 游标是 base64url，可能含 - _，必须做 URL 编码
+            let escaped = cursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? cursor
+            path += "&cursor=\(escaped)"
+        }
+        return try await request(path)
     }
 
     /// 会员自助提交续费申请（带档位标签）

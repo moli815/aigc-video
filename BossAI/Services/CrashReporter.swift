@@ -35,16 +35,23 @@ enum CrashReporter {
     /// 五种致命信号（SIGABRT/SIGSEGV/SIGBUS/SIGILL/SIGFPE）走 record(kind:"signal")。
     /// 在 App 启动最早时机调用（BossAIApp.init）
     static func install() {
+        // NSException 不在 signal context 里，可以安全使用 Foundation
         NSSetUncaughtExceptionHandler { exception in
             CrashReporter.record(kind: "exception",
                                  signal: nil,
                                  stack: (exception.callStackSymbols ?? []).joined(separator: "\n")
                                     + "\n[reason] " + (exception.reason ?? "?"))
         }
+        // 10-24 P1：POSIX signal handler 里禁止调用 Foundation/UIKit/JSON/FileManager
+        // （非 async-signal-safe，会在崩溃现场二次崩溃或死锁）。
+        // 这里预打开标记文件描述符，handler 内只做 write(2)；完整信息下次启动再组装。
+        let dir = crashDir()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let markerPath = dir.appendingPathComponent(signalMarkerName).path
+        markerFD = open(markerPath, O_WRONLY | O_CREAT | O_APPEND, mode_t(0o644))
         for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE] {
             signal(sig, { s in
-                CrashReporter.record(kind: "signal", signal: String(s),
-                                     stack: Thread.callStackSymbols.joined(separator: "\n"))
+                CrashReporter.writeSignalMarker(s)
                 // 恢复默认处理并重新抛出，保证系统记录与后续符号化
                 signal(s, SIG_DFL)
                 raise(s)
@@ -52,12 +59,66 @@ enum CrashReporter {
         }
     }
 
+    /// 预打开的标记文件描述符（install 阶段创建，signal handler 直接用）
+    private static var markerFD: Int32 = -1
+    private static let signalMarkerName = "signal-marker.bin"
+
+    /// async-signal-safe：只调用 write(2)。8 字节 = 1 字节信号 + 4 字节秒级时间戳 + 3 字节保留。
+    private static func writeSignalMarker(_ sig: Int32) {
+        guard markerFD >= 0 else { return }
+        var payload = [UInt8](repeating: 0, count: 8)
+        payload[0] = UInt8(truncatingIfNeeded: sig)
+        let t = UInt32(truncatingIfNeeded: time(nil))
+        payload[1] = UInt8(truncatingIfNeeded: t)
+        payload[2] = UInt8(truncatingIfNeeded: t >> 8)
+        payload[3] = UInt8(truncatingIfNeeded: t >> 16)
+        payload[4] = UInt8(truncatingIfNeeded: t >> 24)
+        _ = payload.withUnsafeBufferPointer { buf in
+            write(markerFD, buf.baseAddress, 8)
+        }
+    }
+
+    /// 启动时把上次的信号标记转成 crash 记录（此时已脱离 signal context，可安全用 Foundation）。
+    /// 注意：不能关闭 markerFD —— 那会让后续崩溃无法再写标记；用独立读句柄 + truncate 清空。
+    private static func drainSignalMarkers() {
+        let path = crashDir().appendingPathComponent(signalMarkerName)
+        let readFD = open(path, O_RDONLY)
+        guard readFD >= 0 else { return }
+        var data = Data()
+        var buf = [UInt8](repeating: 0, count: 512)
+        while data.count < 65536 {
+            let n = read(readFD, &buf, 512)
+            if n <= 0 { break }
+            data.append(contentsOf: buf[0..<n])
+        }
+        close(readFD)
+        // 清空但保留 inode：handler 的 O_APPEND 句柄继续有效
+        if markerFD >= 0 { _ = ftruncate(markerFD, 0) }
+        guard data.count >= 8 else { return }
+        var offset = 0
+        while offset + 8 <= data.count {
+            let sig = Int32(data[offset])
+            let ts = UInt32(data[offset + 1])
+                | (UInt32(data[offset + 2]) << 8)
+                | (UInt32(data[offset + 3]) << 16)
+                | (UInt32(data[offset + 4]) << 24)
+            let when = ts > 0 ? Date(timeIntervalSince1970: TimeInterval(ts)) : Date()
+            record(kind: "signal",
+                   signal: String(sig),
+                   stack: "[signal handler] 收到致命信号 \(sig)。signal context 内无法安全采集堆栈，"
+                        + "完整调用栈请用 Xcode Devices / MetricKit 导出。",
+                   at: when)
+            offset += 8
+        }
+        // 已用 ftruncate 清空，无需删除文件（删掉会让 handler 的 fd 指向已删除 inode）
+    }
+
     /// 把崩溃现场序列化成 JSON 写入待发目录，并清理超量的旧文件。
     /// 整个过程全部容错（try?）：崩溃路径上绝不允许二次崩溃
-    private static func record(kind: String, signal: String?, stack: String) {
+    private static func record(kind: String, signal: String?, stack: String, at date: Date = Date()) {
         let info = UIDevice.current
         let payload: [String: Any] = [
-            "appVersion": AppConfig.appVersion,
+            "appVersion": AppConfig.displayVersion,
             "osVersion": "\(info.systemName) \(info.systemVersion)",
             "device": info.model,
             "kind": kind,
@@ -65,7 +126,7 @@ enum CrashReporter {
             // 堆栈截断到 5800 字符：极端递归崩溃的堆栈可能极长
             "stack": String(stack.prefix(5800)),
             "memberName": HostedAccount.cachedDisplayName,
-            "ts": Int(Date().timeIntervalSince1970 * 1000),
+            "ts": Int(date.timeIntervalSince1970 * 1000),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         let dir = crashDir()
@@ -84,6 +145,8 @@ enum CrashReporter {
     /// 下次启动时调用：把待发崩溃文件逐条上报，成功即删。
     /// 损坏（解析不过）的文件直接删除；HTTP 2xx 视为成功；失败静默保留待下次再试
     static func uploadPendingIfNeeded() {
+        // 先把上次崩溃留下的信号标记转成正式记录（必须在扫描目录之前）
+        drainSignalMarkers()
         let dir = crashDir()
         guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter({ $0.lastPathComponent.hasPrefix("crash-") && $0.pathExtension == "json" }),
@@ -102,10 +165,17 @@ enum CrashReporter {
             req.httpBody = data
             // 10-23 P3：崩溃上报也走受限网络客户端，响应体限制 256KB；失败保留文件下次再试
             Task {
-                guard let (_, resp) = try? await BoundedHTTPClient.data(for: req,
-                                                                        session: BoundedHTTPClient.searchSession,
-                                                                        limit: 256 * 1024),
+                guard let (body, resp) = try? await BoundedHTTPClient.data(for: req,
+                                                                           session: BoundedHTTPClient.searchSession,
+                                                                           limit: 256 * 1024),
                       (200...299).contains(resp.statusCode) else { return }
+                // 10-24 P1：服务端已改为「落库成功才 2xx + ok:true」。客户端再校验一次，
+                // 避免中间层缓存/旧服务端回 200 却没真正保存 —— 那会把唯一证据删掉。
+                let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
+                guard (obj?["ok"] as? Bool) == true else { return }
+                if let reportId = obj?["reportId"] as? String, !reportId.isEmpty {
+                    PerformanceTrace.event("CrashReportAccepted")
+                }
                 try? FileManager.default.removeItem(at: file)
             }
         }

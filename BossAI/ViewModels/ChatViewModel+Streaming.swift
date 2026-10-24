@@ -304,7 +304,9 @@ extension ChatViewModel {
                     fullText = ""
                     assistantMessage.text = ""
                     saveOrWarn()
-                    iteration -= 1          // 把这一轮还回去，确保修复轮仍带工具权限
+                    // 把这一轮还回去，确保修复轮仍带工具权限。钳到 0 防止负数导致
+                    // 循环条件判断出现「预算已用尽但仍继续」的歧义。
+                    iteration = max(0, iteration - 1)
                     continue loop
                 }
                 if pendingToolCalls.isEmpty { exhausted = false; break loop }

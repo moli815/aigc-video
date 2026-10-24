@@ -931,6 +931,12 @@ enum DocumentBuilder {
 
     // MARK: - PDF
 
+    /// 10-24 P0：NSMutableAttributedString.copy() 一定返回 NSAttributedString，
+    /// 但 as! 在类型桥接异常时会直接 crash；失败时退化为当前对象的不可变视图。
+    private static func immutableCopy(_ value: NSMutableAttributedString) -> NSAttributedString {
+        (value.copy() as? NSAttributedString) ?? NSAttributedString(attributedString: value)
+    }
+
     static func pdf(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
@@ -965,11 +971,11 @@ enum DocumentBuilder {
             case .quote: append("“" + block.text + "”", size: 12, color: .darkGray, indent: 16, italic: true)
             case .paragraph: append(block.text, size: 12)
             case .pageBreak:
-                if section.length > 0 { sections.append(section.copy() as! NSAttributedString) }
+                if section.length > 0 { sections.append(immutableCopy(section)) }
                 section = NSMutableAttributedString(string: "")
             }
         }
-        if section.length > 0 { sections.append(section.copy() as! NSAttributedString) }
+        if section.length > 0 { sections.append(immutableCopy(section)) }
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize))
         let path = CGPath(rect: CGRect(x: margin, y: margin, width: pageSize.width - margin * 2,
                                       height: pageSize.height - margin * 2), transform: nil)

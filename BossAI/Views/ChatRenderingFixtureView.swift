@@ -63,7 +63,10 @@ struct ChatRenderingFixtureView: View {
             let message = Message(role: "assistant", text: text)
             if mode == "sources" {
                 let sources = (1...85).map { CitationSource(id: $0, url: "https://example.com/\($0)", title: "测试来源标题\($0)") }
-                message.sourcesJSON = String(data: try! JSONEncoder().encode(sources), encoding: .utf8)!
+                // 10-24 P0：夹具也不能 try!/强解包——渲染回归测试里崩掉会让整条流水线红。
+                if let data = try? JSONEncoder().encode(sources) {
+                    message.sourcesJSON = String(data: data, encoding: .utf8) ?? "[]"
+                }
             }
             message.conversation = conversation; context.insert(message)
             try? context.save()

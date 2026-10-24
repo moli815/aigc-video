@@ -340,7 +340,7 @@ struct ChatView: View {
         UsageNoticeBar()
             .overlay(alignment: .bottomTrailing) {
                 // P0-10：版本号——标题右下方小字，用于确认设备上的构建版本
-                Text(AppConfig.appVersion)
+                Text(AppConfig.displayVersion)
                     .font(.system(size: 10, weight: .medium).monospaced())
                     .foregroundStyle(Color.white.opacity(0.28))
                     .padding(.trailing, 14)

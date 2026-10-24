@@ -97,6 +97,10 @@ final class MemoryItem {
     /// P0-18 云端同步：归属账号键 + 最后修改时间
     var ownerKey: String = ""
     var updatedAt: Date = Date()
+    /// 10-24 P1：软删除墓碑。物理删除后同步推不上去，云端旧记录会在下一次 pull
+    /// 把记忆重新建出来（"删了又回来"）。改为保留墓碑并推送，跨设备删除才成立。
+    /// 有默认值 = SwiftData 轻量迁移，老库直接兼容。
+    var isDeleted: Bool = false
 
     init(content: String, source: String = "") {
         self.content = content

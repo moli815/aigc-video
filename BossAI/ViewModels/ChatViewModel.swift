@@ -586,7 +586,10 @@ final class ChatViewModel: ObservableObject {
         lastContextChars = systemChars + bodyChars
         contextTruncated = remaining <= 0
 
-        return [messages[0], messages[1]] + selected.reversed()
+        // 10-24 P0：两条 system 块固定在头部。用 prefix 而不是直接下标，
+        // 将来若系统块结构变化（例如合并成一条）不会越界崩溃。
+        let head = Array(messages.prefix(2))
+        return head + selected.reversed()
     }
 
     /// 读取图片附件 → 交给 ImageCompressor 压缩（长边 1024 / JPEG 0.78）→ data URL。

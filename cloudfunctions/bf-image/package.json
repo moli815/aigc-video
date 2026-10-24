@@ -1,0 +1,12 @@
+{
+  "name": "bf-image",
+  "version": "1.0.0",
+  "description": "独立生图云函数（文生图/编辑 + 鉴权/限流/记账）",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@cloudbase/node-sdk": "^3.5.0",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0"
+  }
+}
