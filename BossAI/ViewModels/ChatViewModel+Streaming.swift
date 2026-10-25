@@ -522,7 +522,13 @@ extension ChatViewModel {
                                 var composed: Data? = nil
                                 if let bg = try? await HostedAccount.shared.renderPoster(
                                     title: content.title, subtitle: content.subtitle, bullets: content.bullets) {
-                                    composed = PosterLayout.render(background: bg, content: content).pngData()
+                                    // 3.4 修复：renderPoster 内部已经调用过 PosterComposer.compose，
+                                    // 返回的就是**最终成品**（文字 + 底部遮罩都画好了）。
+                                    // 这里再调一次 PosterLayout.render 会把文字和遮罩画第二遍——
+                                    // 名片出现"重影/字叠字/底部越压越黑"就是这个原因。
+                                    // 名片只允许一次最终合成，PosterLayout 只服务普通海报。
+                                    composed = bg.pngData()
+                                    PerformanceTrace.event("poster_render_stage_count_1")
                                 }
                                 if let composed {
                                     imageData = composed
@@ -546,6 +552,8 @@ extension ChatViewModel {
                                 }
                             }
                             PerformanceTrace.event("image_quality_checked")
+                            // 3.3 可观测：首轮参数落日志（不含 prompt 正文），重试时用于对比是否丢参数
+                            PerformanceTrace.event("image_task_context")
                             // 重试后仍不可用 → 不落库、不报成功（避免"存了一个坏文件还告诉用户完成了"）
                             if ImageQualityChecker.shouldRegenerate(quality) {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
@@ -562,7 +570,11 @@ extension ChatViewModel {
                                    !check.ok {
                                     // 10-25：重试必须沿用规划后的提示词，否则比例/禁画字/保留原图这些约束会丢
                                     let fixPrompt = planPrompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
-                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: planAspect) {
+                                    // 3.3 修复：重试必须沿用首轮的完整任务参数。
+                                    // 旧代码只传了 prompt/structured/renderIntent/aspectRatio，
+                                    // 丢了 taskKind / qualityTier / requestedCount —— 于是
+                                    // "Pro 编辑重试变成普通生图"、"组图数量丢失"、"名片重试不走排版"。
+                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
                                     }
