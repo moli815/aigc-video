@@ -556,7 +556,10 @@ extension ChatViewModel {
                             //      体积异常（下载被截断）→ 不重新生成，交给下载重试，避免重复计费。
                             var quality = ImageQualityChecker.check(imageData, expectedAspect: planAspect)
                             if ImageQualityChecker.shouldRegenerate(quality) {
-                                if let retried = try? await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier) {
+                                // 3.3 补：质量失败重试同样不能丢 layerDecomposition（图层拆分）与 requestedCount（组图张数），
+                                // 否则"组图 4 张质量不过 → 重试变 1 张"、"拆分重试退化成普通生图"。
+                                let qualityRetryCtx = imageCtx.retrying(note: "上一次结果未通过画质检查（\(quality.summary)），请重做一次，保持同样的构图与要求。")
+                                if let retried = try? await Self.generateImageWithRetry(prompt: qualityRetryCtx.prompt, references: qualityRetryCtx.references, service: imageService, structured: qualityRetryCtx.structured, layerDecomposition: toolName == "image_decompose", renderIntent: qualityRetryCtx.renderIntent, aspectRatio: qualityRetryCtx.aspectRatio, taskKind: qualityRetryCtx.taskKind, qualityTier: qualityRetryCtx.qualityTier, requestedCount: qualityRetryCtx.requestedCount) {
                                     imageData = retried
                                     quality = ImageQualityChecker.check(retried, expectedAspect: planAspect)
                                     BudgetTracker.addImageGeneration()
