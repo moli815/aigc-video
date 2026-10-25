@@ -405,8 +405,6 @@ extension ChatViewModel {
                         } else {
                         // P0-50 ChatGPT 式生图加载：执行期间在消息流里显示占位动画行
                         pendingImage = String(prompt.prefix(24))
-                        // 等待阶段文案按任务类型分流：名片要走"生成无字底图 → 排版文字"
-                        pendingImageKind = (plan.taskType == .poster) ? "card" : "image"
                         defer { pendingImage = nil; pendingImageKind = "image" }
                         do {
                             // P0-65 参考图收集（0-2 张，顺序 = [底图, 叠加元素]）：
@@ -477,6 +475,8 @@ extension ChatViewModel {
                             let planAspect = plan.aspectRatio
                             let planTier = plan.qualityTier
                             let planCount = plan.outputCount
+                            // 等待阶段文案按任务类型分流（plan 已就绪后才能判断）
+                            pendingImageKind = (plan.taskType == .poster) ? "card" : "image"
                             // 3.3：首轮把全部任务参数固化进 context，后续重试只从它派生
                             let imageCtx = ImageRequestContext(
                                 prompt: plan.prompt,
