@@ -37,13 +37,16 @@ enum ImageGeometry {
     static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return nil }
-        // 方向信息：EXIF 里 5~8 表示旋转 90°，此时像素宽高要交换，否则算出来的比例是错的
-        let orientation = (props[kCGImagePropertyOrientation] as? UInt32) ?? 1
+        // 方向信息：EXIF 里 5~8 表示旋转 90°，此时像素宽高要交换，否则算出来的比例是错的。
+        // 注意用 NSNumber 取值（直接 as? UInt32 在部分格式下取不到，会静默回落成 1）。
+        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
         guard let w0 = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
               let h0 = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
               w0 > 0, h0 > 0 else { return nil }
-        let rotated = orientation >= 5 && orientation <= 8
-        return rotated ? (height: w0, width: h0) : (width: w0, height: h0)
+        if orientation >= 5, orientation <= 8 {
+            return (width: h0, height: w0)
+        }
+        return (width: w0, height: h0)
     }
 
     /// 把任意像素尺寸夹到服务端允许的显式尺寸（保持宽高比，8 的倍数）。
