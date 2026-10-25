@@ -435,7 +435,7 @@ struct ChatView: View {
                     }
                     // P0-50 ChatGPT 式生图加载：工具执行期间在消息流里显示 shimmer 占位行
                     if let job = viewModel.pendingImage {
-                        ImageGeneratingRow(title: job)
+                        ImageGenWaitingCard(title: job)
                     }
                     if !viewModel.isStreaming, viewModel.streamingMessageId == nil,
                        !viewModel.suggestedFollowUps.isEmpty {

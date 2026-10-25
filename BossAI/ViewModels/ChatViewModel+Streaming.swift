@@ -384,7 +384,7 @@ extension ChatViewModel {
                         }
                     case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":   // 10-19 拆 4 工具（统一执行器，旧名兼容）
                         imageToolAttempted = true
-                        statusText = "正在生成图片…"
+                        statusText = "正在生成图片（约 20 秒）…"
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
                         // P0-64 missingArgsNote 接入：prompt 缺失（且无用户原话兜底）时明确报错而非执行空请求
