@@ -471,6 +471,10 @@ extension ChatViewModel {
                                                     "content": "【需要先确认】" + ask])
                                 continue
                             }
+                            let planPrompt = plan.prompt
+                            let planAspect = plan.aspectRatio
+                            let planTier = plan.qualityTier
+                            let planCount = plan.outputCount
                             // 3.3：首轮把全部任务参数固化进 context，后续重试只从它派生
                             let imageCtx = ImageRequestContext(
                                 prompt: plan.prompt,
@@ -482,10 +486,6 @@ extension ChatViewModel {
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 isPoster: plan.taskType == .poster)
-                            let planPrompt = plan.prompt
-                            let planAspect = plan.aspectRatio
-                            let planTier = plan.qualityTier
-                            let planCount = plan.outputCount
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
                             if toolName == "image_series" {
