@@ -546,10 +546,20 @@ extension ChatViewModel {
                                                             "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片信息不完整：至少需要姓名，以及电话/邮箱/地址中的一个。请向用户补齐信息后重试，不要返回普通海报。")])
                                         continue
                                     }
-                                    let base: UIImage
                                     do {
-                                        base = try await HostedAccount.shared.renderPosterBase(
+                                        // 不写 UIImage 类型标注：本文件未 import UIKit，用局部推断即可
+                                        let base = try await HostedAccount.shared.renderPosterBase(
                                             title: content.title, subtitle: content.subtitle, bullets: content.bullets)
+                                        do {
+                                            let img = try BusinessCardRenderer.render(card: card, on: base)
+                                            composed = img.pngData()
+                                            PerformanceTrace.event("poster_render_stage_count_1")
+                                        } catch {
+                                            // 排版/比例错误原文透出（例如"不是横版"、"地址过长"）
+                                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                                "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版失败：\(error.localizedDescription)。不要返回海报替代品，请如实告知用户。")])
+                                            continue
+                                        }
                                     } catch let e as ImageService.ImageError where e.isInProgress {
                                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                             "content": "【正在生成】名片底图还在生成中，请告知用户稍后查看，不要重复提交。"])
@@ -557,16 +567,6 @@ extension ChatViewModel {
                                     } catch {
                                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                             "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片底图生成失败：\(error.localizedDescription)。请如实告知用户重试。")])
-                                        continue
-                                    }
-                                    do {
-                                        let img = try BusinessCardRenderer.render(card: card, on: base)
-                                        composed = img.pngData()
-                                        PerformanceTrace.event("poster_render_stage_count_1")
-                                    } catch {
-                                        // 排版/比例错误原文透出（例如"不是横版"、"地址过长"）
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版失败：\(error.localizedDescription)。不要返回海报替代品，请如实告知用户。")])
                                         continue
                                     }
                                 } else if let bg = try? await HostedAccount.shared.renderPoster(
