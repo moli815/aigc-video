@@ -147,10 +147,10 @@ const RUNTIME_SPECS = {
   // P0-64 App 远程行为配置（在线可修复）：App 端写死的超时/重试改为云端下发，出问题管理台改数不出包
   IMAGE_FAST_MODE:    { type: "str", label: "生图提速模式（1=fast 极速 / 0=standard 质量优先）· 官方文档：fast 仅 pro 支持、耗时更短", def: () => process.env.IMAGE_FAST_MODE || "1" },
   DEEPSEEK_SEARCH_KEY: { type: "secret", label: "DeepSeek 搜索/抓取 API Key（api.deepseek.com，5元/1000次成功请求）", def: () => process.env.DEEPSEEK_SEARCH_KEY || "" },
-  APP_CHAT_TIMEOUT:   { type: "num", label: "App·对话请求超时（秒）", def: () => Number(process.env.APP_CHAT_TIMEOUT || 120) },
+  APP_CHAT_TIMEOUT:   { type: "num", label: "App·对话请求超时（秒）", def: () => Number(process.env.APP_CHAT_TIMEOUT || 165) },
   // 10-23：首包 watchdog 超时（此前客户端只能写死 45s，管理端改不了）
   APP_CHAT_FIRST_TOKEN_TIMEOUT: { type: "num", label: "App·首包超时（秒，0=用默认45）", def: () => Number(process.env.APP_CHAT_FIRST_TOKEN_TIMEOUT || 45) },
-  APP_IMAGE_TIMEOUT:  { type: "num", label: "App·生图请求超时（秒）", def: () => Number(process.env.APP_IMAGE_TIMEOUT || 180) },
+  APP_IMAGE_TIMEOUT:  { type: "num", label: "App·生图请求超时（秒）", def: () => Number(process.env.APP_IMAGE_TIMEOUT || 315) },
   APP_STREAM_RETRY:   { type: "num", label: "App·流式中断自动重试次数（0=关闭）", def: () => Number(process.env.APP_STREAM_RETRY || 1) },
   APP_IMAGE_RETRY:    { type: "num", label: "App·生图失败重试次数（0=关闭）", def: () => Number(process.env.APP_IMAGE_RETRY || 1) },
   // P0-70 生图动效文案（云端可配）：App 端"正在绘制/精修中"等提示语，改文案不出包
@@ -2403,8 +2403,8 @@ async function handleMe(req, res) {
     },
     // P0-64 App 远程行为配置（在线可修复）：App 写死的超时/重试由此下发——管理台改数不用出包
     appBehavior: {
-      chatTimeout: Number(RUNTIME.APP_CHAT_TIMEOUT || 120),
-      imageTimeout: Number(RUNTIME.APP_IMAGE_TIMEOUT || 180),
+      chatTimeout: Number(RUNTIME.APP_CHAT_TIMEOUT || 165),
+      imageTimeout: Number(RUNTIME.APP_IMAGE_TIMEOUT || 315),
       streamRetry: Number(RUNTIME.APP_STREAM_RETRY != null && RUNTIME.APP_STREAM_RETRY !== "" ? RUNTIME.APP_STREAM_RETRY : 1),
       imageRetry: Number(RUNTIME.APP_IMAGE_RETRY != null && RUNTIME.APP_IMAGE_RETRY !== "" ? RUNTIME.APP_IMAGE_RETRY : 1),
       // P0-70 生图动效文案（云端可配，App 端消费）

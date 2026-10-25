@@ -1321,7 +1321,11 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 280000);   // 与云端 APP_IMAGE_TIMEOUT=300 对齐
+  // 10-25 DS4.1 §3.2 超时分层（单位 ms，逐层递减，上层永远先于下层放弃）：
+  //   上游模型 260s → 云函数内部 280s → 网关 300s → 客户端 315s
+  // 之前这里是 280s，与函数预算贴死：上游一慢，函数超时先触发，客户端只看到网关 504，
+  // 拿不到"上游超时"这个可判定的错误码。
+  const timer = setTimeout(() => controller.abort(), 260000);
   try {
     const r = await fetch(IMAGE_BASE + "/images/generations", {
       method: "POST",
