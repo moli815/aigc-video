@@ -561,7 +561,14 @@ extension ChatViewModel {
                                     continue
                                 }
                             } else {
-                                imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
+                                do {
+                                    imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
+                                } catch let e as ImageService.ImageError where e.isInProgress {
+                                    // 同一张图还在生成：提示"稍后查看"，不计失败、不重复提交、不重复扣费
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看即可，不要重复提交。"])
+                                    continue
+                                }
                             }
 
                             // ── 10-24 P1：保存前质检（不调视觉模型，纯程序判定）──

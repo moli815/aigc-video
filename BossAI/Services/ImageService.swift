@@ -63,6 +63,9 @@ final class ImageService {
         case hosted(Int, String, String)
         /// 10-24：带完整信封（actions / requestId / retryable）的云端错误
         case envelope(APIErrorEnvelope)
+        /// 10-25：同一 requestId 还在生成中（HTTP 409 + IN_PROGRESS）。
+        /// 这不是失败——重复提交也没用，必须提示"稍后查看"而不是报错。
+        case inProgress(String)
 
         var errorDescription: String? {
             switch self {
@@ -70,12 +73,19 @@ final class ImageService {
             case .missingKey: return "未配置作图 API Key"
             case .badResponse(let code, let body): return "生图失败（\(code)）：\(body.prefix(300))"
             case .noImage: return "生图接口未返回图片"
+            case .inProgress(let msg): return msg.isEmpty ? "正在生成，稍后查看" : msg
             case .hosted(_, _, let message): return message
             case .envelope(let e): return e.message
             }
         }
 
         /// 会话失效（重置密码/封停/到期）—— 调用方据此强制登出
+        /// 生成中：调用方据此显示"正在生成，稍后查看"，且**不得**重复提交/计入失败
+        var isInProgress: Bool {
+            if case .inProgress = self { return true }
+            return false
+        }
+
         var isSessionFailure: Bool {
             switch self {
             case .envelope(let e): return e.isSessionFailure
@@ -272,6 +282,11 @@ final class ImageService {
         let bodyText = String(data: data, encoding: .utf8) ?? ""
         if profile.id == "hosted",
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // 409 + IN_PROGRESS：不是错误，是"还在生成"。必须在信封解析前拦下，
+            // 否则会被当成普通失败弹窗，用户以为坏了就会重复点、重复扣费。
+            if response.statusCode == 409, (obj["error"] as? String) == "IN_PROGRESS" {
+                return .inProgress((obj["message"] as? String) ?? "正在生成，稍后查看")
+            }
             if let env = APIErrorEnvelope.parse(status: response.statusCode, json: obj) {
                 return .envelope(env)
             }
