@@ -16,10 +16,12 @@ final class BaseImageTaskKeyTests: XCTestCase {
         BaseImageCache.shared.resetForTesting()
     }
 
+    /// 注意参数顺序：Swift 要求实参顺序与形参顺序一致，
+    /// 调用点统一按 (prompt, extracted, aspect, renderIntent, references) 写。
     private func context(prompt: String,
+                         extracted: [String: String],
                          aspect: String = "16:9",
                          renderIntent: String = "flat_artwork",
-                         extracted: [String: String],
                          references: [Data] = []) -> ImageRequestContext {
         ImageRequestContext(prompt: prompt,
                             references: references,
@@ -69,8 +71,8 @@ final class BaseImageTaskKeyTests: XCTestCase {
     }
 
     func testRenderIntentChangeChangesTaskKey() {
-        let a = context(prompt: "做一张海报，主题：秋季上新", renderIntent: "flat_artwork", extracted: [:])
-        let b = context(prompt: "做一张海报，主题：秋季上新", renderIntent: "mockup", extracted: [:])
+        let a = context(prompt: "做一张海报，主题：秋季上新", extracted: [:], renderIntent: "flat_artwork")
+        let b = context(prompt: "做一张海报，主题：秋季上新", extracted: [:], renderIntent: "mockup")
         XCTAssertNotEqual(BaseImageTaskKey.make(context: a), BaseImageTaskKey.make(context: b))
     }
 
