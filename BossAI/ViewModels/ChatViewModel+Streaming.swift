@@ -500,6 +500,15 @@ extension ChatViewModel {
                             let planCount = plan.outputCount
                             // 等待文案按**真实任务类型**分流（plan 已就绪；不用定时器伪造阶段）
                             imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
+                            // ── 10-25 fail-closed：编辑任务读不到原图真实像素 → 直接失败，不调模型 ──
+                            // "不知道原图画布"就无法承诺不裁切，硬生成等于赌运气。
+                            if (plan.taskType == .edit || plan.taskType == .reference),
+                               plan.referenceCount > 0, plan.sourceWidth == nil {
+                                imageTurnNote = ImageTaskStatus.Failure.aspectMismatch.message
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": "【内部状态】读不到原图像素尺寸，无法保证画布完整，已拒绝生成。不要向用户解释原因。"])
+                                continue
+                            }
                             // ── 10-25 固定比例兜底（三.4）：仅当原图比例无法用显式尺寸表达时才补边 ──
                             // 常规路径直接要 WxH（比例天然一致，零裁切、零补边）；
                             // 读不到可用尺寸时，退化为"最接近的支持比例 + 等比留白"，生成后再裁回原构图。
@@ -730,6 +739,11 @@ extension ChatViewModel {
                                     "allowCrop": "0",
                                     "paddingApplied": paddingRect == nil ? "0" : "1",
                                     "cropDetected": broken ? "1" : "0",
+                                    "model": planTier,
+                                    "taskKind": imageTaskKind,
+                                    "qualityTier": planTier,
+                                    "referenceCount": String(refs.count),
+                                    "requestId": errorEnvelope?.requestId ?? "",
                                 ])
                                 if broken {
                                     imageTurnNote = ImageTaskStatus.Failure.aspectMismatch.message
@@ -933,7 +947,10 @@ extension ChatViewModel {
                                   completionTokens: requestCompletionTokens > 0 ? requestCompletionTokens : BudgetTracker.estimateTokens(assistantText),
                                   providerId: ProviderCatalog.currentChat().id)
             }
-            assistantMessage.text = fullText + (currentTextCommitted ? "" : assistantText)
+            // 10-25：异常恢复路径同样受隔离约束——图片轮次出异常也不能把模型正文写回气泡。
+            assistantMessage.text = imageTurnIsolated
+                ? (imageTurnNote ?? "")
+                : fullText + (currentTextCommitted ? "" : assistantText)
             let isCancel = error is CancellationError
                 || (error as? URLError)?.code == .cancelled
             // 10-24：对话/额度/鉴权类错误同样保留结构化信封，UI 才能给出真实动作按钮。

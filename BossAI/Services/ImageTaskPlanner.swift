@@ -79,6 +79,14 @@ struct ImageTaskPlan: Equatable {
     /// 原图真实像素（nil = 读不到，此时不承诺保留比例）
     let sourceWidth: Int?
     let sourceHeight: Int?
+
+    // ── 10-25 编辑请求三分法（用户只要求换背景时，不该被改写成"重画整张"）──
+    /// 用户真正要求改动的内容（来自**用户原话**，不是模型改写后的 prompt）
+    let requestedChanges: [String]
+    /// 必须保持的（边界、主体位置、未改动区域）
+    let preserveConstraints: [String]
+    /// 明确禁止的（重绘、缩放重排、改人物特征）
+    let forbiddenChanges: [String]
 }
 
 enum ImageTaskPlanner {
@@ -155,6 +163,18 @@ enum ImageTaskPlanner {
         let constraints = buildConstraints(type: type, preserveOriginal: preserve,
                                            preserveSourceAspect: preserveAspect, textPolicy: textPolicy)
 
+        // 编辑类任务把"改什么 / 保什么 / 禁什么"分开写，避免一句"换背景"被模型理解成重画
+        var requested: [String] = []
+        var preserveList: [String] = []
+        var forbidden: [String] = []
+        if preserve {
+            requested = [userLowered.trimmingCharacters(in: .whitespacesAndNewlines)]
+            preserveList = ["原图完整边界与画布（四周不裁切、不扩边）",
+                            "主体位置、尺度与朝向不变",
+                            "用户未提及的区域保持原样"]
+            forbidden = ["重绘整张画面", "缩放/重排构图", "改变人物面部、服装、姿势"]
+        }
+
         // 追问：只在"问了才能做对"时问，且只问一句
         var ask: String? = nil
         if text.count < 3 {
@@ -184,7 +204,10 @@ enum ImageTaskPlanner {
                              preserveSourceAspect: preserveAspect,
                              allowCrop: allowCrop,
                              sourceWidth: sourceSize?.width,
-                             sourceHeight: sourceSize?.height)
+                             sourceHeight: sourceSize?.height,
+                             requestedChanges: requested,
+                             preserveConstraints: preserveList,
+                             forbiddenChanges: forbidden)
     }
 
     // MARK: - 分类
@@ -357,6 +380,7 @@ enum ImageTaskPlanner {
         }
         if preserveOriginal {
             directives.append("保留原图的人物面貌、服装、姿势与整体构图，只修改用户指定的部分")
+            directives.append("其余区域不得重绘、不得重新构图")
         }
         parts.append("【画面要求】" + directives.joined(separator: "；") + "。")
         return parts.joined(separator: "\n")
