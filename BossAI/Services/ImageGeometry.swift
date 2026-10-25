@@ -195,17 +195,24 @@ enum ImageGeometry {
 
     private static func grayGrid(_ image: UIImage, side: Int) -> [Double]? {
         guard let cg = image.cgImage, side > 0 else { return nil }
-        // 缓冲区自己持有：把 Swift Array 的 &pixels 交给 CGContext 是不稳定的
-        // （编译器不保证地址在 draw 期间有效），CI 上就出现过整体返回 nil。
+        // 用 RGBA 上下文 + 自持缓冲区：
+        // · 把 Swift Array 的 &pixels 交给 CGContext 在 CI 上会整体画空（返回 nil）；
+        // · DeviceGray 上下文对带 alpha 的源图也不稳定，RGBA 最省事。
         let count = side * side
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
+        let bytesPerRow = side * 4
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: count * 4)
         defer { buffer.deallocate() }
-        buffer.initialize(repeating: 0, count: count)
+        buffer.initialize(repeating: 0, count: count * 4)
         guard let ctx = CGContext(data: buffer, width: side, height: side, bitsPerComponent: 8,
-                                  bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
-                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+                                  bytesPerRow: bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
         ctx.interpolationQuality = .low
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
-        return (0..<count).map { Double(buffer[$0]) }
+        var out = [Double](repeating: 0, count: count)
+        for i in 0..<count {
+            let r = Double(buffer[i * 4]), g = Double(buffer[i * 4 + 1]), b = Double(buffer[i * 4 + 2])
+            out[i] = 0.299 * r + 0.587 * g + 0.114 * b
+        }
+        return out
     }
 }
