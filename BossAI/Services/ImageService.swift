@@ -48,6 +48,37 @@ struct ImageRequestContext {
     /// 是否需要"无字底图 + 程序排版"
     var needsTextOverlay: Bool = false
 
+    /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
+    func appendingPrompt(_ suffix: String) -> ImageRequestContext {
+        var c = ImageRequestContext(prompt: prompt + suffix,
+                                    references: references,
+                                    taskKind: taskKind,
+                                    qualityTier: qualityTier,
+                                    requestedCount: requestedCount,
+                                    aspectRatio: aspectRatio,
+                                    renderIntent: renderIntent,
+                                    structured: structured,
+                                    layerDecomposition: layerDecomposition)
+        c.textDensity = textDensity
+        c.textAccuracyRequired = textAccuracyRequired
+        c.extractedText = extractedText
+        c.needsTextOverlay = needsTextOverlay
+        return c
+    }
+
+    /// 派生：写入文字分流结果（保持不可变语义，返回新实例）
+    func withTextPlan(density: String,
+                      accuracyRequired: Bool,
+                      extracted: [String: String],
+                      needsOverlay: Bool) -> ImageRequestContext {
+        var c = appendingPrompt("")
+        c.textDensity = density
+        c.textAccuracyRequired = accuracyRequired
+        c.extractedText = extracted
+        c.needsTextOverlay = needsOverlay
+        return c
+    }
+
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
     func retrying(note: String) -> ImageRequestContext {
         var c = ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,

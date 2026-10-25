@@ -560,11 +560,13 @@ extension ChatViewModel {
                                                                                extractedCharCount: overlayChars)
                             if wantsOverlay && !overlayItems.isEmpty {
                                 // 1) 只要底图：prompt 明确禁止任何文字
-                                var baseCtx = imageCtx
-                                baseCtx.prompt = imageCtx.prompt + "\n\n【硬约束】画面内不得出现任何文字、字母、数字、标语或水印，只出背景与视觉元素。"
-                                baseCtx.textAccuracyRequired = true
-                                baseCtx.extractedText = Dictionary(uniqueKeysWithValues: overlayItems.map { ($0.key, $0.text) })
-                                baseCtx.needsTextOverlay = true
+                                // prompt 是 let，必须走派生方法，不能原地赋值
+                                let baseCtx = imageCtx
+                                    .appendingPrompt("\n\n【硬约束】画面内不得出现任何文字、字母、数字、标语或水印，只出背景与视觉元素。")
+                                    .withTextPlan(density: "high",
+                                                  accuracyRequired: true,
+                                                  extracted: Dictionary(uniqueKeysWithValues: overlayItems.map { ($0.key, $0.text) }),
+                                                  needsOverlay: true)
                                 do {
                                     let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
                                     guard let baseImage = UIImage(data: base) else {
