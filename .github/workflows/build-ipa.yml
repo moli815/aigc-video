@@ -143,6 +143,14 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             -resultBundlePath TestResults.xcresult 2>&1 | tee /tmp/ios-tests.log | tail -120
 
+      # 10-25：失败时把失败用例名打出来。测试步骤只有 tail -120，失败名会被截掉，
+      # 之前排查只能靠猜（白跑了两次 CI）。
+      - name: Print failing tests
+        if: failure()
+        run: |
+          echo "===== 失败用例 ====="
+          grep -nE "error: -\[|' failed \(|XCTAssert|Assertion Failure" /tmp/ios-tests.log | head -60 || true
+
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v4
