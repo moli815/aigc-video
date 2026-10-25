@@ -526,155 +526,17 @@ extension ChatViewModel {
                                 continue
                             }
                             var imageData: Data
-                            // ── 10-24 P1：海报/名片走「AI 出无字底图 + 程序画字」──
-                            // 图像模型画汉字必错，所以文字密集的物料不进普通生成：
-                            // 先用服务端 renderPoster 拿一张无文字底图，再用真实字体把文字画上去。
-                            // 失败策略（10-25 修正，与此前注释相反）：名片**不退化成普通生图**，
-                            // 而是明确失败——否则用户会拿到一张没有文字的底图却以为成功。
-                            if plan.taskType == .poster,
-                               let content = PosterContent.from(args: args, prompt: prompt) {
-                                var composed: Data? = nil
-                                // 名片优先：六字段齐全（姓名 + 至少一个联系方式）时走 BusinessCardRenderer。
-                                // 它是**唯一合成入口**，返回即成品，外层绝不再叠字。
-                                // 名片判定一旦成立，**不允许**再退回 PosterComposer：
-                                // 那样会产出一张"看起来成功、但不是名片"的海报（无 logo/无六字段/竖版）。
-                                // 名片意图一旦成立，这条分支里**没有** renderPoster 兜底：
-                                // 字段缺失就报字段错误，底图/排版失败就报失败，绝不产出"不是名片的普通海报"。
-                                if BusinessCard.looksLikeCard(args: args, prompt: prompt) {
-                                    guard let card = BusinessCard.from(args: args, fallbackName: content.title) else {
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片信息不完整：至少需要姓名，以及电话/邮箱/地址中的一个。请向用户补齐信息后重试，不要返回普通海报。")])
-                                        continue
-                                    }
-                                    do {
-                                        // 不写 UIImage 类型标注：本文件未 import UIKit，用局部推断即可
-                                        let base = try await HostedAccount.shared.renderPosterBase(
-                                            title: content.title, subtitle: content.subtitle, bullets: content.bullets)
-                                        do {
-                                            let img = try BusinessCardRenderer.render(card: card, on: base)
-                                            composed = img.pngData()
-                                            PerformanceTrace.event("poster_render_stage_count_1")
-                                        } catch {
-                                            // 排版/比例错误原文透出（例如"不是横版"、"地址过长"）
-                                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                                "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版失败：\(error.localizedDescription)。不要返回海报替代品，请如实告知用户。")])
-                                            continue
-                                        }
-                                    } catch let e as ImageService.ImageError where e.isInProgress {
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": "【正在生成】名片底图还在生成中，请告知用户稍后查看，不要重复提交。"])
-                                        continue
-                                    } catch {
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片底图生成失败：\(error.localizedDescription)。请如实告知用户重试。")])
-                                        continue
-                                    }
-                                } else if let bg = try? await HostedAccount.shared.renderPoster(
-                                    title: content.title, subtitle: content.subtitle, bullets: content.bullets) {
-                                    // 3.4 修复：renderPoster 内部已经调用过 PosterComposer.compose，
-                                    // 返回的就是**最终成品**（文字 + 底部遮罩都画好了）。
-                                    // 这里再调一次 PosterLayout.render 会把文字和遮罩画第二遍——
-                                    // 名片出现"重影/字叠字/底部越压越黑"就是这个原因。
-                                    // 名片只允许一次最终合成，PosterLayout 只服务普通海报。
-                                    composed = bg.pngData()
-                                    PerformanceTrace.event("poster_render_stage_count_1")
-                                }
-                                if let composed {
-                                    imageData = composed
-                                    PerformanceTrace.event("poster_rendered_locally")
-                                } else {
-                                    // 名片不做"退化成普通生图"的兜底：那样会得到一张没有文字的海报，
-                                    // 用户以为成功、实际不可用。明确失败，让用户重试排版。
-                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版底图生成失败，这次没有成品。请如实告知用户重试，不要说已完成。")])
-                                    continue
-                                }
-                            } else {
-                                do {
-                                    imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
-                                } catch let e as ImageService.ImageError where e.isInProgress {
-                                    // 同一张图还在生成：提示"稍后查看"，不计失败、不重复提交、不重复扣费
-                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看即可，不要重复提交。"])
-                                    continue
-                                }
-                            }
-
-                            // ── 10-24 P1：保存前质检（不调视觉模型，纯程序判定）──
-                            // 分工：无法解码/尺寸过小 → 重新生成一次（内容确实坏了）；
-                            //      体积异常（下载被截断）→ 不重新生成，交给下载重试，避免重复计费。
-                            var quality = ImageQualityChecker.check(imageData, expectedAspect: planAspect)
-                            if ImageQualityChecker.shouldRegenerate(quality) {
-                                // 3.3 补：质量失败重试同样不能丢 layerDecomposition（图层拆分）与 requestedCount（组图张数），
-                                // 否则"组图 4 张质量不过 → 重试变 1 张"、"拆分重试退化成普通生图"。
-                                let qualityRetryCtx = imageCtx.retrying(note: "上一次结果未通过画质检查（\(quality.summary)），请重做一次，保持同样的构图与要求。")
-                                do {
-                                    let retried = try await Self.generateImageWithRetry(context: qualityRetryCtx, service: imageService)
-                                    imageData = retried
-                                    quality = ImageQualityChecker.check(retried, expectedAspect: planAspect)
-                                    BudgetTracker.addImageGeneration()
-                                } catch let e as ImageService.ImageError where e.isInProgress {
-                                    // 重试阶段撞上"还在生成"：不能把首轮不合格的图当成功，
-                                    // 也不能再提交。直接结束本轮，让用户稍后查看。
-                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
-                                    continue
-                                } catch {
-                                    // 其它错误保持既有行为：保留首轮结果，不额外弹错
-                                }
-                            }
-                            PerformanceTrace.event("image_quality_checked")
-                            // 结构化请求日志（不含 prompt 正文/Token/图片内容）；model 以服务端 image_route 为准
-                            PerformanceTrace.event("image_request_done", fields: [
-                                "requestId": String(UUID().uuidString.prefix(8)),
-                                "taskKind": imageTaskKind,
-                                "qualityTier": planTier,
-                                "aspectRatio": planAspect,
-                                "refs": String(refs.count),
-                                "count": String(planCount),
-                                "retryIndex": "0",
-                                "charged": "true",
-                                "finalStatus": quality.isAcceptable ? "ok" : "quality_failed",
-                                "errorCode": "",
-                            ])
-                            // 3.3 可观测：首轮参数落日志（不含 prompt 正文），重试时用于对比是否丢参数
-                            PerformanceTrace.event("image_task_context")
-                            // 重试后仍不可用 → 不落库、不报成功（避免"存了一个坏文件还告诉用户完成了"）
-                            if ImageQualityChecker.shouldRegenerate(quality) {
+                            // ── 10-25 产品方向调整：取消名片/海报专用分支 ──
+                            // 所有图片任务统一走「用户输入 + 参考图 → 大模型整理 prompt →
+                            // ImageRequestContext → Pro 模型」。不再因为出现"名片"就强制
+                            // BusinessCardRenderer / renderPosterBase / 固定字段校验 / 横版限制；
+                            // 结构化字段解析失败也不会阻止生成，交给大模型按用户原话处理。
+                            do {
+                                imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
+                            } catch let e as ImageService.ImageError where e.isInProgress {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": ToolPipeline.failureNote(pluginID: toolName, reason: "生成结果无法正常解码或尺寸过小（\(quality.summary)），已重试一次仍未通过。请如实告知用户这次没有成功，建议稍后重试。")])
+                                                    "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
                                 continue
-                            }
-                            // P0-74 生成后视觉验证（云端开关 APP_IMAGE_VERIFY，默认开）：用视觉模型检查
-                            // "用户要求是否已满足"——不符则带修正提示自动重试一次（根治"生成了但不对还报成功"）。
-                            // 验证失败/未配置不阻断（返回 nil）；用"用户原话"而非专业提示词做判断标准，最贴近真实意图。
-                            if HostedAccount.cachedImageVerify {
-                                let requirement = String(userText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
-                                if !requirement.isEmpty,
-                                   let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
-                                   !check.ok {
-                                    // 10-25：重试必须沿用规划后的提示词，否则比例/禁画字/保留原图这些约束会丢
-                                    // 从同一份 context 派生，参数不丢失
-                                    let retryCtx = imageCtx.retrying(note: "上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。")
-                                    let fixPrompt = retryCtx.prompt
-                                    // 3.3 修复：重试必须沿用首轮的完整任务参数。
-                                    // 旧代码只传了 prompt/structured/renderIntent/aspectRatio，
-                                    // 丢了 taskKind / qualityTier / requestedCount —— 于是
-                                    // "Pro 编辑重试变成普通生图"、"组图数量丢失"、"名片重试不走排版"。
-                                    do {
-                                        let retryData = try await Self.generateImageWithRetry(context: retryCtx, service: imageService)
-                                        imageData = retryData
-                                        BudgetTracker.addImageGeneration()   // 重试按真实成本计费
-                                    } catch let e as ImageService.ImageError where e.isInProgress {
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
-                                        continue
-                                    } catch {
-                                        // 重试失败：保留首轮结果，但**不能**宣称完全满足要求
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": "图片已生成，但未完全满足用户要求（重试失败）。请在回答里说明这一点，不要宣称完全符合。"])
-                                    }
-                                }
                             }
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
