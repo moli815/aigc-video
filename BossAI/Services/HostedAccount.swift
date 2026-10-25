@@ -1020,6 +1020,14 @@ final class HostedAccount: ObservableObject {
         return try await request(path)
     }
 
+    /// 10-25 历史会话删除：云端写墓碑（服务端校验归属 + 幂等，重复删除不报错）。
+    /// id 只接受 UUID（由 App 侧会话主键生成，天然路径安全，无需再做百分号编码）。
+    /// 失败抛 HostedError：调用方据此把 id 留在「补删队列」里，下次同步重试。
+    @discardableResult
+    func deleteConversation(id: UUID) async throws -> [String: Any] {
+        try await request("/sync/conversations/" + id.uuidString, method: "DELETE")
+    }
+
     /// 会员自助提交续费申请（带档位标签）
     func submitSelfRenew(tier: String) async throws -> [String: Any] {
         try await request("/renew-self", method: "POST", body: ["tier": tier])

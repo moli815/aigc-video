@@ -68,6 +68,9 @@ final class SyncService {
         let ownerAtStart = HostedAccount.scopeKey
         do {
             try await push(context: context)
+            // 10-25 历史删除：先把上次离线没删成功的云端墓碑补推一遍。
+            // 纯成员级 DELETE，失败不影响本次同步（id 仍留在补删队列里等下次）。
+            await ConversationDeletion.flushPendingDeletes()
             try await pull(context: context)
             guard HostedAccount.scopeKey == ownerAtStart else {
                 // 中途切了账号：不推进游标，下次按新账号完整拉取
@@ -234,6 +237,14 @@ final class SyncService {
             predicate: #Predicate { $0.id == uuid && $0.ownerKey == key }
         )).first
         if deleted {
+            if let existing { context.delete(existing) }
+            // 10-25：云端已确认删除 → 本地补删队列可以出队了
+            ConversationDeletion.confirmRemoteDeleted(uuid)
+            return
+        }
+        // 10-25 防复活：本机已删除、云端墓碑还没确认时，云端把这条又推上来也不许落地
+        // （旧副本先被同步、或另一台设备的旧数据覆盖云端——否则用户会看到"删了又回来了"）
+        if ConversationDeletion.isPendingDelete(uuid) {
             if let existing { context.delete(existing) }
             return
         }

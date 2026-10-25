@@ -1801,6 +1801,84 @@ async function handleSyncDedupe(req, res) {
   }));
 }
 
+/**
+ * DELETE /sync/conversations/:id —— 删除一条会话（10-25）。
+ *
+ * 为什么需要独立接口，而不是继续用 /sync/push 的 payload 墓碑：
+ *   客户端现在做的是「本地物理级联删」，会话记录连同消息一起删掉后，
+ *   已经没有 payload 可以推上去了。墓碑必须由接口直接写到云端，
+ *   否则另一台设备一同步就把这条会话推回来——用户眼里就是"删了又回来了"。
+ *
+ * 安全：
+ *   · 归属校验：查询条件绑 auth.sub，删除前再校验一次 row.accountId，
+ *     别人的会话 id 一律 404（不泄露"这条存在但不是你的"）；
+ *   · 防呆：只接受 UUID，别的路径内容一律 400，不写进 userData。
+ *
+ * 幂等（必须）：
+ *   · 云端没有这条（从未推送成功）→ 补写墓碑 + 200 alreadyDeleted=true；
+ *   · 已经是墓碑 → 200 alreadyDeleted=true；
+ *   · 重复调用/并发调用都不会报错，也不会产生第二条记录（确定性 _id）。
+ */
+async function handleSyncDeleteConversation(req, res, rawId) {
+  const auth = await requireMember(req, res);
+  if (!auth) return;
+  const refId = String(rawId || "").trim();
+  const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (!UUID_RE.test(refId)) return sendError(res, 400, "BAD_ID", "会话标识格式不正确");
+
+  const kind = "conversation";
+  const now = nowMs();
+  const detId = crypto.createHash("sha256")
+    .update(String(auth.sub) + "|" + kind + "|" + refId)
+    .digest("hex").slice(0, 40);
+  // 墓碑 payload 保留 id：客户端 pull 靠它定位本地记录并删除
+  const tombstone = JSON.stringify({ id: refId, isDeleted: true, deletedAt: now, updatedAt: now });
+
+  let row = null;
+  const exact = await db.collection(C.userData).doc(detId).get().catch(() => null);
+  row = (exact && exact.data && exact.data[0]) || null;
+  if (!row) {
+    // 兼容历史随机 _id 的记录（迁移期）
+    const exist = await db.collection(C.userData)
+      .where({ accountId: auth.sub, kind, refId }).limit(1).get();
+    row = (exist.data || [])[0] || null;
+  }
+
+  if (!row) {
+    // 云端从来没有这条：照样写一条墓碑，堵住"另一台设备旧副本先推上来就复活"的路径
+    try {
+      await db.collection(C.userData).add(Object.assign({ _id: detId }, {
+        accountId: auth.sub, kind, refId,
+        payload: tombstone, updatedAt: now, deleted: true, syncedAt: now,
+      }));
+    } catch (eAdd) {
+      // 并发重复删除：另一个请求刚建了同一条。读回确认是墓碑即可
+      const back = await db.collection(C.userData).doc(detId).get().catch(() => null);
+      const existing = (back && back.data && back.data[0]) || null;
+      if (!existing) return sendError(res, 500, "SYNC_FAILED", "删除失败，请稍后重试");
+    }
+    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: true, serverTime: now });
+  }
+
+  // 归属校验（上面已按 accountId 收窄查询，这里再兜一次，防止将来改成按 id 直查时漏掉）
+  // 用 403 而不是 404：404 在本函数里是「接口未部署」的信号，客户端会保留补删队列重试；
+  // 别人的会话必须明确拒绝，不能伪装成"已删除成功"。
+  if (String(row.accountId || "") !== String(auth.sub)) {
+    return sendError(res, 403, "FORBIDDEN", "无权删除该会话");
+  }
+  if (row.deleted) {
+    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, serverTime: now });
+  }
+  await db.collection(C.userData).doc(row._id).update({
+    payload: tombstone, deleted: true, updatedAt: now, syncedAt: now,
+  });
+  logSafe({
+    tag: "sync_conversation_deleted", fn: "bf-api",
+    account: tagId(auth.sub, "acct"), refId: maskText(refId, 40),
+  });
+  return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: false, serverTime: now });
+}
+
 /** GET /sync/pull?since=毫秒&limit=条数&cursor=游标：增量拉取（含删除标记），支持分页 */
 async function handleSyncPull(req, res, url) {
   const auth = await requireMember(req, res);
@@ -4633,6 +4711,10 @@ const server = http.createServer(async (req, res) => {
     if (m === "POST" && p === "/api/memories/extract") return handleMemoryExtract(req, res);
     if (m === "POST" && p === "/api/sync/push") return handleSyncPush(req, res);
     if (m === "GET" && p === "/api/sync/pull") return handleSyncPull(req, res, url);
+    // 10-25 历史会话删除：云端写墓碑（归属校验 + 幂等），路径 id 必须是 UUID
+    if (m === "DELETE" && p.startsWith("/api/sync/conversations/")) {
+      return handleSyncDeleteConversation(req, res, p.slice("/api/sync/conversations/".length));
+    }
     // 10-24 P1-7：历史重复清理 + 确定性 _id 迁移（仅管理员；dryRun 默认）
     if (m === "POST" && p === "/api/admin/sync/dedupe") return handleSyncDedupe(req, res);
     // P0-19 定时任务

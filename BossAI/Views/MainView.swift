@@ -147,7 +147,13 @@ struct MainView: View {
                                       // 只更新侧栏高亮，容器不换 —— 保持同一个 VM 继续流式输出
                                       selectedConversationId = created.id
                                       draftConversationID = created.id
-                                  }, initialText: draftPrompt,
+                                  },
+                                  onConversationDeleted: {
+                                      selectedConversationId = nil
+                                      containerKey = nil
+                                      draftConversationID = nil
+                                  },
+                                  initialText: draftPrompt,
                                   initialResearchMode: draftResearchMode)
                     .id(key)
             } else {
@@ -161,7 +167,12 @@ struct MainView: View {
                 }
                 // 10-22 P1 隔离修复：删掉 anyConv 兜底——它会打开另一个账号的会话（跨账号数据泄露）。
                 if let conv = scopedConv {
-                    ChatContainerView(conversation: conv, expert: conv.expert)
+                    ChatContainerView(conversation: conv, expert: conv.expert,
+                                      onConversationDeleted: {
+                                          // 10-25：对话区里删掉自己 → 切回欢迎页
+                                          selectedConversationId = nil
+                                          containerKey = nil
+                                      })
                         .id(key)
                 } else {
                     WelcomeView(onNewChat: { showNewChat = true }, onTask: { expert, prompt in
@@ -202,12 +213,21 @@ struct MainView: View {
     }
 
     private func delete(_ conv: Conversation) {
+        // 10-25 历史删除：本地物理级联删 + 云端墓碑（ConversationDeletion 统一负责）。
+        // 先把详情区切走，再删数据——顺序反了会是"删了还显示着一条已删会话"。
+        let wasOpen = (containerKey == "conv-\(conv.id.uuidString)") || (draftConversationID == conv.id)
         if selectedConversationId == conv.id { selectedConversationId = nil }
-        if containerKey == "conv-\(conv.id.uuidString)" || draftConversationID == conv.id { containerKey = nil; draftConversationID = nil }
-        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
-        conv.isDeleted = true
-        conv.updatedAt = Date()
-        try? modelContext.save()
+        if wasOpen {
+            containerKey = nil
+            draftConversationID = nil
+        }
+        let context = modelContext
+        Task { @MainActor in
+            // 打开的会话被删时，给 SwiftUI 一个卸载窗口：详情区 onDisappear 会 vm.stop()，
+            // 先把在途流式请求停掉，再删库，才不会出现"删完又冒出半条回复"。
+            if wasOpen { try? await Task.sleep(nanoseconds: 50_000_000) }
+            ConversationDeletion.delete(conv, context: context)
+        }
     }
 
     /// 首次启动：用内置 Key 自动识别服务商（无需任何手动配置）
@@ -259,6 +279,8 @@ struct SidebarView: View {
     @State private var showIdentitySheet = false
     @State private var renaming: Conversation?
     @State private var renameText = ""
+    /// 10-25 删除确认：非 nil 时弹确认框，**确认后才真正删**（误触删除不可接受）
+    @State private var pendingDelete: Conversation?
     @State private var tapCount = 0
     @State private var lastTapAt = Date.distantPast
 
@@ -320,22 +342,36 @@ struct SidebarView: View {
                     } else {
                         VStack(spacing: 1) {
                             ForEach(filtered, id: \.id) { conv in
-                                Button { selectedConversationId = conv.id } label: {
-                                    ConversationRow(conversation: conv)
-                                        .background(
-                                            selectedConversationId == conv.id ? theme.accent.opacity(0.16) : Color.clear,
-                                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                        )
-                                        .contentShape(Rectangle())
+                                HStack(spacing: 2) {
+                                    Button { selectedConversationId = conv.id } label: {
+                                        ConversationRow(conversation: conv)
+                                            .background(
+                                                selectedConversationId == conv.id ? theme.accent.opacity(0.16) : Color.clear,
+                                                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                            )
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    // 10-25 删除入口（显性）：长按菜单藏得太深，找不到删除是真实反馈。
+                                    // 这里给常驻小按钮，点了先弹确认，确认后才真正删除。
+                                    Button { pendingDelete = conv } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 12, weight: .regular))
+                                            .foregroundStyle(Color.secondary.opacity(0.75))
+                                            .frame(width: 30, height: 30)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("删除对话「\(conv.title)」")
+                                    .accessibilityIdentifier("conv-delete")
                                 }
-                                .buttonStyle(.plain)
                                 .contextMenu {
                                     Button {
                                         renaming = conv
                                         renameText = conv.title
                                     } label: { Label("重命名", systemImage: "pencil") }
                                     Button(role: .destructive) {
-                                        onDeleteConversation(conv)
+                                        pendingDelete = conv
                                     } label: { Label("删除对话", systemImage: "trash") }
                                 }
                             }
@@ -421,6 +457,24 @@ struct SidebarView: View {
                 renaming = nil
             }
         }
+        // 10-25 删除确认：用 confirmationDialog 而不是第二个 alert——
+        // 同一视图上已经挂了「重命名」alert，破坏性动作走 Apple 推荐的动作表也更清楚。
+        .confirmationDialog("删除这个对话？",
+                            isPresented: Binding(
+                                get: { pendingDelete != nil },
+                                set: { if !$0 { pendingDelete = nil } }
+                            ),
+                            titleVisibility: .visible,
+                            presenting: pendingDelete) { conv in
+            Button("删除", role: .destructive) {
+                let target = conv
+                pendingDelete = nil
+                onDeleteConversation(target)
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: { conv in
+            Text("「\(conv.title)」及其全部消息将被删除，且无法恢复。")
+        }
         // P0-47 方案 A：「定时任务」入口打开身份页（含定时任务卡）
         .sheet(isPresented: $showIdentitySheet) { IdentitySheet() }
     }
@@ -481,14 +535,6 @@ struct SidebarView: View {
         .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(.horizontal, 14)
         .padding(.bottom, 6)
-    }
-
-    private func delete(_ conv: Conversation) {
-        if selectedConversationId == conv.id { selectedConversationId = nil }
-        // 10-22 同步墓碑：改为软删除，让删除动作能同步出去（否则别的设备会"复活"这条对话）
-        conv.isDeleted = true
-        conv.updatedAt = Date()
-        try? modelContext.save()
     }
 
     /// 隐藏入口：连点标题 N 次，每次间隔小于 0.8 秒

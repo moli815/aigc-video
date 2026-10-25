@@ -109,6 +109,14 @@ final class BaseImageCache {
         PerformanceTrace.event("cache_evicted")
     }
 
+    /// 排版失败后**保留**缓存。
+    /// 语义化占位：这里故意不删。单独成方法，是为了让「失败不删」成为显式契约，
+    /// 而不是依赖某个调用点"忘了写 evict"这种偶然正确。
+    func retainAfterOverlayFailure() {
+        guard entry != nil else { return }
+        PerformanceTrace.event("cache_kept_after_overlay_failure")
+    }
+
     /// 会话切换 / 用户取消 / 任务放弃
     func evict() {
         guard entry != nil else { return }
@@ -118,4 +126,68 @@ final class BaseImageCache {
 
     /// 供测试重置
     func resetForTesting() { entry = nil }
+}
+
+// MARK: - 任务指纹（10-25 接线配套）
+
+/// 底图任务的**确定性指纹**：同一次设计任务的多次调用必须算出同一个值，
+/// 否则缓存永远命不中（每次换 UUID 等于没接缓存）。
+///
+/// 纳入指纹（变了就必须重画底图）：
+///   · taskKind（generate / edit / decompose …）
+///   · aspectRatio（比例变了画布就变）
+///   · renderIntent（平面稿 / 展示稿是两种画法）
+///   · 参考图指纹（换了原图必须重画）
+///   · prompt 骨架（**抹掉要绘制的文字值后**的主题描述）
+///
+/// 故意排除：要绘制的文字值本身。用户把电话从 138… 改成 139… 时，
+/// 底图一个像素都不用变——这正是缓存存在的理由。
+enum BaseImageTaskKey {
+
+    static func make(context: ImageRequestContext, items: [TextItem] = []) -> String {
+        var normalized = context.prompt.lowercased()
+
+        // ① 把「只影响叠字、不影响底图」的文本从 prompt 里抹掉。
+        //    长串优先替换，避免短串先替换把长串切碎后留下残渣。
+        let rawValues = Array(context.extractedText.values) + items.map { $0.text }
+        let textValues = Set(rawValues)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { $0.count >= 2 }
+            .sorted { $0.count > $1.count }
+        for value in textValues {
+            normalized = normalized.replacingOccurrences(of: value, with: "◇")
+        }
+
+        // ② 折叠空白：同一需求的措辞常带换行/多空格差异，不该算成两个任务
+        normalized = normalized
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+
+        var seed = [context.taskKind, context.aspectRatio, context.renderIntent, normalized]
+            .joined(separator: "|")
+        seed += "|refs:" + context.references.map { referenceFingerprint($0) }.joined(separator: ",")
+        return fnv1a(seed)
+    }
+
+    /// 参考图指纹：只取头尾各 256 字节 + 总长度。
+    /// 不整图哈希——几 MB 的图每次算一遍哈希，省下的 0.45 元还不够付 CPU 时间。
+    private static func referenceFingerprint(_ data: Data) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in data.prefix(256) {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        for byte in data.suffix(256) {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        return String(format: "%016llx", hash ^ UInt64(data.count))
+    }
+
+    /// FNV-1a 64 位：不引入 CryptoKit，跨平台稳定，够用于缓存键
+    private static func fnv1a(_ text: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
 }

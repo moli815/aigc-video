@@ -355,6 +355,15 @@ final class ChatViewModel: ObservableObject {
                                          requestedCount: context.requestedCount)
     }
 
+    /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。
+    /// 解析失败返回 nil —— 表示「不校验比例」，绝不能拿一个瞎猜的默认值去卡死出图。
+    nonisolated static func aspectRatioValue(_ raw: String) -> CGFloat? {
+        let parts = raw.split(separator: ":")
+        guard parts.count == 2,
+              let width = Double(parts[0]), let height = Double(parts[1]), height > 0 else { return nil }
+        return CGFloat(width / height)
+    }
+
 private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
         // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
         let idemKey = UUID().uuidString

@@ -42,10 +42,14 @@ struct ChatContainerView: View {
     @State private var exportMessage = ""
     @State private var exporting = false
     @State private var previewFile: StoredFile?
+    /// 10-25 删除确认（对话区入口）
+    @State private var showDeleteConfirm = false
 
     let conversation: Conversation?
     let expert: Expert
     var onConversationCreated: (Conversation) -> Void = { _ in }
+    /// 10-25：会话被删除后回调（外层负责清掉 containerKey，切回欢迎页）
+    var onConversationDeleted: () -> Void = {}
     var initialText: String = ""
     /// P0-47 方案 A：草稿态预置研究模式（侧栏「深度研究」入口 → 新对话默认联网研究）
     var initialResearchMode: ResearchMode?
@@ -57,11 +61,13 @@ struct ChatContainerView: View {
 
     init(conversation: Conversation?, expert: Expert,
          onConversationCreated: @escaping (Conversation) -> Void = { _ in },
+         onConversationDeleted: @escaping () -> Void = {},
          initialText: String = "",
          initialResearchMode: ResearchMode? = nil) {
         self.conversation = conversation
         self.expert = expert
         self.onConversationCreated = onConversationCreated
+        self.onConversationDeleted = onConversationDeleted
         self.initialText = initialText
         self.initialResearchMode = initialResearchMode
         let cid = conversation?.id
@@ -137,39 +143,62 @@ struct ChatContainerView: View {
                 .accessibilityLabel("身份设置")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                if !HostedAccount.cachedExportDocEnabled {
-                    // P0-19 全量导出为 Pro+ 权益：Plus 显示锁，点击引导升级
-                    Button { showMembership = true } label: {
-                        Image(systemName: "lock.fill")
-                    }
-                    .accessibilityLabel("导出为 Pro 会员功能")
-                } else {
+                // 10-25：导出与「删除对话」合并成一个操作菜单。
+                // 工具栏已经有三颗按钮，再加一颗会挤掉标题；合并成一个菜单是唯一不破坏布局的做法。
                 Menu {
-                    ForEach(DocumentFormat.allCases) { format in
-                        Button {
-                            if let vm = viewModelHolder.vm {
-                                guard !exporting else { return }
-                                exporting = true
-                                Task {
-                                    exportMessage = await vm.exportConversation(format: format)
-                                    exporting = false
-                                    showExportAlert = true
+                    if !HostedAccount.cachedExportDocEnabled {
+                        // P0-19 全量导出为 Pro+ 权益：Plus 显示锁，点击引导升级
+                        Button { showMembership = true } label: {
+                            Label("导出（Pro 会员功能）", systemImage: "lock.fill")
+                        }
+                    } else {
+                        ForEach(DocumentFormat.allCases) { format in
+                            Button {
+                                if let vm = viewModelHolder.vm {
+                                    guard !exporting else { return }
+                                    exporting = true
+                                    Task {
+                                        exportMessage = await vm.exportConversation(format: format)
+                                        exporting = false
+                                        showExportAlert = true
+                                    }
+                                } else {
+                                    exportMessage = "对话尚未就绪"
                                 }
-                            } else {
-                                exportMessage = "对话尚未就绪"
+                                if viewModelHolder.vm == nil { showExportAlert = true }
+                            } label: {
+                                Label("导出为 \(format.displayName)", systemImage: format.symbol)
                             }
-                            if viewModelHolder.vm == nil { showExportAlert = true }
+                        }
+                    }
+                    // 草稿态（还没落库的会话）不提供删除——没有东西可删
+                    if conversation != nil {
+                        Divider()
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
                         } label: {
-                            Label("导出为 \(format.displayName)", systemImage: format.symbol)
+                            Label("删除对话", systemImage: "trash")
                         }
                     }
                 } label: {
-                    Image(systemName: "square.and.arrow.down")
+                    Image(systemName: HostedAccount.cachedExportDocEnabled ? "square.and.arrow.down" : "ellipsis.circle")
                 }
-                .accessibilityLabel(exporting ? "正在导出" : "导出对话")
+                .accessibilityLabel(HostedAccount.cachedExportDocEnabled ? "导出对话" : "对话操作")
                 .disabled(exporting)
+            }
+        }
+        // 删除确认：删掉就是删掉，必须二次确认（侧栏与对话区共用同一套文案与语义）
+        .confirmationDialog("删除这个对话？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                guard let vm = viewModelHolder.vm else { return }
+                if vm.deleteConversation() {
+                    // 删成功后本视图绑定的会话已不存在，交给外层切回欢迎页
+                    onConversationDeleted()
                 }
             }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("「\(conversation?.title ?? expert.name)」及其全部消息将被删除，且无法恢复。")
         }
         .sheet(isPresented: $showMembership) { MembershipView() }
         .alert("导出", isPresented: $showExportAlert) {

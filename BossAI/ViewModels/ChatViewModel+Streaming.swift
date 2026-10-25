@@ -571,41 +571,72 @@ extension ChatViewModel {
                                                   accuracyRequired: true,
                                                   extracted: Dictionary(uniqueKeysWithValues: overlayItems.map { ($0.key, $0.text) }),
                                                   needsOverlay: true)
-                                do {
-                                    let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
-                                    guard let baseImage = UIImage(data: base) else {
-                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "无字底图解码失败，这次没有成品。请如实告知用户重试。")])
-                                        continue
-                                    }
-                                    // 2) 程序叠字（唯一一次合成）
+                                // ── 10-25 底图缓存接线（BaseImageCache）──
+                                // 目标：排版失败重试、或用户只改文字时，**不再重画底图**（一次 Pro 约 0.45 元 / 20~30 秒）。
+                                // 命中规则由 BaseImageCache 负责：会话 + 任务指纹 + 比例 + 未过期，四条全中才算 hit。
+                                let cache = BaseImageCache.shared
+                                let cacheConversationId = conv.id.uuidString
+                                let cacheTaskId = BaseImageTaskKey.make(context: baseCtx, items: overlayItems)
+                                let expectedAspect = Self.aspectRatioValue(planAspect)
+                                let layoutSpec = LayoutSpec.from(structuredArgs?["layout"] as? [String: Any])
+                                // 要绘制的文字用**本轮最新**的（用户改了电话就必须画新的电话），
+                                // 底图与画布才复用缓存——这才是"只改文字不重画"的正确切分。
+                                // layout 同理用本轮意图：模型这次没说就落回安全默认，不拿旧版式硬套新文案。
+                                let renderItems = overlayItems
+                                let baseImage: UIImage
+                                let canvas: CanvasSpec
+                                let lookup = cache.lookup(conversationId: cacheConversationId,
+                                                          taskId: cacheTaskId,
+                                                          aspectRatio: planAspect)
+                                if lookup == .hit, let cached = cache.entry {
+                                    // 命中：直接进排版，绝不调 Pro（不扣费、不用等 20 秒）
+                                    baseImage = cached.baseImage
+                                    // 画布必须跟着缓存里的底图尺寸走：同一张图，尺寸必然一致
+                                    canvas = CanvasSpec(size: cached.baseImage.size, expectedAspect: expectedAspect)
+                                    PerformanceTrace.event("text_overlay_cache_hit")
+                                } else {
                                     do {
-                                        // 比例来自规划结果（"16:9" → 16/9），不再固定 nil
-                                        let aspectParts = planAspect.split(separator: ":")
-                                        let expectedAspect: CGFloat? = {
-                                            guard aspectParts.count == 2,
-                                                  let w = Double(aspectParts[0]), let h = Double(aspectParts[1]), h > 0 else { return nil }
-                                            return CGFloat(w / h)
-                                        }()
-                                        let canvas = CanvasSpec(size: baseImage.size, expectedAspect: expectedAspect)
-                                        // 布局意图来自大模型 structured.layout，缺字段用安全默认
-                                        let layoutSpec = LayoutSpec.from(structuredArgs?["layout"] as? [String: Any])
-                                        let composed = try TextOverlayRenderer.render(base: baseImage,
-                                                                                      items: overlayItems,
-                                                                                      layout: layoutSpec,
-                                                                                      canvas: canvas)
-                                        guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
-                                        imageData = png
-                                        PerformanceTrace.event("text_overlay_completed")
-                                    } catch {
-                                        // 排版失败：明确失败，不退回普通生图伪装成功
+                                        let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
+                                        guard let decoded = UIImage(data: base) else {
+                                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                                "content": ToolPipeline.failureNote(pluginID: toolName, reason: "无字底图解码失败，这次没有成品。请如实告知用户重试。")])
+                                            continue
+                                        }
+                                        baseImage = decoded
+                                        canvas = CanvasSpec(size: decoded.size, expectedAspect: expectedAspect)
+                                        // 底图成功即缓存：**排在排版之前**——排版失败时底图必须还在，
+                                        // 否则缓存等于没接（重试仍要重画）。
+                                        cache.save(taskId: cacheTaskId,
+                                                   conversationId: cacheConversationId,
+                                                   baseImage: decoded,
+                                                   aspectRatio: planAspect,
+                                                   extractedText: baseCtx.extractedText,
+                                                   items: renderItems,
+                                                   layout: layoutSpec,
+                                                   canvas: canvas)
+                                    } catch let e as ImageService.ImageError where e.isInProgress {
                                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "文字排版失败：\(error.localizedDescription)。底图已生成但未出成品，请如实告知用户。")])
+                                                            "content": "【正在生成】底图还在生成中，请告知用户稍后查看，不要重复提交。"])
                                         continue
                                     }
-                                } catch let e as ImageService.ImageError where e.isInProgress {
+                                }
+                                // 2) 程序叠字（唯一一次合成）：命中缓存与新建底图**共用同一条渲染路径**
+                                do {
+                                    let composed = try TextOverlayRenderer.render(base: baseImage,
+                                                                                  items: renderItems,
+                                                                                  layout: layoutSpec,
+                                                                                  canvas: canvas)
+                                    guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
+                                    imageData = png
+                                    PerformanceTrace.event("text_overlay_completed")
+                                    // 成品已出，底图不再需要 → 清缓存（避免占内存，也避免误复用旧成品底图）
+                                    cache.markOverlayDoneAndEvict()
+                                } catch {
+                                    // 排版失败：明确失败，不退回普通生图伪装成功；
+                                    // **缓存保留不动**——下次重试直接复用这张底图重排，这正是缓存存在的理由。
+                                    cache.retainAfterOverlayFailure()
                                     apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": "【正在生成】底图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                                        "content": ToolPipeline.failureNote(pluginID: toolName, reason: "文字排版失败：\(error.localizedDescription)。底图已生成但未出成品，请如实告知用户。")])
                                     continue
                                 }
                             } else {
