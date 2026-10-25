@@ -532,7 +532,15 @@ extension ChatViewModel {
                             if plan.taskType == .poster,
                                let content = PosterContent.from(args: args, prompt: prompt) {
                                 var composed: Data? = nil
-                                if let bg = try? await HostedAccount.shared.renderPoster(
+                                // 名片优先：六字段齐全（姓名 + 至少一个联系方式）时走 BusinessCardRenderer。
+                                // 它是**唯一合成入口**，返回即成品，外层绝不再叠字。
+                                if let card = BusinessCard.from(args: args, fallbackName: content.title),
+                                   let base = try? await HostedAccount.shared.renderPosterBase(
+                                       title: content.title, subtitle: content.subtitle, bullets: content.bullets),
+                                   let img = try? BusinessCardRenderer.render(card: card, on: base) {
+                                    composed = img.pngData()
+                                    PerformanceTrace.event("poster_render_stage_count_1")
+                                } else if let bg = try? await HostedAccount.shared.renderPoster(
                                     title: content.title, subtitle: content.subtitle, bullets: content.bullets) {
                                     // 3.4 修复：renderPoster 内部已经调用过 PosterComposer.compose，
                                     // 返回的就是**最终成品**（文字 + 底部遮罩都画好了）。

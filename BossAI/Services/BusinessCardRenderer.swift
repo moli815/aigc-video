@@ -31,6 +31,35 @@ struct BusinessCard: Equatable {
     }
 }
 
+extension BusinessCard {
+    /// 从工具 `structured` 参数构造名片；缺姓名返回 nil（交回普通海报流程）。
+    /// 字段名同时兼容中英文键，避免模型换措辞就取不到值。
+    static func from(args: [String: Any]?, fallbackName: String) -> BusinessCard? {
+        let st = args?["structured"] as? [String: Any] ?? [:]
+        func pick(_ keys: [String]) -> String {
+            for k in keys {
+                if let v = st[k] as? String, !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return v.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            return ""
+        }
+        let name = pick(["name", "姓名", "person"]) 
+        let phone = pick(["phone", "电话", "mobile", "tel"])
+        let email = pick(["email", "邮箱", "mail"])
+        let address = pick(["address", "地址", "addr"])
+        // 名片判定：至少要有姓名，且电话/邮箱/地址里出现一个；否则当普通海报处理
+        guard !name.isEmpty, !(phone.isEmpty && email.isEmpty && address.isEmpty) else { return nil }
+        return BusinessCard(name: name,
+                            title: pick(["title", "职位", "job"]),
+                            phone: phone,
+                            email: email,
+                            address: address,
+                            company: pick(["company", "公司", "org"]) ,
+                            logo: nil)
+    }
+}
+
 enum BusinessCardError: LocalizedError, Equatable {
     case emptyRequiredFields
     case textOverflow(String)     // 附带是哪个字段溢出

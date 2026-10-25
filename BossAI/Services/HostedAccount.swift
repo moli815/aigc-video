@@ -883,6 +883,46 @@ final class HostedAccount: ObservableObject {
         }
         return composed
     }
+    /// 只要**无字底图**（名片走 BusinessCardRenderer 自己排版时用）。
+    /// 与 renderPoster 的区别：不在客户端合成文字，返回服务端原图。
+    func renderPosterBase(title: String, subtitle: String, bullets: [String], style: String? = nil) async throws -> UIImage {
+        guard let token, !token.isEmpty else { throw HostedError.network("未登录") }
+        guard let url = URL(string: AppConfig.hostedAPIBase + "/poster") else {
+            throw HostedError.network("服务地址无效")
+        }
+        var body: [String: Any] = ["title": title, "subtitle": subtitle, "bullets": bullets]
+        if let style, !style.isEmpty { body["style"] = style }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let data: Data
+        let http: HTTPURLResponse
+        do {
+            (data, http) = try await BoundedHTTPClient.data(for: req,
+                                                            session: BoundedHTTPClient.imageSession,
+                                                            limit: 12 * 1024 * 1024)
+        } catch {
+            throw HostedError.network("网络异常，请检查连接后重试")
+        }
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if http.statusCode != 200 {
+            throw HostedError.server(code: json["error"] as? String ?? "POSTER_FAILED",
+                                     status: http.statusCode, message: json["message"] as? String)
+        }
+        guard let baseURLString = json["imageUrl"] as? String, let baseURL = URL(string: baseURLString) else {
+            throw HostedError.network("海报底图缺失，请重试")
+        }
+        guard let (imgData, imgResp) = try? await BoundedHTTPClient.data(for: URLRequest(url: baseURL),
+                                                                         session: BoundedHTTPClient.imageSession,
+                                                                         limit: 32 * 1024 * 1024),
+              imgResp.statusCode == 200,
+              let base = UIImage(data: imgData) else {
+            throw HostedError.network("底图下载失败，请重试")
+        }
+        return base
+    }
 
     // MARK: - P0-46 服务端记忆抽取（Mem0 式合并决策，算法云端化）
 
