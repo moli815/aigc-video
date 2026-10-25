@@ -462,13 +462,10 @@ struct ChatView: View {
                             }
                         }
                     }
-                    // P0-50 ChatGPT 式生图加载：工具执行期间在消息流里显示 shimmer 占位行
-                    if let job = viewModel.pendingImage {
-                        ImageGenWaitingCard(
-                            title: job,
-                            stages: viewModel.pendingImageKind == "card"
-                                ? ["规划画面", "生成无字底图", "排版文字"]
-                                : ["规划画面", "Pro 生成", "整理结果"])
+                    // 10-25 ChatGPT 式等待占位：一行状态 + 三个呼吸点。
+                    // 文案由 ImageTaskStatus 按**真实任务类型与阶段**决定，不展示 prompt/模型名/预估耗时。
+                    if let wait = viewModel.imageWait {
+                        ImageWaitingRow(state: wait)
                     }
                     if !viewModel.isStreaming, viewModel.streamingMessageId == nil,
                        !viewModel.suggestedFollowUps.isEmpty {

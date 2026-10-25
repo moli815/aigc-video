@@ -47,13 +47,18 @@ struct ImageRequestContext {
     let extractedText: [String: String]
     /// 是否需要"无字底图 + 程序排版"
     let needsTextOverlay: Bool
+    /// 10-25 几何保护：显式像素尺寸（"1200x800"）。
+    /// 有值时请求走 size 字段、**不再发 aspect_ratio**——服务端只有 6 种预设比例，
+    /// 发比例就等于允许模型重新构图（横版照片被拉成 1:1 的根源）。
+    let targetSize: String?
 
     /// 显式 init：4 个文字字段带默认值，既有调用点零改动；一旦构造即不可变。
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
          textDensity: String = "low", textAccuracyRequired: Bool = false,
-         extractedText: [String: String] = [:], needsTextOverlay: Bool = false) {
+         extractedText: [String: String] = [:], needsTextOverlay: Bool = false,
+         targetSize: String? = nil) {
         self.prompt = prompt
         self.references = references
         self.taskKind = taskKind
@@ -67,6 +72,7 @@ struct ImageRequestContext {
         self.textAccuracyRequired = textAccuracyRequired
         self.extractedText = extractedText
         self.needsTextOverlay = needsTextOverlay
+        self.targetSize = targetSize
     }
 
     /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
@@ -83,7 +89,8 @@ struct ImageRequestContext {
                             textDensity: textDensity,
                             textAccuracyRequired: textAccuracyRequired,
                             extractedText: extractedText,
-                            needsTextOverlay: needsTextOverlay)
+                            needsTextOverlay: needsTextOverlay,
+                            targetSize: targetSize)
     }
 
     /// 派生：写入文字分流结果（保持不可变语义，返回新实例）
@@ -103,7 +110,8 @@ struct ImageRequestContext {
                             textDensity: density,
                             textAccuracyRequired: accuracyRequired,
                             extractedText: extracted,
-                            needsTextOverlay: needsOverlay)
+                            needsTextOverlay: needsOverlay,
+                            targetSize: targetSize)
     }
 
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
@@ -121,7 +129,8 @@ struct ImageRequestContext {
                                    textDensity: textDensity,
                                    textAccuracyRequired: textAccuracyRequired,
                                    extractedText: extractedText,
-                                   needsTextOverlay: needsTextOverlay)
+                                   needsTextOverlay: needsTextOverlay,
+                                   targetSize: targetSize)
     }
 }
 
@@ -267,7 +276,8 @@ final class ImageService {
                              aspectRatio: String?,
                              taskKind: String?,
                              qualityTier: String?,
-                             requestedCount: Int?) async throws -> URLRequest {
+                             requestedCount: Int?,
+                             targetSize: String? = nil) async throws -> URLRequest {
         let apiKey: String
         if profile.id == "hosted" {
             guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
@@ -318,7 +328,13 @@ final class ImageService {
         if let renderIntent, !renderIntent.isEmpty {
             body["render_intent"] = renderIntent
         }
-        if let aspectRatio, !aspectRatio.isEmpty {
+        // 10-25 几何保护：显式像素尺寸优先于比例。
+        // 服务端 resolveSize 会先查 6 种预设比例，命中就按预设尺寸出图（=重新构图/裁切）；
+        // 传 WxH 走 clampExplicitSize，比例与原图一致，才真正锁得住"不裁切"。
+        let explicitSize = (targetSize ?? "").trimmingCharacters(in: .whitespaces)
+        if !explicitSize.isEmpty {
+            body["size"] = explicitSize
+        } else if let aspectRatio, !aspectRatio.isEmpty {
             body["aspect_ratio"] = aspectRatio
         }
         // 10-24 混合路由：任务类型 + 质量偏好交给服务端判断，客户端不指定模型
@@ -328,9 +344,10 @@ final class ImageService {
 
         switch profile.style {
         case .volc:
-            // 会员模式不传 size：尺寸由 bf-image 按云端配置决定。
-            // 自带 Key 直连上游、没有服务端配置可读，保持 2K 规格不变。
-            if !HostedAccount.isHostedActive { body["size"] = "2K" }
+            // 会员模式默认不传 size（尺寸由 bf-image 按云端配置决定），
+            // 但 10-25 起：**显式几何尺寸必须透传**，否则"保证原图比例"只是口头承诺。
+            // 自带 Key 直连上游没有服务端夹取逻辑，保持 2K 规格。
+            if explicitSize.isEmpty, !HostedAccount.isHostedActive { body["size"] = "2K" }
             body["response_format"] = "b64_json"
             body["watermark"] = false
             if !references.isEmpty {
@@ -392,12 +409,12 @@ final class ImageService {
     // MARK: - 单图（保持原契约，旧调用点零改动）
 
     /// 生成图片；reference 非空时为参考图编辑。返回：图片二进制（PNG/JPEG）。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil) async throws -> Data {
         let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
                                             requestId: requestId, layerDecomposition: layerDecomposition,
                                             renderIntent: renderIntent, aspectRatio: aspectRatio,
                                             taskKind: taskKind, qualityTier: qualityTier,
-                                            requestedCount: requestedCount)
+                                            requestedCount: requestedCount, targetSize: targetSize)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
@@ -439,7 +456,8 @@ final class ImageService {
                            aspectRatio: plan.aspectRatio,
                            taskKind: Self.taskKind(for: plan.taskType),
                            qualityTier: plan.qualityTier,
-                           requestedCount: plan.outputCount > 1 ? plan.outputCount : nil)
+                           requestedCount: plan.outputCount > 1 ? plan.outputCount : nil,
+                           targetSize: plan.targetSize)
     }
 
     /// 规划类型 → 服务端 task_kind（服务端只认 generate / edit / series / decompose）

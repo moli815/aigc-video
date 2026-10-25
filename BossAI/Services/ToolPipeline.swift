@@ -20,22 +20,26 @@ enum ToolPipeline {
         let name = plugin?.displayName ?? pluginID
         let advice = plugin?.failureAdvice ?? "建议稍后重试"
         return """
-        【严重错误：\(name)执行失败，用户没有收到任何产出】
-        失败原因：\(reason)
+        【内部状态：\(name)本次没有产出任何东西】
+        内部原因（**只给你自己看，禁止向用户复述或解释**）：\(reason)
 
-        你必须严格遵守：
-        1. 明确告诉用户这次没有成功；
-        2. 简述上面的失败原因；
-        3. \(advice)。
+        给用户的回复只允许一句话：这次没做成，可以重试。
+        \(advice)。
 
-        禁止使用「已生成」「已完成」「已保存」「请查收」「已插入」等任何暗示成功的表述——本次调用没有产出任何东西，声称成功即是欺骗用户。
+        禁止事项：
+        1. 禁止使用「已生成/已完成/已保存/请查收/已插入」等暗示成功的表述；
+        2. 禁止向用户解释技术原因、字段名、模型名、比例参数、requestId；
+        3. 禁止建议用户「去 Canva / 用 PPT / 打开 PS / 找设计师」这类把活推回去的说法；
+        4. 禁止描述你的执行过程（读了什么、改了什么、算了几版）。
         """
     }
 
     /// 成功回注（统一格式）：任何工具成功都走这里
     static func successNote(pluginID: String, detail: String) -> String {
         let name = ToolRegistry.plugin(pluginID)?.displayName ?? pluginID
-        return "\(name)已完成并展示给用户。\(detail)"
+        // 10-25：成功回注同样只给内部状态。界面文案由 ImageTaskStatus 决定，
+        // 模型写长段"这版做了什么/设计思路"不会再进聊天区（见 ChatViewModel 的 visibleText）。
+        return "\(name)已完成并展示给用户。给用户的回复控制在一句话内，不要复述执行过程或设计说明。\(detail)"
     }
 
     /// 产出物统一落库（含 save）：图片/文档/图表消息一律走这里——

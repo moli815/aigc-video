@@ -83,10 +83,13 @@ final class ChatViewModel: ObservableObject {
     @Published var isImporting = false
     @Published var isExporting = false
     @Published var toast: String?
-    // P0-50 生图占位（ChatGPT 式加载动效）：非 nil 时消息流底部显示 shimmer 占位行
-    @Published var pendingImage: String?
-    /// 生图等待卡的类型：image / card（决定阶段文案），默认 image
-    @Published var pendingImageKind: String = "image"
+    // 10-25 生图等待占位（ChatGPT 风格，克制版）：非 nil 时消息流底部显示一行状态。
+    // 只放「任务形态 + 真实阶段」，**不放 prompt、不放模型名、不放预估耗时**。
+    @Published var imageWait: ImageWaitState?
+    /// 10-25：本轮图片任务结束后给用户的**唯一**一句总结（成功 / 三类失败）。
+    /// 有值时最终气泡用它替代模型正文 —— 模型的设计说明、自我解释、建议去别的工具
+    /// 这类内部内容一律不进聊天区。
+    @Published var imageTurnNote: String?
     // P0-60 稳定调用：本轮已自动重试次数（防死循环；send 时重置；P0-64 上限云端可调）
     var autoRetryCount = 0
     // P0-68 深度思考状态（最高档推理模型首字延迟 ~11s）：流式期间显示"深度思考中…"，消除空等感
@@ -352,7 +355,8 @@ final class ChatViewModel: ObservableObject {
                                          aspectRatio: context.aspectRatio,
                                          taskKind: context.taskKind,
                                          qualityTier: context.qualityTier,
-                                         requestedCount: context.requestedCount)
+                                         requestedCount: context.requestedCount,
+                                         targetSize: context.targetSize)
     }
 
     /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。
@@ -364,7 +368,7 @@ final class ChatViewModel: ObservableObject {
         return CGFloat(width / height)
     }
 
-private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
+private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil) async throws -> Data {
         // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
         let idemKey = UUID().uuidString
         // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
@@ -372,7 +376,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
         var attempt = 0
         while true {
             do {
-                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: taskKind, qualityTier: qualityTier, requestedCount: requestedCount)
+                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: taskKind, qualityTier: qualityTier, requestedCount: requestedCount, targetSize: targetSize)
             } catch {
                 let retryable = (error as? URLError) != nil
                     || ((error as? ImageService.ImageError)?.isRetryable ?? false)

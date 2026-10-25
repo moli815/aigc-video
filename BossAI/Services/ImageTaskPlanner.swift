@@ -67,6 +67,18 @@ struct ImageTaskPlan: Equatable {
     let needsClarification: Bool
     /// 追问内容（needsClarification 为 true 时非空）
     let clarification: String?
+
+    // ── 10-25 几何保护（P 图裁切的根因就在这三个字段）──
+    /// 显式像素尺寸（"1200x800"）。**只有它才能真正锁死比例**：
+    /// 服务端 resolveSize 优先查 ASPECT_SIZES（只有 6 种），落到 size 才走 clampExplicitSize。
+    let targetSize: String?
+    /// 本次任务是否承诺"原图比例不变、四周不裁切"
+    let preserveSourceAspect: Bool
+    /// 用户是否明确要求改比例/裁切（没明确要求就一律不允许裁）
+    let allowCrop: Bool
+    /// 原图真实像素（nil = 读不到，此时不承诺保留比例）
+    let sourceWidth: Int?
+    let sourceHeight: Int?
 }
 
 enum ImageTaskPlanner {
@@ -92,17 +104,56 @@ enum ImageTaskPlanner {
                      referenceCount: Int = 0,
                      requestedCount: Int? = nil,
                      aspectRatio: String? = nil,
-                     qualityTier: String? = nil) -> ImageTaskPlan {
+                     qualityTier: String? = nil,
+                     sourceSize: (width: Int, height: Int)? = nil,
+                     userSaid: String? = nil) -> ImageTaskPlan {
         let text = userText.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = text.lowercased()
+        // 用户自己的原话（区别于模型改写后的 prompt）：
+        // 判断"用户是否真的要改比例"只能看用户原话，模型随口带个 aspect_ratio 不算授权。
+        let userLowered = (userSaid ?? text).lowercased()
 
         let type = classify(text: lowered, referenceCount: referenceCount, requestedCount: requestedCount)
         let count = resolveCount(text: lowered, type: type, requested: requestedCount)
-        let ratio = normalizeAspect(aspectRatio) ?? inferAspect(text: lowered, type: type)
+        let modelRatio = normalizeAspect(aspectRatio)
+        let userRatio = firstAspectToken(in: userLowered)
+        let explicitRatio = modelRatio ?? userRatio
         let tier = resolveTier(explicit: qualityTier, type: type)
         let textPolicy = resolveTextPolicy(text: lowered, type: type)
         let preserve = (type == .edit)
-        let constraints = buildConstraints(type: type, preserveOriginal: preserve, textPolicy: textPolicy)
+
+        // ── 10-25 比例决策（P 图被裁切的根因修复）──
+        // 规则只有一条：**有参考图且要保留原图内容的任务，默认锁死原图比例**。
+        // 旧实现让 edit 落到 inferAspect 的 default = "1:1"，于是横版照片被要求
+        // "画面比例 1:1"，模型只能中心裁切 —— 左右边缘和主体就没了。
+        let editLike = (type == .edit || type == .reference) && referenceCount > 0
+        var ratio: String = "1:1"
+        var targetSize: String? = nil
+        var preserveAspect = false
+        var allowCrop = false
+        if editLike {
+            if let userRatio {
+                // 只有**用户原话里**说了比例（"改成 1:1"/"裁成方形"）才算授权改比例。
+                // 模型自己带的 aspect_ratio 一律忽略——它经常顺手填 1:1，那正是裁切的来源。
+                ratio = userRatio
+                allowCrop = true
+            } else if let source = sourceSize,
+                      let clamped = ImageGeometry.clampedSize(width: source.width, height: source.height) {
+                // 没要求改比例 → 按原图真实像素要尺寸，比例天然一致
+                ratio = "\(source.width):\(source.height)"
+                targetSize = clamped
+                preserveAspect = true
+            } else {
+                // 读不到原图尺寸：不猜比例、也不承诺保留（交给服务端默认），
+                // 但至少不能把 edit 硬拉到 1:1
+                ratio = ""
+            }
+        } else {
+            ratio = explicitRatio ?? inferAspect(text: lowered, type: type)
+        }
+
+        let constraints = buildConstraints(type: type, preserveOriginal: preserve,
+                                           preserveSourceAspect: preserveAspect, textPolicy: textPolicy)
 
         // 追问：只在"问了才能做对"时问，且只问一句
         var ask: String? = nil
@@ -114,7 +165,8 @@ enum ImageTaskPlanner {
         }
 
         let prompt = buildPrompt(text: text, type: type, ratio: ratio,
-                                 count: count, textPolicy: textPolicy, preserveOriginal: preserve)
+                                 count: count, textPolicy: textPolicy,
+                                 preserveOriginal: preserve, preserveSourceAspect: preserveAspect)
 
         return ImageTaskPlan(taskType: type,
                              intent: intentText(type: type, count: count),
@@ -127,7 +179,12 @@ enum ImageTaskPlanner {
                              textPolicy: textPolicy,
                              preserveOriginal: preserve,
                              needsClarification: ask != nil,
-                             clarification: ask)
+                             clarification: ask,
+                             targetSize: targetSize,
+                             preserveSourceAspect: preserveAspect,
+                             allowCrop: allowCrop,
+                             sourceWidth: sourceSize?.width,
+                             sourceHeight: sourceSize?.height)
     }
 
     // MARK: - 分类
@@ -253,7 +310,8 @@ enum ImageTaskPlanner {
         return .avoid
     }
 
-    private static func buildConstraints(type: ImageTaskType, preserveOriginal: Bool, textPolicy: ImageTextPolicy) -> [String] {
+    private static func buildConstraints(type: ImageTaskType, preserveOriginal: Bool,
+                                         preserveSourceAspect: Bool, textPolicy: ImageTextPolicy) -> [String] {
         var out = ["画面内不要出现乱码文字或水印"]
         if textPolicy == .programmatic {
             out.append("不要把价格/电话/地址/标题交给模型绘制，这些字符由排版层生成")
@@ -261,6 +319,12 @@ enum ImageTaskPlanner {
         if preserveOriginal {
             out.append("不要改变人物面部特征、服装与姿势")
             out.append("不要改动用户未要求修改的区域")
+        }
+        if preserveSourceAspect {
+            // 这一组是"不许重构图"的硬约束，配合 targetSize 才能在几何上真正生效
+            out.append("保留原图完整边界，四周一律不裁切")
+            out.append("不改变主体位置与尺度，不缩放重排画面")
+            out.append("仅修改用户指定的内容，其余区域保持原样")
         }
         if type == .series {
             out.append("同一组图必须保持统一配色与视觉语言")
@@ -275,9 +339,13 @@ enum ImageTaskPlanner {
                                     ratio: String,
                                     count: Int,
                                     textPolicy: ImageTextPolicy,
-                                    preserveOriginal: Bool) -> String {
+                                    preserveOriginal: Bool,
+                                    preserveSourceAspect: Bool) -> String {
         var parts: [String] = [text]
-        var directives: [String] = ["画面比例 \(ratio)"]
+        // 保留原图的任务不能写"画面比例 X"——那句话本身就在要求模型重新构图
+        var directives: [String] = preserveSourceAspect
+            ? ["严格保持原图的宽高比与完整边界（不裁切、不扩边）"]
+            : (ratio.isEmpty ? [] : ["画面比例 \(ratio)"])
         if count > 1 { directives.append("共 \(count) 张，风格统一、内容各异") }
         switch textPolicy {
         case .programmatic:

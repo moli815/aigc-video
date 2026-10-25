@@ -67,6 +67,11 @@ extension ChatViewModel {
 
         var fullText = ""
         var assistantText = ""
+        /// 10-25 image-turn 隔离：本轮一旦开始图片工具，模型之后输出的任何正文
+        /// **既不进界面、也不落库**（不是"最后覆盖"，是从数据流上掐断）。
+        var imageTurnIsolated = false
+        /// 10-25：固定比例兜底时，"补边画布 → 内容区"的归一化矩形；生成后据此裁回原构图
+        var paddingRect: CGRect?
         /// 10-23 P0：本轮是否已有产物真正落库（图片/文档）。
         /// 线程安全旗标，供超时任务与 catch 分支读取——有产物时后续说明失败只能降级为"部分成功"。
         let artifactFlag = FirstTokenFlag()
@@ -209,8 +214,10 @@ extension ChatViewModel {
                         assistantText += delta
                         if isReasoning { isReasoning = false }   // P0-68 正文开始，结束思考提示
                         // 合并发布内存缓冲，不逐delta写库；实际视图重算范围需Instruments确认。
+                        // 10-25：本轮已有图片结果时，不把模型的过程性文字流到界面上
+                        // （设计说明、"我做不到"、建议去别的工具，这些都不该出现在聊天区）
                         let now = ProcessInfo.processInfo.systemUptime
-                        if streamingText.isEmpty || now - lastPublishTime >= 0.08 {
+                        if !imageTurnIsolated, streamingText.isEmpty || now - lastPublishTime >= 0.08 {
                             streamingText = assistantText
                             lastPublishTime = now
                         }
@@ -240,7 +247,7 @@ extension ChatViewModel {
                 }
 
                 if pendingToolCalls.isEmpty { fullText = assistantText }
-                else { streamingText = ""; statusText = "正在执行任务工具…" }
+                else { streamingText = ""; statusText = "正在处理…" }
                 deepHintTask?.cancel(); deepHintTask = nil
                 currentTextCommitted = true
                 BudgetTracker.add(promptTokens: requestPromptTokens > 0 ? requestPromptTokens : requestPromptEstimate,
@@ -256,7 +263,7 @@ extension ChatViewModel {
                    // 两者都满足才回退，避免把"模型给了链接但未走注册表"的合法回答误判成缺来源。
                    (nativeSearchRejected || (citations.sources.isEmpty && !assistantText.contains("https://") && !assistantText.contains("http://"))) {
                     nativeEvidenceFallbackUsed = true
-                    statusText = "模型未给出可核对来源，正在使用 App 搜索补查…"
+                    statusText = "正在核实信息来源…"
                     let query = ResearchIntent.searchSeed(from: userText)
                     let recency = SearchRecency.inferred(from: query)
                     let key = ResearchIntent.fingerprint(query, recency: recency.rawValue)
@@ -275,8 +282,12 @@ extension ChatViewModel {
                     fullText = ""
                     continue loop
                 }
-                streamingText = fullText
-                assistantMessage.text = fullText
+                // 10-25 image-turn 隔离：隔离轮次的正文**只能**是固定短句。
+                // 模型这次写了什么（设计说明/prompt/自我解释）根本进不来——
+                // assistantText 只在内存里参与协议，不写 streamingText、不写 Message.text。
+                let visibleText = imageTurnIsolated ? (imageTurnNote ?? "") : fullText
+                streamingText = visibleText
+                assistantMessage.text = visibleText
                 // P0-45 落库加固：每个稳定点（工具循环轮次之间）立即显式保存——
                 // 不再依赖系统自动保存的时机，切换会话/杀进程也不会丢已完成的正文。
                 saveOrWarn()
@@ -385,7 +396,8 @@ extension ChatViewModel {
                         }
                     case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":   // 10-19 拆 4 工具（统一执行器，旧名兼容）
                         imageToolAttempted = true
-                        statusText = "正在生成图片（约 20 秒）…"
+                        // 10-25：等待文案统一由 imageWait 承担（这里不再写"约 20 秒"这种伪预估）
+                        statusText = nil
                         let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
                         let prompt = args?["prompt"] as? String ?? userText
                         // P0-64 missingArgsNote 接入：prompt 缺失（且无用户原话兜底）时明确报错而非执行空请求
@@ -404,9 +416,13 @@ extension ChatViewModel {
                                 "content": String(format: "本月生图额度已用完（上限 ¥%.0f，已用约 ¥%.2f）。请告知用户：可在设置中调整生图额度，或等下月 1 日自动恢复；本次未生成图片。", BudgetTracker.imageLimit(), BudgetTracker.imageSpent()),
                             ])
                         } else {
-                        // P0-50 ChatGPT 式生图加载：执行期间在消息流里显示占位动画行
-                        pendingImage = String(prompt.prefix(24))
-                        defer { pendingImage = nil; pendingImageKind = "image" }
+                        // 10-25 ChatGPT 式占位：只显示「任务形态 + 真实阶段」。
+                        // 旧实现把 prompt 前 24 字直接塞进占位卡 → 用户看到的是自己的需求原文被复述，
+                        // 属于内部信息外泄。现在文案只来自 ImageTaskStatus。
+                        imageTurnNote = nil
+                        imageTurnIsolated = true
+                        imageWait = ImageWaitState(kind: waitKindForTool(call.name, plan: nil))
+                        defer { imageWait = nil }
                         do {
                             // P0-65 参考图收集（0-2 张，顺序 = [底图, 叠加元素]）：
                             // · 仅 edit_last_image → 编辑 AI 上次生成的图
@@ -460,12 +476,18 @@ extension ChatViewModel {
                             // ── 10-24 P1：图片任务规划（只作用于图片分支，文本聊天完全不经过这里）──
                             // 把"比例/张数/档位/禁画字/保留原图"从模型随口决定，改成确定性推断；
                             // 规划结果**必须真的进入请求**，否则等于没接（见下方 planPrompt/planAspect/planTier）。
+                            // 10-25 P 图裁切修复：把**原图真实像素宽高**喂给规划器。
+                            // 旧实现完全不看原图，编辑任务没指定比例时落到默认 1:1，
+                            // 横版照片只能被中心裁切——这才是"P 图被切边"的根因。
+                            let sourceSize = refs.first.flatMap { ImageGeometry.pixelSize(of: $0) }
                             let plan = ImageTaskPlanner.plan(
                                 userText: prompt,
                                 referenceCount: refs.count,
                                 requestedCount: requestedCount > 0 ? requestedCount : nil,
                                 aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
-                                qualityTier: qualityTier.isEmpty ? nil : qualityTier)
+                                qualityTier: qualityTier.isEmpty ? nil : qualityTier,
+                                sourceSize: sourceSize,
+                                userSaid: userText)
                             // 说"改图"却一张图都没有：先问一句，别硬生成一张全新图
                             if plan.needsClarification, let ask = plan.clarification {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
@@ -476,24 +498,45 @@ extension ChatViewModel {
                             let planAspect = plan.aspectRatio
                             let planTier = plan.qualityTier
                             let planCount = plan.outputCount
-                            // 等待阶段文案按任务类型分流（plan 已就绪后才能判断）
-                            pendingImageKind = (plan.taskType == .poster) ? "card" : "image"
+                            // 等待文案按**真实任务类型**分流（plan 已就绪；不用定时器伪造阶段）
+                            imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
+                            // ── 10-25 固定比例兜底（三.4）：仅当原图比例无法用显式尺寸表达时才补边 ──
+                            // 常规路径直接要 WxH（比例天然一致，零裁切、零补边）；
+                            // 读不到可用尺寸时，退化为"最接近的支持比例 + 等比留白"，生成后再裁回原构图。
+                            var requestRefs = refs
+                            var paddedRatio: String? = nil
+                            paddingRect = nil
+                            if plan.preserveSourceAspect, plan.targetSize == nil, !plan.allowCrop,
+                               let first = refs.first, let source = sourceSize,
+                               let ui = UIImage(data: first) {
+                                let ratio = ImageGeometry.nearestSupportedRatio(Double(source.width) / Double(source.height))
+                                if let padded = ImageGeometry.composePaddedReference(ui, ratio: ratio) {
+                                    requestRefs = [padded.data] + Array(refs.dropFirst())
+                                    paddedRatio = ratio
+                                    paddingRect = padded.contentRect
+                                    PerformanceTrace.event("image_padding_applied", fields: [
+                                        "ratio": ratio,
+                                        "src": "\(source.width)x\(source.height)",
+                                    ])
+                                }
+                            }
                             // 3.3：首轮把全部任务参数固化进 context，后续重试只从它派生
                             let imageCtx = ImageRequestContext(
                                 prompt: plan.prompt,
-                                references: refs,
+                                references: requestRefs,
                                 taskKind: imageTaskKind,
                                 qualityTier: planTier,
                                 requestedCount: planCount > 1 ? planCount : nil,
-                                aspectRatio: planAspect,
+                                aspectRatio: paddedRatio ?? planAspect,
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
-                                layerDecomposition: toolName == "image_decompose")
+                                layerDecomposition: toolName == "image_decompose",
+                                targetSize: plan.targetSize)
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
                             if toolName == "image_series" {
                                 let n = max(2, min(4, planCount > 1 ? planCount : 2))
-                                statusText = "正在生成 \(n) 张图片（逐张生成，可随时停止）…"
+                                imageWait = ImageWaitState(kind: .series)
                                 let run = try await runSeriesTask(
                                     prompt: planPrompt, requestedCount: n,
                                     structured: structuredArgs, renderIntent: renderIntent,
@@ -565,6 +608,8 @@ extension ChatViewModel {
                                                                                extractedCharCount: overlayChars,
                                                                                accuracyRequired: accuracyByText || imageCtx.textAccuracyRequired)
                             if wantsOverlay && !overlayItems.isEmpty {
+                                // 文字密集任务：底图 → 排版，两个真实阶段
+                                imageWait = ImageWaitState(kind: .textOverlay)
                                 // 1) 只要底图：prompt 明确禁止任何文字
                                 // prompt 是 let，必须走派生方法，不能原地赋值
                                 let baseCtx = imageCtx
@@ -602,6 +647,7 @@ extension ChatViewModel {
                                     do {
                                         let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
                                         guard let decoded = UIImage(data: base) else {
+                                            imageTurnNote = ImageTaskStatus.Failure.generateFailed.message
                                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                                 "content": ToolPipeline.failureNote(pluginID: toolName, reason: "无字底图解码失败，这次没有成品。请如实告知用户重试。")])
                                             continue
@@ -619,12 +665,15 @@ extension ChatViewModel {
                                                    layout: layoutSpec,
                                                    canvas: canvas)
                                     } catch let e as ImageService.ImageError where e.isInProgress {
+                                        // 任务还在上游跑：给一句固定状态，不要空气泡
+                                        imageTurnNote = ImageTaskStatus.waitText(.textOverlay)
                                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": "【正在生成】底图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                                            "content": "【内部状态】任务仍在上游执行中，不要重复提交；不要向用户解释原因。"])
                                         continue
                                     }
                                 }
                                 // 2) 程序叠字（唯一一次合成）：命中缓存与新建底图**共用同一条渲染路径**
+                                imageWait = ImageWaitState(kind: .textOverlay)
                                 do {
                                     let composed = try TextOverlayRenderer.render(base: baseImage,
                                                                                   items: renderItems,
@@ -639,24 +688,74 @@ extension ChatViewModel {
                                     // 排版失败：明确失败，不退回普通生图伪装成功；
                                     // **缓存保留不动**——下次重试直接复用这张底图重排，这正是缓存存在的理由。
                                     cache.retainAfterOverlayFailure(conversationId: cacheConversationId, taskId: cacheTaskId)
+                                    imageTurnNote = ImageTaskStatus.Failure.generateFailed.message
                                     apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                         "content": ToolPipeline.failureNote(pluginID: toolName, reason: "文字排版失败：\(error.localizedDescription)。底图已生成但未出成品，请如实告知用户。")])
                                     continue
                                 }
                             } else {
                                 do {
+                                    // 真实第二阶段：请求已发出，等模型出图
+                                    imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
                                     imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
                                 } catch let e as ImageService.ImageError where e.isInProgress {
+                                    imageTurnNote = ImageTaskStatus.waitText(waitKindForTool(toolName, plan: plan))
                                     apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                                        "content": "【内部状态】这张图仍在上游生成中，不要重复提交；不要向用户解释原因。"])
                                     continue
                                 }
+                            }
+                            // 10-25：补边路径生成完先裁回原构图（把留白去掉），再做比例校验
+                            if let rect = paddingRect, let raw = UIImage(data: imageData),
+                               let restored = ImageGeometry.cropBack(raw, contentRect: rect),
+                               let restoredData = restored.jpegData(compressionQuality: 0.95) {
+                                imageData = restoredData
+                            }
+                            // ── 10-25 几何校验：承诺保比例却没保住 → 不展示、不落库、明确失败 ──
+                            // 这是"不许裁切"的最后一道闸：参数层面已经锁了 targetSize，
+                            // 万一上游还是把画面重构成别的比例，就在这里拦住。
+                            if plan.preserveSourceAspect, !plan.allowCrop,
+                               let srcW = plan.sourceWidth, let srcH = plan.sourceHeight {
+                                let expected = Double(srcW) / Double(srcH)
+                                let out = ImageGeometry.pixelSize(of: imageData)
+                                let outW = out?.width ?? 0
+                                let outH = out?.height ?? 0
+                                let broken = ImageGeometry.isAspectBroken(outputWidth: outW, outputHeight: outH,
+                                                                          expectedAspect: expected)
+                                PerformanceTrace.event("image_geometry", fields: [
+                                    "src": "\(srcW)x\(srcH)",
+                                    "out": "\(outW)x\(outH)",
+                                    "sourceAspect": String(format: "%.3f", expected),
+                                    "requestedSize": plan.targetSize ?? "",
+                                    "allowCrop": "0",
+                                    "paddingApplied": paddingRect == nil ? "0" : "1",
+                                    "cropDetected": broken ? "1" : "0",
+                                ])
+                                if broken {
+                                    imageTurnNote = ImageTaskStatus.Failure.aspectMismatch.message
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(pluginID: "image_edit",
+                                                                                           reason: "输出比例与原图不一致（疑似裁切），已丢弃本次结果。")])
+                                    continue
+                                }
+                            } else if let srcW = plan.sourceWidth, let srcH = plan.sourceHeight,
+                                      let out = ImageGeometry.pixelSize(of: imageData) {
+                                PerformanceTrace.event("image_geometry", fields: [
+                                    "src": "\(srcW)x\(srcH)",
+                                    "out": "\(out.width)x\(out.height)",
+                                    "sourceAspect": String(format: "%.3f", Double(srcW) / Double(srcH)),
+                                    "requestedSize": plan.targetSize ?? "",
+                                    "allowCrop": plan.allowCrop ? "1" : "0",
+                                    "paddingApplied": paddingRect == nil ? "0" : "1",
+                                    "cropDetected": "0",
+                                ])
                             }
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
                             do {
                                 try ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
                                 artifactFlag.set()   // 10-23 P0：产物已落库，后续说明失败降级为部分成功
+                                imageTurnNote = ImageTaskStatus.doneText
                             } catch {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                     "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: "图片已生成但保存到本地失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试，不要说已成功。")])
@@ -676,6 +775,10 @@ extension ChatViewModel {
                         } catch {
                             // 10-24：先吸收结构化信封（actions / requestId），UI 才能给出可点按钮
                             adopt(error)
+                            // 10-25：失败只给一句可操作提示，内部原因（上游/参数/requestId）只进日志
+                            if imageTurnNote == nil {
+                                imageTurnNote = ImageTaskStatus.Failure.generateFailed.message
+                            }
                             // P0-59 失败统一走管道（防谎报文案由 ToolRegistry 声明生成，不会漏写）
                             apiMessages.append([
                                 "role": "tool",
@@ -976,5 +1079,14 @@ extension ChatViewModel {
         } else {
             UserDefaults.standard.set(rounds, forKey: memoryRoundKey)
         }
+    }
+    // MARK: - 10-25 等待文案分类
+
+    /// 任务形态 → 等待文案分类（按真实工具/规划类型，不猜阶段）
+    func waitKindForTool(_ toolName: String, plan: ImageTaskPlan?) -> ImageTaskStatus.Kind {
+        if toolName == "image_series" || plan?.taskType == .series { return .series }
+        if toolName == "image_edit" || toolName == "image_decompose" { return .edit }
+        if let plan, plan.taskType == .edit || plan.taskType == .reference { return .edit }
+        return .generate
     }
 }

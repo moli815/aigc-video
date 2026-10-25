@@ -33,7 +33,8 @@ extension ChatViewModel {
         streamingText = ""
         streamingMessageId = nil
         statusText = nil
-        pendingImage = nil
+        imageWait = nil
+        imageTurnNote = nil
         partialSuccessMessage = nil
         failedUserMessageID = nil
         failedAssistantMessageID = nil
