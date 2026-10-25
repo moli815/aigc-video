@@ -52,6 +52,17 @@ final class BusinessCardRendererTests: XCTestCase {
         XCTAssertEqual(BusinessCardRenderer.lines("短", size: 18, maxWidth: 300), 1)
     }
 
+    func testPortraitBaseRejected() {
+        let portrait = UIGraphicsImageRenderer(size: CGSize(width: 900, height: 1400)).image { ctx in
+            UIColor.darkGray.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 900, height: 1400))
+        }
+        XCTAssertThrowsError(try BusinessCardRenderer.render(card: card(), on: portrait)) { err in
+            guard case BusinessCardError.notLandscape = err else {
+                return XCTFail("应抛 notLandscape，实际 \(err)")
+            }
+        }
+    }
+
     private func base() -> UIImage {
         UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 1000)).image { ctx in
             UIColor(red: 0.1, green: 0.2, blue: 0.35, alpha: 1).setFill()

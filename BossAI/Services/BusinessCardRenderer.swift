@@ -44,6 +44,14 @@ extension BusinessCard {
             }
             return ""
         }
+        // Logo 数据源（10-25）：目前只有工具参数里显式给 base64 才有 Logo。
+        // 没有来源时保持 nil —— 对外只能说"未配置 Logo"，不能声称已支持。
+        var logoImage: UIImage? = nil
+        for key in ["logo_base64", "logoBase64", "logo"] {
+            if let b64 = st[key] as? String,
+               let data = Data(base64Encoded: b64.replacingOccurrences(of: "data:image/png;base64,", with: "")),
+               let img = UIImage(data: data) { logoImage = img; break }
+        }
         let name = pick(["name", "姓名", "person"]) 
         let phone = pick(["phone", "电话", "mobile", "tel"])
         let email = pick(["email", "邮箱", "mail"])
@@ -55,8 +63,8 @@ extension BusinessCard {
                             phone: phone,
                             email: email,
                             address: address,
-                            company: pick(["company", "公司", "org"]) ,
-                            logo: nil)
+                            company: pick(["company", "公司", "org"]),
+                            logo: logoImage)
     }
 }
 
@@ -64,12 +72,17 @@ enum BusinessCardError: LocalizedError, Equatable {
     case emptyRequiredFields
     case textOverflow(String)     // 附带是哪个字段溢出
     case renderFailed
+    /// 底图不是横版：比例不符时直接拒绝，绝不裁切/拉伸成竖版名片
+    case notLandscape(width: CGFloat, height: CGFloat)
 
     var errorDescription: String? {
         switch self {
         case .emptyRequiredFields: return "名片缺少必填信息（至少要有姓名）"
         case .textOverflow(let field): return "名片「\(field)」过长，放不进版面，请缩短后重试"
         case .renderFailed: return "名片排版失败，请重试"
+        case .notLandscape(let w, let h):
+            let ratio = h > 0 ? String(format: "%.2f", w / h) : "0"
+            return "名片底图不是横版（\(Int(w))×\(Int(h))，比例 \(ratio)），已拒绝合成，请重试生成横版底图"
         }
     }
 }
@@ -122,6 +135,10 @@ enum BusinessCardRenderer {
     /// - Note: 调用方拿到返回值后不得再叠加任何文字层（这是"只渲染一次"的保证）。
     static func render(card: BusinessCard, on base: UIImage) throws -> UIImage {
         let size = base.size.width > 0 ? base.size : CGSize(width: 1600, height: 1000)
+        // 名片必须横版：宽高比 < 1.15 一律拒绝（不裁切、不拉伸、不输出竖版）
+        guard size.height > 0, size.width / size.height >= 1.15 else {
+            throw BusinessCardError.notLandscape(width: size.width, height: size.height)
+        }
         let issues = checkLayout(card: card, canvas: size)
         if !issues.isEmpty {
             if issues.contains("姓名为空") { throw BusinessCardError.emptyRequiredFields }
