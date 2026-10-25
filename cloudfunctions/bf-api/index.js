@@ -826,9 +826,31 @@ function signToken(payload, ttlMs) {
   return `${body}.${sig}`;
 }
 
+/**
+ * 10-25 P0（DS4.1 §3.1）：密钥未加载时 verifyToken 会抛
+ * TypeError: Cannot read properties of null (reading 'tokenSecret')。
+ * 这个函数现在**任何输入都不抛异常**：格式不对返 null，密钥没就绪返 null，
+ * 由调用方（requireMember/requireStaff）在调用前统一判 503，避免把配置故障伪装成 500。
+ */
+function secretsReady() {
+  return !!(SECRETS && typeof SECRETS.tokenSecret === "string" && SECRETS.tokenSecret.length > 0);
+}
+
+/** 密钥没就绪时尝试补载一次；仍失败返回 false，由调用方回 503 */
+async function ensureSecretsForAuth() {
+  if (secretsReady()) return true;
+  try { await ensureSecrets(); } catch (e) {
+    logSafe({ tag: "secrets_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
+  }
+  return secretsReady();
+}
+
 function verifyToken(token) {
-  if (!token || token.indexOf(".") < 0) return null;
-  const [body, sig] = token.split(".");
+  if (!token || typeof token !== "string") return null;
+  const parts = String(token).split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  if (!secretsReady()) return null;            // 密钥未就绪：不抛，交调用方判 503
+  const [body, sig] = parts;
   const expect = crypto.createHmac("sha256", SECRETS.tokenSecret).update(body).digest("base64url");
   const a = Buffer.from(sig), b = Buffer.from(expect);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
@@ -860,6 +882,8 @@ function bearer(req) {
  * DB 不可用时 fail-closed（返回 503），不默认放行——否则一次 DB 抖动就等于全站免鉴权。
  */
 async function requireMember(req, res) {
+  // 密钥不可用 ≠ 未登录：必须回 503，让客户端知道是服务问题而不是让用户重新登录
+  if (!(await ensureSecretsForAuth())) return sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
   const payload = verifyToken(bearer(req));
   if (!payload || payload.t !== "member") { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
   try {
@@ -895,6 +919,8 @@ async function requireMember(req, res) {
  * 员工被禁用、删除或改角色后，旧 token 立即失效（不再等自然过期）。
  */
 async function requireStaff(req, res, needAdmin) {
+  // 密钥不可用 ≠ 未登录：必须回 503，让客户端知道是服务问题而不是让用户重新登录
+  if (!(await ensureSecretsForAuth())) return sendError(res, 503, "AUTH_UNAVAILABLE", "服务暂时不可用，请稍后重试");
   const payload = verifyToken(bearer(req));
   if (!payload || payload.t !== "staff") { sendError(res, 401, "UNAUTHORIZED", "请重新登录"); return null; }
   try {

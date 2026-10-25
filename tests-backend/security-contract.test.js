@@ -309,3 +309,34 @@ test("智能分配只在未显式指定时生效", () => {
   assert.match(body, /inferQualityTier\(prompt, renderIntent\)/, "未做 prompt 推断（auto 分支）");
   assert.match(body, /inferred === "high"[\s\S]{0,80}m\.pro/, "推断 high 未走 Pro");
 });
+
+// ── DS4.1 §3.1：鉴权不得因密钥未加载而抛异常（2026-10-25）──────────────────
+
+test("AUTH-10 密钥未就绪时 verifyToken 不得抛 TypeError", () => {
+  const start = API.indexOf("function verifyToken");
+  const body = API.slice(start, start + 700);
+  assert.ok(API.includes("function secretsReady"), "缺少密钥就绪判断");
+  const guard = body.indexOf("if (!secretsReady()) return null");
+  const hmac = body.indexOf('createHmac("sha256", SECRETS.tokenSecret)');
+  assert.ok(guard > 0, "密钥未就绪时没有短路");
+  assert.ok(hmac > guard, "HMAC 必须在密钥就绪判断之后（否则空密钥仍会抛）");
+});
+
+test("AUTH-11 密钥不可用必须回 503，不能伪装成 401/500", () => {
+  assert.ok(API.includes("async function ensureSecretsForAuth"), "缺少补载函数");
+  const memberAt = API.indexOf("async function requireMember");
+  const member = API.slice(memberAt, memberAt + 900);
+  assert.ok(member.includes("ensureSecretsForAuth()"), "requireMember 未校验密钥");
+  assert.ok(member.includes('503, "AUTH_UNAVAILABLE"'), "requireMember 未回 503");
+  const staffAt = API.indexOf("async function requireStaff");
+  const staff = API.slice(staffAt, staffAt + 900);
+  assert.ok(staff.includes("ensureSecretsForAuth()"), "requireStaff 未校验密钥");
+  assert.ok(staff.includes('503, "AUTH_UNAVAILABLE"'), "requireStaff 未回 503");
+});
+
+test("AUTH-12 token 两段格式与空值都要挡在 HMAC 之前", () => {
+  const start = API.indexOf("function verifyToken");
+  const body = API.slice(start, start + 700);
+  assert.ok(body.includes("typeof token !== \"string\""), "未校验 token 类型");
+  assert.ok(body.includes("parts.length !== 2"), "未校验两段格式");
+});
