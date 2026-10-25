@@ -8,6 +8,8 @@ import SwiftUI
 struct ImageGenWaitingCard: View {
     /// 需求复述（用户原话前若干字），显示在底部
     let title: String
+    /// 阶段文案：普通图片 / 名片 / 组图各不相同，由调用方传入
+    var stages: [String] = ["规划画面", "生成图片", "整理结果"]
 
     @State private var stage = 1
     private let ticker = Timer.publish(every: 2.2, on: .main, in: .common).autoconnect()
@@ -57,9 +59,9 @@ struct ImageGenWaitingCard: View {
             .frame(width: 96, height: 96)     // 尺寸受控：固定 96pt，不随气泡拉伸
 
             VStack(alignment: .leading, spacing: 7) {
-                stageRow(index: 0, label: "规划画面", state: .done, meta: "已完成")
-                stageRow(index: 1, label: "生成底图", state: .current, meta: "约 20 秒")
-                stageRow(index: 2, label: "排版文字", state: .waiting, meta: "等待中")
+                stageRow(index: 0, label: stages[0], state: .done, meta: "已完成")
+                stageRow(index: 1, label: stages[1], state: .current, meta: "约 20 秒")
+                stageRow(index: 2, label: stages[2], state: .waiting, meta: "等待中")
 
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {

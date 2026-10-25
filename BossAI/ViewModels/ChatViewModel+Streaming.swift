@@ -534,12 +534,20 @@ extension ChatViewModel {
                                 var composed: Data? = nil
                                 // 名片优先：六字段齐全（姓名 + 至少一个联系方式）时走 BusinessCardRenderer。
                                 // 它是**唯一合成入口**，返回即成品，外层绝不再叠字。
-                                if let card = BusinessCard.from(args: args, fallbackName: content.title),
-                                   let base = try? await HostedAccount.shared.renderPosterBase(
-                                       title: content.title, subtitle: content.subtitle, bullets: content.bullets),
-                                   let img = try? BusinessCardRenderer.render(card: card, on: base) {
-                                    composed = img.pngData()
-                                    PerformanceTrace.event("poster_render_stage_count_1")
+                                // 名片判定一旦成立，**不允许**再退回 PosterComposer：
+                                // 那样会产出一张"看起来成功、但不是名片"的海报（无 logo/无六字段/竖版）。
+                                if let card = BusinessCard.from(args: args, fallbackName: content.title) {
+                                    if let base = try? await HostedAccount.shared.renderPosterBase(
+                                        title: content.title, subtitle: content.subtitle, bullets: content.bullets),
+                                       let img = try? BusinessCardRenderer.render(card: card, on: base) {
+                                        composed = img.pngData()
+                                        PerformanceTrace.event("poster_render_stage_count_1")
+                                    } else {
+                                        // 底图或排版失败：明确失败，绝不生成替代品
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片底图或排版失败，这次没有成品。请如实告知用户重试，不要说已完成。")])
+                                        continue
+                                    }
                                 } else if let bg = try? await HostedAccount.shared.renderPoster(
                                     title: content.title, subtitle: content.subtitle, bullets: content.bullets) {
                                     // 3.4 修复：renderPoster 内部已经调用过 PosterComposer.compose，
