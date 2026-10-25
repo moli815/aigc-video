@@ -194,14 +194,18 @@ enum ImageGeometry {
     }
 
     private static func grayGrid(_ image: UIImage, side: Int) -> [Double]? {
-        guard let cg = image.cgImage else { return nil }
-        var pixels = [UInt8](repeating: 0, count: side * side)
-        let space = CGColorSpaceCreateDeviceGray()
-        guard let ctx = CGContext(data: &pixels, width: side, height: side, bitsPerComponent: 8,
-                                  bytesPerRow: side, space: space,
+        guard let cg = image.cgImage, side > 0 else { return nil }
+        // 缓冲区自己持有：把 Swift Array 的 &pixels 交给 CGContext 是不稳定的
+        // （编译器不保证地址在 draw 期间有效），CI 上就出现过整体返回 nil。
+        let count = side * side
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
+        defer { buffer.deallocate() }
+        buffer.initialize(repeating: 0, count: count)
+        guard let ctx = CGContext(data: buffer, width: side, height: side, bitsPerComponent: 8,
+                                  bytesPerRow: side, space: CGColorSpaceCreateDeviceGray(),
                                   bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
         ctx.interpolationQuality = .low
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
-        return pixels.map { Double($0) }
+        return (0..<count).map { Double(buffer[$0]) }
     }
 }
