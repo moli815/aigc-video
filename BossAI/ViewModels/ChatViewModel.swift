@@ -336,7 +336,24 @@ final class ChatViewModel: ObservableObject {
     /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
     /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
     /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
-    nonisolated static func generateImageWithRetry(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
+    
+    /// 图片请求的**唯一入口**（10-25 收口）：所有生成/重试都从不可变 context 取参数。
+    /// 旧的九参数版本已收为 private 实现 `performImageGeneration`，业务代码无法再绕过 context。
+    nonisolated static func generateImageWithRetry(context: ImageRequestContext,
+                                                   service: ImageService) async throws -> Data {
+        try await performImageGeneration(prompt: context.prompt,
+                                         references: context.references,
+                                         service: service,
+                                         structured: context.structured,
+                                         layerDecomposition: context.layerDecomposition,
+                                         renderIntent: context.renderIntent,
+                                         aspectRatio: context.aspectRatio,
+                                         taskKind: context.taskKind,
+                                         qualityTier: context.qualityTier,
+                                         requestedCount: context.requestedCount)
+    }
+
+private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil) async throws -> Data {
         // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
         let idemKey = UUID().uuidString
         // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效

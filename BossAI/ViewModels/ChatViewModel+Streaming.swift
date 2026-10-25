@@ -485,7 +485,8 @@ extension ChatViewModel {
                                 aspectRatio: planAspect,
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
-                                isPoster: plan.taskType == .poster)
+                                isPoster: plan.taskType == .poster,
+                                layerDecomposition: toolName == "image_decompose")
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
                             if toolName == "image_series" {
@@ -545,10 +546,14 @@ extension ChatViewModel {
                                     imageData = composed
                                     PerformanceTrace.event("poster_rendered_locally")
                                 } else {
-                                    imageData = try await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: false, renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil)
+                                    // 名片不做"退化成普通生图"的兜底：那样会得到一张没有文字的海报，
+                                    // 用户以为成功、实际不可用。明确失败，让用户重试排版。
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版底图生成失败，这次没有成品。请如实告知用户重试，不要说已完成。")])
+                                    continue
                                 }
                             } else {
-                                imageData = try await Self.generateImageWithRetry(prompt: planPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil)
+                                imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
                             }
 
                             // ── 10-24 P1：保存前质检（不调视觉模型，纯程序判定）──
@@ -559,7 +564,7 @@ extension ChatViewModel {
                                 // 3.3 补：质量失败重试同样不能丢 layerDecomposition（图层拆分）与 requestedCount（组图张数），
                                 // 否则"组图 4 张质量不过 → 重试变 1 张"、"拆分重试退化成普通生图"。
                                 let qualityRetryCtx = imageCtx.retrying(note: "上一次结果未通过画质检查（\(quality.summary)），请重做一次，保持同样的构图与要求。")
-                                if let retried = try? await Self.generateImageWithRetry(prompt: qualityRetryCtx.prompt, references: qualityRetryCtx.references, service: imageService, structured: qualityRetryCtx.structured, layerDecomposition: toolName == "image_decompose", renderIntent: qualityRetryCtx.renderIntent, aspectRatio: qualityRetryCtx.aspectRatio, taskKind: qualityRetryCtx.taskKind, qualityTier: qualityRetryCtx.qualityTier, requestedCount: qualityRetryCtx.requestedCount) {
+                                if let retried = try? await Self.generateImageWithRetry(context: qualityRetryCtx, service: imageService) {
                                     imageData = retried
                                     quality = ImageQualityChecker.check(retried, expectedAspect: planAspect)
                                     BudgetTracker.addImageGeneration()
@@ -590,7 +595,7 @@ extension ChatViewModel {
                                     // 旧代码只传了 prompt/structured/renderIntent/aspectRatio，
                                     // 丢了 taskKind / qualityTier / requestedCount —— 于是
                                     // "Pro 编辑重试变成普通生图"、"组图数量丢失"、"名片重试不走排版"。
-                                    if let retryData = try? await Self.generateImageWithRetry(prompt: fixPrompt, references: refs, service: imageService, structured: structuredArgs, layerDecomposition: toolName == "image_decompose", renderIntent: renderIntent, aspectRatio: planAspect, taskKind: imageTaskKind, qualityTier: planTier, requestedCount: planCount > 1 ? planCount : nil) {
+                                    if let retryData = try? await Self.generateImageWithRetry(context: retryCtx, service: imageService) {
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
                                     }

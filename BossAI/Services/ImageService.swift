@@ -31,6 +31,8 @@ struct ImageRequestContext {
     let renderIntent: String
     let structured: [String: Any]?
     let isPoster: Bool
+    /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
+    let layerDecomposition: Bool
 
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
     func retrying(note: String) -> ImageRequestContext {
@@ -42,7 +44,8 @@ struct ImageRequestContext {
                             aspectRatio: aspectRatio,
                             renderIntent: renderIntent,
                             structured: structured,
-                            isPoster: isPoster)
+                            isPoster: isPoster,
+                            layerDecomposition: layerDecomposition)
     }
 }
 
