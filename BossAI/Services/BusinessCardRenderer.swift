@@ -52,7 +52,11 @@ extension BusinessCard {
                let data = Data(base64Encoded: b64.replacingOccurrences(of: "data:image/png;base64,", with: "")),
                let img = UIImage(data: data) { logoImage = img; break }
         }
-        let name = pick(["name", "姓名", "person"]) 
+        var name = pick(["name", "姓名", "person"])
+        // structured 里没有姓名时用调用方给的 fallbackName（通常是标题/公司名），
+        // 但**不能**因此跳过"必须有一个联系方式"的校验 —— 否则会把普通海报当名片。
+        if name.isEmpty { name = fallbackName.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if name.count > 20 { name = String(name.prefix(20)) }
         let phone = pick(["phone", "电话", "mobile", "tel"])
         let email = pick(["email", "邮箱", "mail"])
         let address = pick(["address", "地址", "addr"])
@@ -65,6 +69,18 @@ extension BusinessCard {
                             address: address,
                             company: pick(["company", "公司", "org"]),
                             logo: logoImage)
+    }
+}
+
+extension BusinessCard {
+    /// 是否是"名片"意图：关键词或结构化字段命中。用于决定**不能**回退普通海报。
+    static func looksLikeCard(args: [String: Any]?, prompt: String) -> Bool {
+        if prompt.contains("名片") { return true }
+        let st = args?["structured"] as? [String: Any] ?? [:]
+        for k in ["name", "姓名", "phone", "电话", "email", "邮箱", "address", "地址"] where st[k] != nil {
+            return true
+        }
+        return false
     }
 }
 

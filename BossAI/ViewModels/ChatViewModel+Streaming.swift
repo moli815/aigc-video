@@ -538,16 +538,35 @@ extension ChatViewModel {
                                 // 它是**唯一合成入口**，返回即成品，外层绝不再叠字。
                                 // 名片判定一旦成立，**不允许**再退回 PosterComposer：
                                 // 那样会产出一张"看起来成功、但不是名片"的海报（无 logo/无六字段/竖版）。
-                                if let card = BusinessCard.from(args: args, fallbackName: content.title) {
-                                    if let base = try? await HostedAccount.shared.renderPosterBase(
-                                        title: content.title, subtitle: content.subtitle, bullets: content.bullets),
-                                       let img = try? BusinessCardRenderer.render(card: card, on: base) {
+                                // 名片意图一旦成立，这条分支里**没有** renderPoster 兜底：
+                                // 字段缺失就报字段错误，底图/排版失败就报失败，绝不产出"不是名片的普通海报"。
+                                if BusinessCard.looksLikeCard(args: args, prompt: prompt) {
+                                    guard let card = BusinessCard.from(args: args, fallbackName: content.title) else {
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片信息不完整：至少需要姓名，以及电话/邮箱/地址中的一个。请向用户补齐信息后重试，不要返回普通海报。")])
+                                        continue
+                                    }
+                                    let base: UIImage
+                                    do {
+                                        base = try await HostedAccount.shared.renderPosterBase(
+                                            title: content.title, subtitle: content.subtitle, bullets: content.bullets)
+                                    } catch let e as ImageService.ImageError where e.isInProgress {
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": "【正在生成】名片底图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                        continue
+                                    } catch {
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片底图生成失败：\(error.localizedDescription)。请如实告知用户重试。")])
+                                        continue
+                                    }
+                                    do {
+                                        let img = try BusinessCardRenderer.render(card: card, on: base)
                                         composed = img.pngData()
                                         PerformanceTrace.event("poster_render_stage_count_1")
-                                    } else {
-                                        // 底图或排版失败：明确失败，绝不生成替代品
+                                    } catch {
+                                        // 排版/比例错误原文透出（例如"不是横版"、"地址过长"）
                                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片底图或排版失败，这次没有成品。请如实告知用户重试，不要说已完成。")])
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "名片排版失败：\(error.localizedDescription)。不要返回海报替代品，请如实告知用户。")])
                                         continue
                                     }
                                 } else if let bg = try? await HostedAccount.shared.renderPoster(
@@ -651,7 +670,9 @@ extension ChatViewModel {
                                                             "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
                                         continue
                                     } catch {
-                                        // 视觉复核重试失败：保留首轮结果（不阻断本次回答）
+                                        // 重试失败：保留首轮结果，但**不能**宣称完全满足要求
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": "图片已生成，但未完全满足用户要求（重试失败）。请在回答里说明这一点，不要宣称完全符合。"])
                                     }
                                 }
                             }
