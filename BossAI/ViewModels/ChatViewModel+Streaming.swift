@@ -527,6 +527,8 @@ extension ChatViewModel {
                                 continue
                             }
                             var imageData: Data
+                            // 10-25：底图是否来自缓存（命中则不调 Pro、也不重复计本地生图额度）
+                            var baseImageFromCache = false
                             // ── 10-25 产品方向调整：取消名片/海报专用分支 ──
                             // 所有图片任务统一走「用户输入 + 参考图 → 大模型整理 prompt →
                             // ImageRequestContext → Pro 模型」。不再因为出现"名片"就强制
@@ -588,11 +590,13 @@ extension ChatViewModel {
                                 let lookup = cache.lookup(conversationId: cacheConversationId,
                                                           taskId: cacheTaskId,
                                                           aspectRatio: planAspect)
-                                if lookup == .hit, let cached = cache.entry {
+                                if lookup == .hit,
+                                   let cached = cache.entry(conversationId: cacheConversationId, taskId: cacheTaskId) {
                                     // 命中：直接进排版，绝不调 Pro（不扣费、不用等 20 秒）
                                     baseImage = cached.baseImage
                                     // 画布必须跟着缓存里的底图尺寸走：同一张图，尺寸必然一致
                                     canvas = CanvasSpec(size: cached.baseImage.size, expectedAspect: expectedAspect)
+                                    baseImageFromCache = true
                                     PerformanceTrace.event("text_overlay_cache_hit")
                                 } else {
                                     do {
@@ -629,12 +633,12 @@ extension ChatViewModel {
                                     guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
                                     imageData = png
                                     PerformanceTrace.event("text_overlay_completed")
-                                    // 成品已出，底图不再需要 → 清缓存（避免占内存，也避免误复用旧成品底图）
-                                    cache.markOverlayDoneAndEvict()
+                                    // 成品已出，底图不再需要 → 精确清掉**这一条**（别的并发任务不受影响）
+                                    cache.markOverlayDoneAndEvict(conversationId: cacheConversationId, taskId: cacheTaskId)
                                 } catch {
                                     // 排版失败：明确失败，不退回普通生图伪装成功；
                                     // **缓存保留不动**——下次重试直接复用这张底图重排，这正是缓存存在的理由。
-                                    cache.retainAfterOverlayFailure()
+                                    cache.retainAfterOverlayFailure(conversationId: cacheConversationId, taskId: cacheTaskId)
                                     apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                         "content": ToolPipeline.failureNote(pluginID: toolName, reason: "文字排版失败：\(error.localizedDescription)。底图已生成但未出成品，请如实告知用户。")])
                                     continue
@@ -658,7 +662,12 @@ extension ChatViewModel {
                                                     "content": ToolPipeline.failureNote(pluginID: "generate_image", reason: "图片已生成但保存到本地失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试，不要说已成功。")])
                                 continue
                             }
-                            BudgetTracker.addImageGeneration()   // B01：生图计入生图池
+                            if baseImageFromCache {
+                                // 命中缓存 = 没调 Pro、没产生上游费用：本地生图额度不计（避免"重复扣费"体感）
+                                PerformanceTrace.event("cache_hit_skip_image_quota")
+                            } else {
+                                BudgetTracker.addImageGeneration()   // B01：生图计入生图池
+                            }
                             apiMessages.append([
                                 "role": "tool",
                                 "tool_call_id": call.id,

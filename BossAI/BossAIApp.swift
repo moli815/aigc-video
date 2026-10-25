@@ -10,6 +10,8 @@
 //    浅色模式下毛玻璃质感不成立，属于设计约束而非偏好。
 // 4) 崩溃上报在 init 最早时机安装，确保后续代码崩溃也能被捕获并补报。
 import SwiftUI
+import Combine
+import UIKit
 import SwiftData
 
 @main
@@ -91,8 +93,14 @@ private struct DailySyncTrigger: ViewModifier {
         content
             .task { await SyncService.shared.dailySyncIfNeeded(context: modelContext) }
             .onChange(of: scenePhase) { _, phase in
+                // 10-25 底图缓存生命周期：进后台只清过期的（切个 App 回来还能复用，不白花钱）；
+                // 真正退出时整个缓存随进程消失，这里再显式清一次，避免"以为还在其实已失效"。
+                if phase == .background { BaseImageCache.shared.evictExpired() }
                 guard phase == .active else { return }
                 Task { await SyncService.shared.dailySyncIfNeeded(context: modelContext) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
+                BaseImageCache.shared.evictAll()
             }
     }
 }

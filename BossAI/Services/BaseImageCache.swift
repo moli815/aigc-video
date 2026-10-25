@@ -6,6 +6,16 @@ import UIKit
 // 目的只有一个：**排版失败或用户只改文字时，不要重新调 Pro**。
 // 一次 Pro 底图 0.45 元、20~30 秒；改个电话号码就重画一张，是纯浪费。
 //
+// ── 并发模型（10-25 复核后重写）──────────────────────────────────────────────
+// 旧版是**单条全局 entry**，只有在"全局任何时刻只跑一个图片任务"时才安全。
+// 实测代码路径并不能保证这一点：
+//   · 每个会话有自己的 ChatViewModel / runLoop，切会话时旧 VM 的取消是协作式的
+//     （URLSession 取消返回前，旧任务仍可能正在写缓存）；
+//   · 组图补画（series retry）与新对话共用同一进程；
+//   · 将来接多窗口 / iPad 分屏会更加并发。
+// 所以现在改为 **按 conversationId + taskId 的字典**，并用 NSLock 保护——
+// 任务 A 与任务 B 各存各的键，物理上不可能互相覆盖。
+//
 // 命中规则（四条同时满足才算 hit，任一条不符即 miss）：
 //   1. conversationId 相同（绝不跨会话串图）
 //   2. taskId 相同（不同任务不用彼此底图）
@@ -16,6 +26,14 @@ import UIKit
 //   · 不写磁盘（底图是大对象，落盘要处理清理/配额，收益不抵成本）
 //   · IN_PROGRESS 不写缓存（那时根本没有图）
 //   · 排版失败不删缓存（这正是它存在的理由）
+//
+// 清理时机（全部有对应入口，不靠"反正有 TTL"）：
+//   · 排版成功   → markOverlayDoneAndEvict(会话, 任务)  精确清这一条
+//   · 用户取消   → evict(conversationId:)               清该会话全部
+//   · 会话删除   → evict(conversationId:)               同上
+//   · 任务超时   → lookup/save 内 sweep + evictExpired()
+//   · App 退出   → evictAll()（见 BossAIApp 生命周期）
+//   · 容量上限   → maxEntries 按 createdAt 淘汰最老
 
 struct BaseImageEntry {
     let taskId: String
@@ -39,17 +57,49 @@ enum CacheLookup: Equatable {
     case missExpired               // 超时，淘汰
 }
 
-/// 单会话、单条目的缓存：够用且不会无限增长。
-/// 需要多任务并行时再改成字典（当前一次只跑一条图片任务）。
+/// 多任务并发的底图缓存：键 = conversationId + taskId，内部加锁。
 final class BaseImageCache {
     static let shared = BaseImageCache()
 
     /// 缓存寿命：15 分钟。超时视为淘汰，避免内存长期占用。
     let ttl: TimeInterval = 15 * 60
+    /// 同时在手的底图上限：解码后每张约 5~10MB，4 张已是 40MB 量级，再多是拿内存换小概率命中。
+    let maxEntries = 4
 
-    private(set) var entry: BaseImageEntry?
+    /// 所有读写都在这把锁内完成。缓存也会被主线程之外的生命周期回调（App 退出）碰到，
+    /// 所以锁是**必须**的，不能假设"反正都在主线程"。
+    private let lock = NSLock()
+    /// key = "\(conversationId)|\(taskId)"；两者都是 UUID / 十六进制串，天然不含分隔符
+    private var storage: [String: BaseImageEntry] = [:]
 
     private init() {}
+
+    private func cacheKey(_ conversationId: String, _ taskId: String) -> String {
+        conversationId + "|" + taskId
+    }
+
+    /// 该会话是否已有底图（用于区分"任务不匹配"与"别的会话的图"）
+    private func hasConversationLocked(_ conversationId: String) -> Bool {
+        let prefix = conversationId + "|"
+        return storage.keys.contains { $0.hasPrefix(prefix) }
+    }
+
+    /// 清掉所有过期条目。调用方必须已持锁。
+    private func sweepExpiredLocked(now: Date) {
+        let expired = storage.filter { now.timeIntervalSince($0.value.createdAt) > ttl }.map { $0.key }
+        guard !expired.isEmpty else { return }
+        for key in expired { storage.removeValue(forKey: key) }
+        PerformanceTrace.event("cache_evicted")
+    }
+
+    /// 超出容量时按创建时间淘汰最老的（调用方必须已持锁）
+    private func trimLocked() {
+        let overflow = storage.count - maxEntries
+        guard overflow > 0 else { return }
+        let oldest = storage.sorted { $0.value.createdAt < $1.value.createdAt }.prefix(overflow)
+        for (key, _) in oldest { storage.removeValue(forKey: key) }
+        PerformanceTrace.event("cache_evicted")
+    }
 
     // MARK: - 读写
 
@@ -62,39 +112,46 @@ final class BaseImageCache {
               layout: LayoutSpec,
               canvas: CanvasSpec,
               now: Date = Date()) {
-        entry = BaseImageEntry(taskId: taskId,
-                               conversationId: conversationId,
-                               baseImage: baseImage,
-                               aspectRatio: aspectRatio,
-                               extractedText: extractedText,
-                               items: items,
-                               layout: layout,
-                               canvas: canvas,
-                               createdAt: now,
-                               overlayDone: false)
+        lock.lock()
+        defer { lock.unlock() }
+        sweepExpiredLocked(now: now)
+        storage[cacheKey(conversationId, taskId)] = BaseImageEntry(taskId: taskId,
+                                                                  conversationId: conversationId,
+                                                                  baseImage: baseImage,
+                                                                  aspectRatio: aspectRatio,
+                                                                  extractedText: extractedText,
+                                                                  items: items,
+                                                                  layout: layout,
+                                                                  canvas: canvas,
+                                                                  createdAt: now,
+                                                                  overlayDone: false)
+        trimLocked()
         PerformanceTrace.event("cache_saved")
     }
 
     /// 查命中。命中后调用方**不得**再调 Pro。
     func lookup(conversationId: String, taskId: String, aspectRatio: String, now: Date = Date()) -> CacheLookup {
-        guard let e = entry else {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !storage.isEmpty else {
             PerformanceTrace.event("cache_miss")
             return .missNoEntry
         }
-        if now.timeIntervalSince(e.createdAt) > ttl {
-            entry = nil
+        let key = cacheKey(conversationId, taskId)
+        // 命中的那条先判过期：missExpired 与 missNoEntry 必须是两种不同信号，
+        // 否则"缓存超时"会被误读成"从来没缓存过"，排查时看不出差别。
+        if let entry = storage[key], now.timeIntervalSince(entry.createdAt) > ttl {
+            storage.removeValue(forKey: key)
             PerformanceTrace.event("cache_evicted")
             return .missExpired
         }
-        guard e.conversationId == conversationId else {
+        sweepExpiredLocked(now: now)
+        guard let entry = storage[key] else {
+            let sameConversation = hasConversationLocked(conversationId)
             PerformanceTrace.event("cache_miss")
-            return .missConversation
+            return sameConversation ? .missTaskId : .missConversation
         }
-        guard e.taskId == taskId else {
-            PerformanceTrace.event("cache_miss")
-            return .missTaskId
-        }
-        guard e.aspectRatio == aspectRatio else {
+        guard entry.aspectRatio == aspectRatio else {
             PerformanceTrace.event("cache_invalidated")
             return .missAspect
         }
@@ -102,30 +159,84 @@ final class BaseImageCache {
         return .hit
     }
 
-    /// 排版成功后清理（成品已出，底图不再需要）
-    func markOverlayDoneAndEvict() {
-        entry?.overlayDone = true
-        entry = nil
+    /// 取命中的条目（lookup == .hit 后再取，避免连读两次状态）。
+    /// 过期即视为没有，并顺手淘汰。
+    func entry(conversationId: String, taskId: String, now: Date = Date()) -> BaseImageEntry? {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = cacheKey(conversationId, taskId)
+        guard let entry = storage[key] else { return nil }
+        guard now.timeIntervalSince(entry.createdAt) <= ttl else {
+            storage.removeValue(forKey: key)
+            PerformanceTrace.event("cache_evicted")
+            return nil
+        }
+        return entry
+    }
+
+    /// 当前缓存条目数（诊断/测试用）
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage.count
+    }
+
+    // MARK: - 清理
+
+    /// 排版成功后清理**这一条**（成品已出，底图不再需要）。
+    /// 只清自己的键：另一个并发任务的底图不受影响。
+    func markOverlayDoneAndEvict(conversationId: String, taskId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = cacheKey(conversationId, taskId)
+        guard storage[key] != nil else { return }
+        storage.removeValue(forKey: key)
         PerformanceTrace.event("cache_evicted")
     }
 
     /// 排版失败后**保留**缓存。
     /// 语义化占位：这里故意不删。单独成方法，是为了让「失败不删」成为显式契约，
     /// 而不是依赖某个调用点"忘了写 evict"这种偶然正确。
-    func retainAfterOverlayFailure() {
-        guard entry != nil else { return }
+    func retainAfterOverlayFailure(conversationId: String, taskId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard storage[cacheKey(conversationId, taskId)] != nil else { return }
         PerformanceTrace.event("cache_kept_after_overlay_failure")
     }
 
-    /// 会话切换 / 用户取消 / 任务放弃
-    func evict() {
-        guard entry != nil else { return }
-        entry = nil
+    /// 会话级清理：会话删除 / 用户取消 / 该会话任务已放弃。
+    func evict(conversationId: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let prefix = conversationId + "|"
+        let keys = storage.keys.filter { $0.hasPrefix(prefix) }
+        guard !keys.isEmpty else { return }
+        for key in keys { storage.removeValue(forKey: key) }
         PerformanceTrace.event("cache_evicted")
     }
 
+    /// 全清：App 退出、登出、账号切换。
+    func evictAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !storage.isEmpty else { return }
+        storage.removeAll()
+        PerformanceTrace.event("cache_evicted")
+    }
+
+    /// 只清过期的（App 进后台时调用：留活的，不留死的）
+    func evictExpired(now: Date = Date()) {
+        lock.lock()
+        defer { lock.unlock() }
+        sweepExpiredLocked(now: now)
+    }
+
     /// 供测试重置
-    func resetForTesting() { entry = nil }
+    func resetForTesting() {
+        lock.lock()
+        defer { lock.unlock() }
+        storage.removeAll()
+    }
 }
 
 // MARK: - 任务指纹（10-25 接线配套）

@@ -135,6 +135,11 @@ extension ChatViewModel {
         guard isStreaming else { return }
         streamTask?.cancel()
         streamTask = nil
+        // 10-25：用户主动取消 = 这个任务被放弃，该会话的底图缓存没有留着的意义
+        // （留着只会在下一次任务里白占内存；真要重做会重新生成）
+        if let id = conversation?.id {
+            BaseImageCache.shared.evict(conversationId: id.uuidString)
+        }
     }
 
     /// 点击追问建议直接发送

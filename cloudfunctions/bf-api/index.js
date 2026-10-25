@@ -1809,15 +1809,23 @@ async function handleSyncDedupe(req, res) {
  *   已经没有 payload 可以推上去了。墓碑必须由接口直接写到云端，
  *   否则另一台设备一同步就把这条会话推回来——用户眼里就是"删了又回来了"。
  *
- * 安全：
- *   · 归属校验：查询条件绑 auth.sub，删除前再校验一次 row.accountId，
- *     别人的会话 id 一律 404（不泄露"这条存在但不是你的"）；
- *   · 防呆：只接受 UUID，别的路径内容一律 400，不写进 userData。
+ * 删除范围（明确边界）：
+ *   · 会话行 + 它的**全部消息**：消息是嵌在 payload JSON 里的，墓碑 payload 直接替换掉，
+ *     云端不再保留任何消息正文；
+ *   · 资料库文件索引（kind=file）**不删**：文件属于用户的资料库，删一条对话不该带走资料；
+ *   · 会话没有别的云端关联索引（bf_schedules / bf_custom_experts 与 conversation 无关）。
  *
- * 幂等（必须）：
- *   · 云端没有这条（从未推送成功）→ 补写墓碑 + 200 alreadyDeleted=true；
- *   · 已经是墓碑 → 200 alreadyDeleted=true；
- *   · 重复调用/并发调用都不会报错，也不会产生第二条记录（确定性 _id）。
+ * 安全：
+ *   · 归属校验：查询条件绑 auth.sub，删除前再校验一次 row.accountId；
+ *     别人的会话 id 返回 **403**（不伪装成成功）；
+ *   · 防呆：只接受 UUID，别的路径内容一律 400，不写进 userData；
+ *   · 响应与审计都不含 Token、消息正文或任何用户内容。
+ *
+ * 幂等（三层）：
+ *   1. 云端没有这条（从未推送成功）→ 补写墓碑 + 200 alreadyDeleted=true；
+ *   2. 已经是墓碑 → 200 alreadyDeleted=true；
+ *   3. **requestId 幂等**：同一次请求被网关/客户端重放时，直接回放上次结果（replayed=true），
+ *      不重复写审计、不重复改时间戳（否则每次重放都会把墓碑时间往后推）。
  */
 async function handleSyncDeleteConversation(req, res, rawId) {
   const auth = await requireMember(req, res);
@@ -1828,6 +1836,7 @@ async function handleSyncDeleteConversation(req, res, rawId) {
 
   const kind = "conversation";
   const now = nowMs();
+  const rid = currentRequestId();
   const detId = crypto.createHash("sha256")
     .update(String(auth.sub) + "|" + kind + "|" + refId)
     .digest("hex").slice(0, 40);
@@ -1846,18 +1855,30 @@ async function handleSyncDeleteConversation(req, res, rawId) {
 
   if (!row) {
     // 云端从来没有这条：照样写一条墓碑，堵住"另一台设备旧副本先推上来就复活"的路径
+    let createdNow = true;
     try {
       await db.collection(C.userData).add(Object.assign({ _id: detId }, {
         accountId: auth.sub, kind, refId,
         payload: tombstone, updatedAt: now, deleted: true, syncedAt: now,
+        deletedAt: now, lastDeleteRequestId: rid,
       }));
     } catch (eAdd) {
-      // 并发重复删除：另一个请求刚建了同一条。读回确认是墓碑即可
+      // 并发重复删除：另一个请求刚建了同一条。读回确认它是墓碑即可
+      createdNow = false;
       const back = await db.collection(C.userData).doc(detId).get().catch(() => null);
       const existing = (back && back.data && back.data[0]) || null;
       if (!existing) return sendError(res, 500, "SYNC_FAILED", "删除失败，请稍后重试");
+      if (rid && existing.lastDeleteRequestId === rid) {
+        return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: false,
+                                    replayed: true, serverTime: now });
+      }
     }
-    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: true, serverTime: now });
+    await auditLog(auth, "conversation_delete", {
+      targetKind: kind, targetId: refId, result: createdNow ? "tombstone_created" : "tombstone_concurrent",
+      requestId: rid,
+    });
+    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: createdNow,
+                                replayed: false, serverTime: now });
   }
 
   // 归属校验（上面已按 accountId 收窄查询，这里再兜一次，防止将来改成按 id 直查时漏掉）
@@ -1866,17 +1887,42 @@ async function handleSyncDeleteConversation(req, res, rawId) {
   if (String(row.accountId || "") !== String(auth.sub)) {
     return sendError(res, 403, "FORBIDDEN", "无权删除该会话");
   }
-  if (row.deleted) {
-    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, serverTime: now });
+
+  // requestId 幂等：同一次删除请求的重放，原样回放，不重复改数据/写审计
+  if (rid && row.lastDeleteRequestId === rid) {
+    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: false,
+                                replayed: true, serverTime: now });
   }
+
+  if (row.deleted) {
+    await auditLog(auth, "conversation_delete", {
+      targetKind: kind, targetId: refId, result: "already_tombstoned", requestId: rid,
+    });
+    return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: true, created: false,
+                                replayed: false, serverTime: now });
+  }
+
+  // 审计只需要"删掉了几条消息"这个数量，不需要任何正文
+  let messagesRemoved = 0;
+  try {
+    const payload = JSON.parse(String(row.payload || "{}"));
+    messagesRemoved = Array.isArray(payload && payload.messages) ? payload.messages.length : 0;
+  } catch { /* payload 损坏：按 0 计，不阻断删除 */ }
+
   await db.collection(C.userData).doc(row._id).update({
     payload: tombstone, deleted: true, updatedAt: now, syncedAt: now,
+    deletedAt: now, lastDeleteRequestId: rid,
   });
   logSafe({
-    tag: "sync_conversation_deleted", fn: "bf-api",
+    tag: "sync_conversation_deleted", fn: "bf-api", requestId: rid,
     account: tagId(auth.sub, "acct"), refId: maskText(refId, 40),
+    messagesRemoved,
   });
-  return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: false, serverTime: now });
+  await auditLog(auth, "conversation_delete", {
+    targetKind: kind, targetId: refId, result: "tombstoned", requestId: rid, messagesRemoved,
+  });
+  return sendJson(res, 200, { ok: true, id: refId, alreadyDeleted: false, created: false,
+                              replayed: false, serverTime: now });
 }
 
 /** GET /sync/pull?since=毫秒&limit=条数&cursor=游标：增量拉取（含删除标记），支持分页 */

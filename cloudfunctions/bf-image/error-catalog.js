@@ -26,6 +26,11 @@ const CATALOG = {
     message: "这次的要求里还缺一点必要信息，补充之后我就能继续。",
     actions: ["edit_request"],
   },
+  BAD_ID: {
+    category: "input", retryable: false,
+    message: "这个标识格式不正确，操作已取消。",
+    actions: ["edit_request"],
+  },
   BAD_VALUE: {
     category: "input", retryable: false,
     message: "有一项设置的值不太对，改一下再试。",

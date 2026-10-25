@@ -107,15 +107,16 @@ final class BaseImageTaskKeyTests: XCTestCase {
                                    layout: LayoutSpec(),
                                    canvas: CanvasSpec(size: CGSize(width: 1600, height: 900), expectedAspect: 16.0 / 9.0))
         // 排版失败：保留缓存（retainAfterOverlayFailure 不删）
-        BaseImageCache.shared.retainAfterOverlayFailure()
-        XCTAssertNotNil(BaseImageCache.shared.entry, "排版失败不得清掉底图，否则重试仍要重画")
+        BaseImageCache.shared.retainAfterOverlayFailure(conversationId: "conv-1", taskId: keyA)
+        XCTAssertNotNil(BaseImageCache.shared.entry(conversationId: "conv-1", taskId: keyA),
+                        "排版失败不得清掉底图，否则重试仍要重画")
 
         // 用户改电话后重试：命中，直接排版
         XCTAssertEqual(BaseImageCache.shared.lookup(conversationId: "conv-1", taskId: keyB, aspectRatio: "16:9"), .hit)
 
         // 排版成功：清缓存
-        BaseImageCache.shared.markOverlayDoneAndEvict()
-        XCTAssertNil(BaseImageCache.shared.entry)
+        BaseImageCache.shared.markOverlayDoneAndEvict(conversationId: "conv-1", taskId: keyB)
+        XCTAssertNil(BaseImageCache.shared.entry(conversationId: "conv-1", taskId: keyB))
     }
 
     func testAspectRatioValueParsesPlanString() {
