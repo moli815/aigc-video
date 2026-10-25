@@ -485,7 +485,6 @@ extension ChatViewModel {
                                 aspectRatio: planAspect,
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
-                                isPoster: plan.taskType == .poster,
                                 layerDecomposition: toolName == "image_decompose")
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
@@ -528,7 +527,8 @@ extension ChatViewModel {
                             // ── 10-24 P1：海报/名片走「AI 出无字底图 + 程序画字」──
                             // 图像模型画汉字必错，所以文字密集的物料不进普通生成：
                             // 先用服务端 renderPoster 拿一张无文字底图，再用真实字体把文字画上去。
-                            // 任何一步失败都退回普通生图，不能让海报任务直接失败。
+                            // 失败策略（10-25 修正，与此前注释相反）：名片**不退化成普通生图**，
+                            // 而是明确失败——否则用户会拿到一张没有文字的底图却以为成功。
                             if plan.taskType == .poster,
                                let content = PosterContent.from(args: args, prompt: prompt) {
                                 var composed: Data? = nil

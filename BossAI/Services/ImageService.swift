@@ -15,7 +15,12 @@ import Foundation
 
 /// 图像服务：按识别到的服务商档案调用（火山 Seedream 4.0 / 智谱 CogView）。
 /// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）；云端模式支持组图编排。
-/// 一次图片任务的**不可变参数集**。
+/// 单图类任务（文生图 / 编辑 / 参考图 / 图层拆分）的**不可变参数集**。
+///
+/// 边界（10-25 明确）：**组图（image_series）不走这里**——它有自己的
+/// `runSeriesTask` 子任务编排（逐张 step + 部分成功 + 失败项重试），
+/// 用 `requestedCount` 表达"这次要几张"对它没有意义。名片也不走这里：
+/// 名片是 `/poster` 底图 + `BusinessCardRenderer` 排版，不经过图片模型重试链。
 ///
 /// 为什么需要它：视觉复核失败后的重试曾经只传 prompt/aspectRatio，
 /// 把 taskKind、qualityTier、requestedCount 全丢了 —— 于是"Pro 编辑重试变成普通生图"、
@@ -30,7 +35,6 @@ struct ImageRequestContext {
     let aspectRatio: String
     let renderIntent: String
     let structured: [String: Any]?
-    let isPoster: Bool
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
 
@@ -44,7 +48,6 @@ struct ImageRequestContext {
                             aspectRatio: aspectRatio,
                             renderIntent: renderIntent,
                             structured: structured,
-                            isPoster: isPoster,
                             layerDecomposition: layerDecomposition)
     }
 }
