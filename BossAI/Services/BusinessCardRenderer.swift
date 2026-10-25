@@ -132,6 +132,15 @@ enum BusinessCardRenderer {
             let companyTop = canvas.height - margin - 26 - 44 - 24 - 6
             if logoW > leftW + 0.5 { issues.append("Logo 宽度超出左栏") }
             if companyTop - logoH - 18 < margin { issues.append("Logo 顶部越界") }
+
+            // 与文字块的重叠检测：Logo 矩形 vs 公司/姓名/职位三个文本区（左栏同 x 起点）
+            let logoRect = CGRect(x: margin, y: companyTop - logoH - 18, width: logoW, height: logoH)
+            let companyRect = CGRect(x: margin, y: companyTop, width: leftW, height: 24)
+            let nameRect = CGRect(x: margin, y: companyTop - 44 - 4, width: leftW, height: 44)
+            let titleRect = CGRect(x: margin, y: companyTop - 44 - 4 - 26, width: leftW, height: 26)
+            if logoRect.intersects(companyRect) { issues.append("Logo 与公司重叠") }
+            if logoRect.intersects(nameRect) { issues.append("Logo 与姓名重叠") }
+            if logoRect.intersects(titleRect) { issues.append("Logo 与职位重叠") }
         }
         // 六行联系信息 + 行距必须落在画布 62% 高度内（剩下给底图呼吸）
         let contactH = CGFloat(3) * 30 + CGFloat(2) * 34

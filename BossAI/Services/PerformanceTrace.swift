@@ -39,6 +39,15 @@ enum PerformanceTrace {
         os_signpost(.event, log: log, name: name, signpostID: id)
     }
 
+    private static let metaLogger = Logger(subsystem: "com.bossai.performance", category: "image")
+
+    /// 动态字段事件（10-25）：用于记录**结构化元数据**（模型名、耗时、数量、状态码）。
+    /// 红线：只允许这些技术字段，禁止写入 prompt 正文、Token、Authorization、图片内容。
+    static func event(_ name: StaticString, fields: [String: String]) {
+        let text = fields.keys.sorted().map { "\($0)=\(fields[$0] ?? "")" }.joined(separator: " ")
+        metaLogger.info("\(name, privacy: .public) \(text, privacy: .public)")
+    }
+
     /// P0-68 慢链路上报（fire-and-forget）：只上报"链路名称 + 耗时"，无任何用户数据/内容。
     static func reportSlow(name: String, ms: Double) {
         Task { @MainActor in

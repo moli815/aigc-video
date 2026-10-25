@@ -605,6 +605,19 @@ extension ChatViewModel {
                                 }
                             }
                             PerformanceTrace.event("image_quality_checked")
+                            // 结构化请求日志（不含 prompt 正文/Token/图片内容）；model 以服务端 image_route 为准
+                            PerformanceTrace.event("image_request_done", fields: [
+                                "requestId": String(UUID().uuidString.prefix(8)),
+                                "taskKind": imageTaskKind,
+                                "qualityTier": planTier,
+                                "aspectRatio": planAspect,
+                                "refs": String(refs.count),
+                                "count": String(planCount),
+                                "retryIndex": "0",
+                                "charged": "true",
+                                "finalStatus": quality.isAcceptable ? "ok" : "quality_failed",
+                                "errorCode": "",
+                            ])
                             // 3.3 可观测：首轮参数落日志（不含 prompt 正文），重试时用于对比是否丢参数
                             PerformanceTrace.event("image_task_context")
                             // 重试后仍不可用 → 不落库、不报成功（避免"存了一个坏文件还告诉用户完成了"）
