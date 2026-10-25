@@ -1271,8 +1271,19 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     return { ok: false, code: 422, msg: "当前配置的生图模型不支持参考图编辑", unsupported: true, reason: "edit-unsupported" };
   }
   if (String(taskKind || "") === "series" && !caps.series) {
-    logStage("route_unsupported", { taskKind: "series", model: selectedModel });
-    return { ok: false, code: 422, msg: "当前配置的生图模型不支持组图", unsupported: true, reason: "series-unsupported" };
+    // 10-25：pro_only 下 Pro 模型 series:false → 组图**明确拒绝**。
+    // 不调用模型、不扣费、不降级到 Flash/Lite（混用会让价格与质量口径失控）。
+    logStage("route_unsupported", {
+      taskKind: "series",
+      qualityTier: normalizeTier(qualityTier),
+      model: selectedModel,
+      reason: "series_unsupported",
+    });
+    return {
+      ok: false, code: 422, error: "TASK_UNSUPPORTED",
+      msg: "当前 Pro 模型暂不支持组图，请改为单张生成",
+      unsupported: true, reason: "series_unsupported", model: selectedModel,
+    };
   }
 
   // 文生图：优先用结构化字段拼装（A 方案）；编辑：在用户指令后叠加五段式约束

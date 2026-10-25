@@ -66,6 +66,8 @@ final class ImageService {
         /// 10-25：同一 requestId 还在生成中（HTTP 409 + IN_PROGRESS）。
         /// 这不是失败——重复提交也没用，必须提示"稍后查看"而不是报错。
         case inProgress(String)
+        /// 10-25：任务类型不被当前模型支持（pro_only 下的组图）。422 + TASK_UNSUPPORTED，不重试不降级
+        case taskUnsupported(String)
 
         var errorDescription: String? {
             switch self {
@@ -74,6 +76,7 @@ final class ImageService {
             case .badResponse(let code, let body): return "生图失败（\(code)）：\(body.prefix(300))"
             case .noImage: return "生图接口未返回图片"
             case .inProgress(let msg): return msg.isEmpty ? "正在生成，稍后查看" : msg
+            case .taskUnsupported(let msg): return msg.isEmpty ? "当前模型暂不支持该任务，请换一种方式" : msg
             case .hosted(_, _, let message): return message
             case .envelope(let e): return e.message
             }
@@ -286,6 +289,9 @@ final class ImageService {
             // 否则会被当成普通失败弹窗，用户以为坏了就会重复点、重复扣费。
             if response.statusCode == 409, (obj["error"] as? String) == "IN_PROGRESS" {
                 return .inProgress((obj["message"] as? String) ?? "正在生成，稍后查看")
+            }
+            if response.statusCode == 422, (obj["error"] as? String) == "TASK_UNSUPPORTED" {
+                return .taskUnsupported((obj["message"] as? String) ?? (obj["msg"] as? String) ?? "")
             }
             if let env = APIErrorEnvelope.parse(status: response.statusCode, json: obj) {
                 return .envelope(env)
