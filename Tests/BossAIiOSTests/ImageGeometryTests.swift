@@ -43,9 +43,16 @@ final class ImageGeometryTests: XCTestCase {
         XCTAssertEqual(size?.height, 900)
     }
 
-    /// EXIF 方向 6（顺时针 90°）：像素宽高必须交换，否则比例算反，横图会被当竖图裁
-    func testPixelSizeRespectsExifOrientation() {
+    /// EXIF 方向 6（顺时针 90°）：像素宽高必须交换，否则比例算反，横图会被当竖图裁。
+    /// 编码器不保留方向元数据时跳过（那是测试环境限制，不是逻辑错）。
+    func testPixelSizeRespectsExifOrientation() throws {
         let data = jpeg(image(width: 1600, height: 900), orientation: 6)
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any],
+              let raw = (props[kCGImagePropertyOrientation as String] as? NSNumber)?.intValue,
+              raw >= 5 else {
+            throw XCTSkip("当前环境未把 EXIF 方向写进 JPEG，跳过方向交换断言")
+        }
         let size = ImageGeometry.pixelSize(of: data)
         XCTAssertEqual(size?.width, 900, "旋转 90° 后宽应为原高")
         XCTAssertEqual(size?.height, 1600)

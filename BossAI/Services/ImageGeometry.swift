@@ -35,13 +35,15 @@ enum ImageGeometry {
     /// 读真实像素宽高。失败返回 nil —— 调用方必须据此**放弃**"保证原图比例"的承诺，
     /// 而不是拿一个猜的尺寸继续（那正是裁切的根源）。
     static func pixelSize(of data: Data) -> (width: Int, height: Int)? {
+        // 注意：这里必须桥接成 [String: Any]。`as? [CFString: Any]` 在运行时会失败（CFString 不是 Swift 的 String key），
+        // 结果是"永远读不到像素尺寸"，编辑任务全部退化成兜底路径。
         guard let src = CGImageSourceCreateWithData(data as CFData, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return nil }
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [String: Any] else { return nil }
         // 方向信息：EXIF 里 5~8 表示旋转 90°，此时像素宽高要交换，否则算出来的比例是错的。
         // 注意用 NSNumber 取值（直接 as? UInt32 在部分格式下取不到，会静默回落成 1）。
-        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
-        guard let w0 = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
-              let h0 = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+        let orientation = (props[kCGImagePropertyOrientation as String] as? NSNumber)?.intValue ?? 1
+        guard let w0 = (props[kCGImagePropertyPixelWidth as String] as? NSNumber)?.intValue,
+              let h0 = (props[kCGImagePropertyPixelHeight as String] as? NSNumber)?.intValue,
               w0 > 0, h0 > 0 else { return nil }
         if orientation >= 5, orientation <= 8 {
             return (width: h0, height: w0)
