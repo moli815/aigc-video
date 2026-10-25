@@ -471,6 +471,17 @@ extension ChatViewModel {
                                                     "content": "【需要先确认】" + ask])
                                 continue
                             }
+                            // 3.3：首轮把全部任务参数固化进 context，后续重试只从它派生
+                            let imageCtx = ImageRequestContext(
+                                prompt: plan.prompt,
+                                references: refs,
+                                taskKind: imageTaskKind,
+                                qualityTier: planTier,
+                                requestedCount: planCount > 1 ? planCount : nil,
+                                aspectRatio: planAspect,
+                                renderIntent: renderIntent,
+                                structured: structuredArgs,
+                                isPoster: plan.taskType == .poster)
                             let planPrompt = plan.prompt
                             let planAspect = plan.aspectRatio
                             let planTier = plan.qualityTier
@@ -569,7 +580,9 @@ extension ChatViewModel {
                                    let check = await Self.visionCheck(imageData: imageData, requirement: requirement),
                                    !check.ok {
                                     // 10-25：重试必须沿用规划后的提示词，否则比例/禁画字/保留原图这些约束会丢
-                                    let fixPrompt = planPrompt + "\n\n【重要修正】上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。"
+                                    // 从同一份 context 派生，参数不丢失
+                                    let retryCtx = imageCtx.retrying(note: "上一次生成未满足要求：" + check.note + "。请严格按用户要求重新完成，确保该元素清晰正确地呈现。")
+                                    let fixPrompt = retryCtx.prompt
                                     // 3.3 修复：重试必须沿用首轮的完整任务参数。
                                     // 旧代码只传了 prompt/structured/renderIntent/aspectRatio，
                                     // 丢了 taskKind / qualityTier / requestedCount —— 于是

@@ -15,6 +15,37 @@ import Foundation
 
 /// 图像服务：按识别到的服务商档案调用（火山 Seedream 4.0 / 智谱 CogView）。
 /// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）；云端模式支持组图编排。
+/// 一次图片任务的**不可变参数集**。
+///
+/// 为什么需要它：视觉复核失败后的重试曾经只传 prompt/aspectRatio，
+/// 把 taskKind、qualityTier、requestedCount 全丢了 —— 于是"Pro 编辑重试变成普通生图"、
+/// "组图 4 张重试变 1 张"、"名片重试不走排版"。参数一旦分散在调用点，就一定会漏。
+/// 现在首轮构造一次，所有重试从同一份上下文派生，只允许追加"修正说明"。
+struct ImageRequestContext {
+    let prompt: String
+    let references: [Data]
+    let taskKind: String
+    let qualityTier: String
+    let requestedCount: Int?
+    let aspectRatio: String
+    let renderIntent: String
+    let structured: [String: Any]?
+    let isPoster: Bool
+
+    /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
+    func retrying(note: String) -> ImageRequestContext {
+        ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
+                            references: references,
+                            taskKind: taskKind,
+                            qualityTier: qualityTier,
+                            requestedCount: requestedCount,
+                            aspectRatio: aspectRatio,
+                            renderIntent: renderIntent,
+                            structured: structured,
+                            isPoster: isPoster)
+    }
+}
+
 final class ImageService {
     /// 生图相关错误的统一封装（errorDescription 均为用户可读中文）。
     enum ImageError: LocalizedError, APIErrorCarrying {
