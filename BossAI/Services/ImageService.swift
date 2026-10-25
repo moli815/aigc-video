@@ -38,17 +38,33 @@ struct ImageRequestContext {
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
 
+    // ── 10-25：文字密度分流（由大模型判定，不看 taskType）──
+    /// none / low / high
+    var textDensity: String = "low"
+    /// 文字是否必须精确可读
+    var textAccuracyRequired: Bool = false
+    /// 需要程序绘制的文字（字段名 → 原文），为空表示不叠字
+    var extractedText: [String: String] = [:]
+    /// 是否需要"无字底图 + 程序排版"
+    var needsTextOverlay: Bool = false
+
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
     func retrying(note: String) -> ImageRequestContext {
-        ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
-                            references: references,
-                            taskKind: taskKind,
-                            qualityTier: qualityTier,
-                            requestedCount: requestedCount,
-                            aspectRatio: aspectRatio,
-                            renderIntent: renderIntent,
-                            structured: structured,
-                            layerDecomposition: layerDecomposition)
+        var c = ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
+                                    references: references,
+                                    taskKind: taskKind,
+                                    qualityTier: qualityTier,
+                                    requestedCount: requestedCount,
+                                    aspectRatio: aspectRatio,
+                                    renderIntent: renderIntent,
+                                    structured: structured,
+                                    layerDecomposition: layerDecomposition)
+        // 重试必须继承文字分流结果，不能重新推断
+        c.textDensity = textDensity
+        c.textAccuracyRequired = textAccuracyRequired
+        c.extractedText = extractedText
+        c.needsTextOverlay = needsTextOverlay
+        return c
     }
 }
 

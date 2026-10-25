@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import SwiftData
 
 // ============================================================================
@@ -531,12 +532,75 @@ extension ChatViewModel {
                             // ImageRequestContext → Pro 模型」。不再因为出现"名片"就强制
                             // BusinessCardRenderer / renderPosterBase / 固定字段校验 / 横版限制；
                             // 结构化字段解析失败也不会阻止生成，交给大模型按用户原话处理。
-                            do {
-                                imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
-                            } catch let e as ImageService.ImageError where e.isInProgress {
-                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
-                                continue
+                            // ── 10-25 通用文字分流（不看 taskType，看文字本身）──
+                            // 大模型把要显示的文字放进 structured；这里只做「有没有大量精确文字」的判断，
+                            // 命中则：Pro 出无字底图 → TextOverlayRenderer 程序叠字（只叠一次）。
+                            var overlayItems: [TextItem] = []
+                            if let st = structuredArgs {
+                                for (key, value) in st {
+                                    guard let text = value as? String,
+                                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+                                    let k = key.lowercased()
+                                    let role: TextItem.Role
+                                    if k.contains("电话") || k.contains("phone") || k.contains("tel") || k.contains("邮箱") || k.contains("email") || k.contains("地址") || k.contains("address") {
+                                        role = .contact
+                                    } else if k.contains("姓名") || k.contains("name") || k.contains("公司") || k.contains("company") {
+                                        role = .title
+                                    } else if k.contains("title") || k.contains("职位") || k.contains("标题") {
+                                        role = .subtitle
+                                    } else {
+                                        role = .body
+                                    }
+                                    overlayItems.append(TextItem(role: role, key: key, text: text))
+                                }
+                            }
+                            let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
+                            let wantsOverlay = TextIntentDecider.needsOverlay(userText: prompt,
+                                                                               extractedFieldCount: overlayItems.count,
+                                                                               extractedCharCount: overlayChars)
+                            if wantsOverlay && !overlayItems.isEmpty {
+                                // 1) 只要底图：prompt 明确禁止任何文字
+                                var baseCtx = imageCtx
+                                baseCtx.prompt = imageCtx.prompt + "\n\n【硬约束】画面内不得出现任何文字、字母、数字、标语或水印，只出背景与视觉元素。"
+                                baseCtx.textAccuracyRequired = true
+                                baseCtx.extractedText = Dictionary(uniqueKeysWithValues: overlayItems.map { ($0.key, $0.text) })
+                                baseCtx.needsTextOverlay = true
+                                do {
+                                    let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
+                                    guard let baseImage = UIImage(data: base) else {
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "无字底图解码失败，这次没有成品。请如实告知用户重试。")])
+                                        continue
+                                    }
+                                    // 2) 程序叠字（唯一一次合成）
+                                    do {
+                                        let canvas = CanvasSpec(size: baseImage.size, expectedAspect: nil)
+                                        let composed = try TextOverlayRenderer.render(base: baseImage,
+                                                                                      items: overlayItems,
+                                                                                      layout: LayoutSpec(),
+                                                                                      canvas: canvas)
+                                        guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
+                                        imageData = png
+                                        PerformanceTrace.event("text_overlay_completed")
+                                    } catch {
+                                        // 排版失败：明确失败，不退回普通生图伪装成功
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": ToolPipeline.failureNote(pluginID: toolName, reason: "文字排版失败：\(error.localizedDescription)。底图已生成但未出成品，请如实告知用户。")])
+                                        continue
+                                    }
+                                } catch let e as ImageService.ImageError where e.isInProgress {
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": "【正在生成】底图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                    continue
+                                }
+                            } else {
+                                do {
+                                    imageData = try await Self.generateImageWithRetry(context: imageCtx, service: imageService)
+                                } catch let e as ImageService.ImageError where e.isInProgress {
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                    continue
+                                }
                             }
                             lastGeneratedImage = imageData
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
