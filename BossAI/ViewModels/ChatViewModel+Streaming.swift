@@ -555,9 +555,13 @@ extension ChatViewModel {
                                 }
                             }
                             let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
+                            // 用户明说"要准"也算；与模型给的 textAccuracyRequired 取并集
+                            let accuracyWords = ["准确", "逐字", "一字不差", "印刷", "不能错", "不要错", "必须清楚", "正式"]
+                            let accuracyByText = accuracyWords.contains { prompt.contains($0) }
                             let wantsOverlay = TextIntentDecider.needsOverlay(userText: prompt,
                                                                                extractedFieldCount: overlayItems.count,
-                                                                               extractedCharCount: overlayChars)
+                                                                               extractedCharCount: overlayChars,
+                                                                               accuracyRequired: accuracyByText || imageCtx.textAccuracyRequired)
                             if wantsOverlay && !overlayItems.isEmpty {
                                 // 1) 只要底图：prompt 明确禁止任何文字
                                 // prompt 是 let，必须走派生方法，不能原地赋值
@@ -576,10 +580,19 @@ extension ChatViewModel {
                                     }
                                     // 2) 程序叠字（唯一一次合成）
                                     do {
-                                        let canvas = CanvasSpec(size: baseImage.size, expectedAspect: nil)
+                                        // 比例来自规划结果（"16:9" → 16/9），不再固定 nil
+                                        let aspectParts = planAspect.split(separator: ":")
+                                        let expectedAspect: CGFloat? = {
+                                            guard aspectParts.count == 2,
+                                                  let w = Double(aspectParts[0]), let h = Double(aspectParts[1]), h > 0 else { return nil }
+                                            return CGFloat(w / h)
+                                        }()
+                                        let canvas = CanvasSpec(size: baseImage.size, expectedAspect: expectedAspect)
+                                        // 布局意图来自大模型 structured.layout，缺字段用安全默认
+                                        let layoutSpec = LayoutSpec.from(structuredArgs?["layout"] as? [String: Any])
                                         let composed = try TextOverlayRenderer.render(base: baseImage,
                                                                                       items: overlayItems,
-                                                                                      layout: LayoutSpec(),
+                                                                                      layout: layoutSpec,
                                                                                       canvas: canvas)
                                         guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
                                         imageData = png

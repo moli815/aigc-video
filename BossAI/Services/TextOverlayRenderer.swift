@@ -37,6 +37,28 @@ struct LayoutSpec {
     var gutterRatio: CGFloat = 0.04
 }
 
+extension LayoutSpec {
+    /// 从大模型给出的 layout 意图构造；缺什么用安全默认值，但**不丢弃**已给出的字段
+    static func from(_ raw: [String: Any]?) -> LayoutSpec {
+        var spec = LayoutSpec()
+        guard let raw else { return spec }
+        if let cols = raw["columns"] as? Int, cols == 1 || cols == 2 {
+            spec.columns = (cols == 1) ? .one : .two
+        }
+        if let margin = raw["marginRatio"] as? Double, margin > 0.02, margin < 0.2 {
+            spec.marginRatio = CGFloat(margin)
+        }
+        if let gutter = raw["gutterRatio"] as? Double, gutter > 0.01, gutter < 0.15 {
+            spec.gutterRatio = CGFloat(gutter)
+        }
+        if let roles = raw["primaryRoles"] as? [String], !roles.isEmpty {
+            let mapped = roles.compactMap { TextItem.Role(rawValue: $0) }
+            if !mapped.isEmpty { spec.primaryRoles = mapped }
+        }
+        return spec
+    }
+}
+
 struct CanvasSpec {
     var size: CGSize
     /// 期望宽高比（如 16/9）；nil 表示不校验
@@ -71,12 +93,17 @@ enum TextIntentDecider {
     ///   - userText: 用户原话
     ///   - extractedFieldCount: 模型提取到的字段数
     ///   - extractedCharCount: 提取到的总字数
-    static func needsOverlay(userText: String, extractedFieldCount: Int, extractedCharCount: Int) -> Bool {
+    static func needsOverlay(userText: String,
+                             extractedFieldCount: Int,
+                             extractedCharCount: Int,
+                             accuracyRequired: Bool = false) -> Bool {
         let t = userText.lowercased()
         // 明确不要文字 → 不叠
         if t.contains("不要文字") || t.contains("无文字") || t.contains("不要加字") { return false }
         // 明确"可以艺术化/随便画" → 交给模型
         if t.contains("艺术字") || t.contains("文字可以") || t.contains("随意") { return false }
+        // 大模型判定"必须精确" → 直接程序排版（优先级最高，不受字数影响）
+        if accuracyRequired && extractedCharCount > 0 { return true }
         // 字段多且字数大 → 必须程序排版
         if extractedFieldCount >= 3 && extractedCharCount >= 20 { return true }
         // 关键词兜底（信息类物料，本身就要求文字准确）

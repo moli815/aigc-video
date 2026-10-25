@@ -40,30 +40,50 @@ struct ImageRequestContext {
 
     // ── 10-25：文字密度分流（由大模型判定，不看 taskType）──
     /// none / low / high
-    var textDensity: String = "low"
+    let textDensity: String
     /// 文字是否必须精确可读
-    var textAccuracyRequired: Bool = false
+    let textAccuracyRequired: Bool
     /// 需要程序绘制的文字（字段名 → 原文），为空表示不叠字
-    var extractedText: [String: String] = [:]
+    let extractedText: [String: String]
     /// 是否需要"无字底图 + 程序排版"
-    var needsTextOverlay: Bool = false
+    let needsTextOverlay: Bool
+
+    /// 显式 init：4 个文字字段带默认值，既有调用点零改动；一旦构造即不可变。
+    init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
+         requestedCount: Int?, aspectRatio: String, renderIntent: String,
+         structured: [String: Any]?, layerDecomposition: Bool,
+         textDensity: String = "low", textAccuracyRequired: Bool = false,
+         extractedText: [String: String] = [:], needsTextOverlay: Bool = false) {
+        self.prompt = prompt
+        self.references = references
+        self.taskKind = taskKind
+        self.qualityTier = qualityTier
+        self.requestedCount = requestedCount
+        self.aspectRatio = aspectRatio
+        self.renderIntent = renderIntent
+        self.structured = structured
+        self.layerDecomposition = layerDecomposition
+        self.textDensity = textDensity
+        self.textAccuracyRequired = textAccuracyRequired
+        self.extractedText = extractedText
+        self.needsTextOverlay = needsTextOverlay
+    }
 
     /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
     func appendingPrompt(_ suffix: String) -> ImageRequestContext {
-        var c = ImageRequestContext(prompt: prompt + suffix,
-                                    references: references,
-                                    taskKind: taskKind,
-                                    qualityTier: qualityTier,
-                                    requestedCount: requestedCount,
-                                    aspectRatio: aspectRatio,
-                                    renderIntent: renderIntent,
-                                    structured: structured,
-                                    layerDecomposition: layerDecomposition)
-        c.textDensity = textDensity
-        c.textAccuracyRequired = textAccuracyRequired
-        c.extractedText = extractedText
-        c.needsTextOverlay = needsTextOverlay
-        return c
+        ImageRequestContext(prompt: prompt + suffix,
+                            references: references,
+                            taskKind: taskKind,
+                            qualityTier: qualityTier,
+                            requestedCount: requestedCount,
+                            aspectRatio: aspectRatio,
+                            renderIntent: renderIntent,
+                            structured: structured,
+                            layerDecomposition: layerDecomposition,
+                            textDensity: textDensity,
+                            textAccuracyRequired: textAccuracyRequired,
+                            extractedText: extractedText,
+                            needsTextOverlay: needsTextOverlay)
     }
 
     /// 派生：写入文字分流结果（保持不可变语义，返回新实例）
@@ -71,31 +91,37 @@ struct ImageRequestContext {
                       accuracyRequired: Bool,
                       extracted: [String: String],
                       needsOverlay: Bool) -> ImageRequestContext {
-        var c = appendingPrompt("")
-        c.textDensity = density
-        c.textAccuracyRequired = accuracyRequired
-        c.extractedText = extracted
-        c.needsTextOverlay = needsOverlay
-        return c
+        ImageRequestContext(prompt: prompt,
+                            references: references,
+                            taskKind: taskKind,
+                            qualityTier: qualityTier,
+                            requestedCount: requestedCount,
+                            aspectRatio: aspectRatio,
+                            renderIntent: renderIntent,
+                            structured: structured,
+                            layerDecomposition: layerDecomposition,
+                            textDensity: density,
+                            textAccuracyRequired: accuracyRequired,
+                            extractedText: extracted,
+                            needsTextOverlay: needsOverlay)
     }
 
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
     func retrying(note: String) -> ImageRequestContext {
-        var c = ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
-                                    references: references,
-                                    taskKind: taskKind,
-                                    qualityTier: qualityTier,
-                                    requestedCount: requestedCount,
-                                    aspectRatio: aspectRatio,
-                                    renderIntent: renderIntent,
-                                    structured: structured,
-                                    layerDecomposition: layerDecomposition)
-        // 重试必须继承文字分流结果，不能重新推断
-        c.textDensity = textDensity
-        c.textAccuracyRequired = textAccuracyRequired
-        c.extractedText = extractedText
-        c.needsTextOverlay = needsTextOverlay
-        return c
+        // 重试必须继承文字分流结果，不能重新推断；一次性构造，不逐字段赋值
+        return ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
+                                   references: references,
+                                   taskKind: taskKind,
+                                   qualityTier: qualityTier,
+                                   requestedCount: requestedCount,
+                                   aspectRatio: aspectRatio,
+                                   renderIntent: renderIntent,
+                                   structured: structured,
+                                   layerDecomposition: layerDecomposition,
+                                   textDensity: textDensity,
+                                   textAccuracyRequired: textAccuracyRequired,
+                                   extractedText: extractedText,
+                                   needsTextOverlay: needsTextOverlay)
     }
 }
 
