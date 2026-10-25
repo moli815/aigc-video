@@ -405,7 +405,9 @@ extension ChatViewModel {
                         } else {
                         // P0-50 ChatGPT 式生图加载：执行期间在消息流里显示占位动画行
                         pendingImage = String(prompt.prefix(24))
-                        defer { pendingImage = nil }
+                        // 等待阶段文案按任务类型分流：名片要走"生成无字底图 → 排版文字"
+                        pendingImageKind = (plan.taskType == .poster) ? "card" : "image"
+                        defer { pendingImage = nil; pendingImageKind = "image" }
                         do {
                             // P0-65 参考图收集（0-2 张，顺序 = [底图, 叠加元素]）：
                             // · 仅 edit_last_image → 编辑 AI 上次生成的图
@@ -587,10 +589,19 @@ extension ChatViewModel {
                                 // 3.3 补：质量失败重试同样不能丢 layerDecomposition（图层拆分）与 requestedCount（组图张数），
                                 // 否则"组图 4 张质量不过 → 重试变 1 张"、"拆分重试退化成普通生图"。
                                 let qualityRetryCtx = imageCtx.retrying(note: "上一次结果未通过画质检查（\(quality.summary)），请重做一次，保持同样的构图与要求。")
-                                if let retried = try? await Self.generateImageWithRetry(context: qualityRetryCtx, service: imageService) {
+                                do {
+                                    let retried = try await Self.generateImageWithRetry(context: qualityRetryCtx, service: imageService)
                                     imageData = retried
                                     quality = ImageQualityChecker.check(retried, expectedAspect: planAspect)
                                     BudgetTracker.addImageGeneration()
+                                } catch let e as ImageService.ImageError where e.isInProgress {
+                                    // 重试阶段撞上"还在生成"：不能把首轮不合格的图当成功，
+                                    // 也不能再提交。直接结束本轮，让用户稍后查看。
+                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                        "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                    continue
+                                } catch {
+                                    // 其它错误保持既有行为：保留首轮结果，不额外弹错
                                 }
                             }
                             PerformanceTrace.event("image_quality_checked")
@@ -618,9 +629,16 @@ extension ChatViewModel {
                                     // 旧代码只传了 prompt/structured/renderIntent/aspectRatio，
                                     // 丢了 taskKind / qualityTier / requestedCount —— 于是
                                     // "Pro 编辑重试变成普通生图"、"组图数量丢失"、"名片重试不走排版"。
-                                    if let retryData = try? await Self.generateImageWithRetry(context: retryCtx, service: imageService) {
+                                    do {
+                                        let retryData = try await Self.generateImageWithRetry(context: retryCtx, service: imageService)
                                         imageData = retryData
                                         BudgetTracker.addImageGeneration()   // 重试按真实成本计费
+                                    } catch let e as ImageService.ImageError where e.isInProgress {
+                                        apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                            "content": "【正在生成】这张图还在生成中，请告知用户稍后查看，不要重复提交。"])
+                                        continue
+                                    } catch {
+                                        // 视觉复核重试失败：保留首轮结果（不阻断本次回答）
                                     }
                                 }
                             }

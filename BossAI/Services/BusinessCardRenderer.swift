@@ -123,6 +123,16 @@ enum BusinessCardRenderer {
         if lines(card.phone, size: 20, maxWidth: rightW) > 1 { issues.append("电话") }
         if lines(card.email, size: 18, maxWidth: rightW) > 1 { issues.append("邮箱") }
         if lines(card.address, size: 18, maxWidth: rightW) > 3 { issues.append("地址") }
+        // Logo 参与版面检查：越界/顶部出界/挤压左栏都算问题，不静默忽略
+        if let logo = card.logo, logo.size.height > 0 {
+            let logoMax = min(leftW * 0.55, canvas.height * 0.22)
+            let ratio = logo.size.width / logo.size.height
+            let logoW = min(logoMax, logoMax * ratio)
+            let logoH = logoW / max(ratio, 0.01)
+            let companyTop = canvas.height - margin - 26 - 44 - 24 - 6
+            if logoW > leftW + 0.5 { issues.append("Logo 宽度超出左栏") }
+            if companyTop - logoH - 18 < margin { issues.append("Logo 顶部越界") }
+        }
         // 六行联系信息 + 行距必须落在画布 62% 高度内（剩下给底图呼吸）
         let contactH = CGFloat(3) * 30 + CGFloat(2) * 34
         if contactH > canvas.height * 0.62 { issues.append("联系方式整体过高") }
