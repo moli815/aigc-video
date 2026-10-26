@@ -70,8 +70,6 @@ extension ChatViewModel {
         /// 10-25 image-turn 隔离：本轮一旦开始图片工具，模型之后输出的任何正文
         /// **既不进界面、也不落库**（不是"最后覆盖"，是从数据流上掐断）。
         var imageTurnIsolated = false
-        /// 10-25：固定比例兜底时，"补边画布 → 内容区"的归一化矩形；生成后据此裁回原构图
-        var paddingRect: CGRect?
         /// 10-23 P0：本轮是否已有产物真正落库（图片/文档）。
         /// 线程安全旗标，供超时任务与 catch 分支读取——有产物时后续说明失败只能降级为"部分成功"。
         let artifactFlag = FirstTokenFlag()
@@ -424,53 +422,70 @@ extension ChatViewModel {
                         imageWait = ImageWaitState(kind: waitKindForTool(call.name, plan: nil))
                         defer { imageWait = nil }
                         do {
-                            // P0-65 参考图收集（0-2 张，顺序 = [底图, 叠加元素]）：
-                            // · 仅 edit_last_image → 编辑 AI 上次生成的图
-                            // · 仅 use_attached_image → 编辑用户上传的图
-                            // · 两者都为 true → 双图融合（如"把 logo 加到上次的海报上"）
-                            // 10-19 4 工具分派：refs 由工具契约决定（不再靠两个 boolean 猜）
+                            // 图片来源由单一 resolver 落地，附件序号与发给多模态模型的顺序一致。
                             var refs: [Data] = []
                             let toolName = call.name
-                            if toolName == "image_edit" {
-                                switch (args?["source"] as? String) ?? "last" {
-                                case "attached":
-                                    if let up = attachedImageData(in: conv) { refs.append(up) }
-                                case "both":
-                                    if let last = lastGeneratedImage { refs.append(last) }
-                                    if let up = attachedImageData(in: conv) { refs.append(up) }
-                                default:
-                                    if let last = lastGeneratedImage { refs.append(last) }
-                                }
-                                if refs.isEmpty {
-                                    apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                        "content": ToolPipeline.failureNote(pluginID: "image_edit", reason: "没有找到要编辑的图片（source=\((args?["source"] as? String) ?? "last")）。请让用户确认要改哪张图，或改用 image_generate 生成新图。")])
-                                    continue
-                                }
-} else if toolName == "image_series" {
+                            let attachedCandidates = imageReferenceCandidates(currentAttachments: attachments, in: conv)
+                            let sourceIndex = (args?["source_index"] as? Int)
+                                ?? (args?["source_index"] as? NSNumber)?.intValue
+                                ?? 1
+                            let requestedSource = args?["source"] as? String
+                            let sourceOverride = ImageReferenceResolver.sourceOverride(
+                                requested: requestedSource,
+                                userText: userText,
+                                hasAttachedImage: !attachedCandidates.isEmpty,
+                                hasLastGeneratedImage: lastGeneratedImage != nil)
+                            let resolvedToolSource = sourceOverride ?? requestedSource
+                            do {
+                                if toolName == "image_edit" {
+                                    let fallback = attachedCandidates.isEmpty ? "last" :
+                                        (ImageReferenceResolver.userRequestsImageSource(userText) ? "attached" : "last")
+                                    refs = try ImageReferenceResolver.resolve(
+                                        source: resolvedToolSource ?? fallback,
+                                        attachmentIndex: sourceIndex,
+                                        attachedImages: attachedCandidates,
+                                        lastGeneratedImage: lastGeneratedImage)
+                                } else if toolName == "image_generate" {
+                                    let fallback = (!attachedCandidates.isEmpty && ImageReferenceResolver.userRequestsImageSource(userText))
+                                        ? "attached" : "none"
+                                    refs = try ImageReferenceResolver.resolve(
+                                        source: resolvedToolSource ?? fallback,
+                                        attachmentIndex: sourceIndex,
+                                        attachedImages: attachedCandidates,
+                                        lastGeneratedImage: lastGeneratedImage)
+                                } else if toolName == "image_decompose" {
+                                    let fallback = attachedCandidates.isEmpty ? "last" : "attached"
+                                    refs = try ImageReferenceResolver.resolve(
+                                        source: resolvedToolSource ?? fallback,
+                                        attachmentIndex: sourceIndex,
+                                        attachedImages: attachedCandidates,
+                                        lastGeneratedImage: lastGeneratedImage)
+                                } else if toolName == "image_series" {
                                 // 10-24：不再在客户端硬拦截。服务端已有组图编排器，
                                 // 会拆成 N 个单图子任务并各自记账，支持部分成功。
                                 // 这里让流程继续走到下面的 generate（带 task_kind=series）。
-                            } else if toolName == "image_generate" {
-                                // 纯文生图：契约上就不带参考图
-                            } else {
-                                // 旧 generate_image：沿用旧 boolean（兼容旧模型残留调用）
-                                if editLast, let last = lastGeneratedImage { refs.append(last) }
-                                if useAttached, let up = attachedImageData(in: conv) { refs.append(up) }
+                                } else {
+                                    // 旧 generate_image：映射旧 boolean 到同一份来源契约。
+                                    let source = (editLast && useAttached) ? "both" :
+                                        (editLast ? "last" : (useAttached ? "attached" : "none"))
+                                    refs = try ImageReferenceResolver.resolve(
+                                        source: resolvedToolSource ?? source,
+                                        attachmentIndex: sourceIndex,
+                                        attachedImages: attachedCandidates,
+                                        lastGeneratedImage: lastGeneratedImage)
+                                }
+                            } catch {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                    "content": ToolPipeline.failureNote(
+                                                        pluginID: toolName,
+                                                        reason: error.localizedDescription)])
+                                continue
                             }
                             // 10-21 结构化字段（有则优先，服务端按模板拼装）
                             let structuredArgs = args?["structured"] as? [String: Any]
                             // 10-23 出图意图：flat_artwork 直接出可印刷平面稿，避免名片/海报被画成"白底展示稿"
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
-                            // 10-24 任务类型显式传给服务端（服务端也做兜底推断，但显式更准）
-                            let imageTaskKind: String = {
-                                switch toolName {
-                                case "image_edit": return "edit"
-                                case "image_decompose": return "decompose"
-                                case "image_series": return "series"
-                                default: return "generate"
-                                }
-                            }()
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
                             let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
                             // ── 10-24 P1：图片任务规划（只作用于图片分支，文本聊天完全不经过这里）──
@@ -487,7 +502,18 @@ extension ChatViewModel {
                                 aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
                                 qualityTier: qualityTier.isEmpty ? nil : qualityTier,
                                 sourceSize: sourceSize,
-                                userSaid: userText)
+                                userSaid: userText,
+                                preferReferenceRedesign: toolName == "image_generate" && !refs.isEmpty)
+                            // 服务端区分“参考图创作”与“局部编辑”：两者都传图，只有后者才要求像素级保留。
+                            let imageTaskKind: String = {
+                                switch toolName {
+                                case "image_decompose": return "decompose"
+                                case "image_series": return "series"
+                                default:
+                                    guard !refs.isEmpty else { return "generate" }
+                                    return ImageService.taskKind(for: plan.taskType)
+                                }
+                            }()
                             // 说"改图"却一张图都没有：先问一句，别硬生成一张全新图
                             if plan.needsClarification, let ask = plan.clarification {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
@@ -509,34 +535,15 @@ extension ChatViewModel {
                                                     "content": "【内部状态】读不到原图像素尺寸，无法保证画布完整，已拒绝生成。不要向用户解释原因。"])
                                 continue
                             }
-                            // ── 10-25 固定比例兜底（三.4）：仅当原图比例无法用显式尺寸表达时才补边 ──
-                            // 常规路径直接要 WxH（比例天然一致，零裁切、零补边）；
-                            // 读不到可用尺寸时，退化为"最接近的支持比例 + 等比留白"，生成后再裁回原构图。
-                            var requestRefs = refs
-                            var paddedRatio: String? = nil
-                            paddingRect = nil
-                            if plan.preserveSourceAspect, plan.targetSize == nil, !plan.allowCrop,
-                               let first = refs.first, let source = sourceSize,
-                               let ui = UIImage(data: first) {
-                                let ratio = ImageGeometry.nearestSupportedRatio(Double(source.width) / Double(source.height))
-                                if let padded = ImageGeometry.composePaddedReference(ui, ratio: ratio) {
-                                    requestRefs = [padded.data] + Array(refs.dropFirst())
-                                    paddedRatio = ratio
-                                    paddingRect = padded.contentRect
-                                    PerformanceTrace.event("image_padding_applied", fields: [
-                                        "ratio": ratio,
-                                        "src": "\(source.width)x\(source.height)",
-                                    ])
-                                }
-                            }
-                            // 3.3：首轮把全部任务参数固化进 context，后续重试只从它派生
+                            // 首轮把全部任务参数固化进 context，后续重试只从它派生。
+                            // 原图始终按自身比例 + 原始附件发送；不补边、不回裁、不静默换默认画布。
                             let imageCtx = ImageRequestContext(
                                 prompt: plan.prompt,
-                                references: requestRefs,
+                                references: refs,
                                 taskKind: imageTaskKind,
                                 qualityTier: planTier,
                                 requestedCount: planCount > 1 ? planCount : nil,
-                                aspectRatio: paddedRatio ?? planAspect,
+                                aspectRatio: planAspect,
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
@@ -589,44 +596,24 @@ extension ChatViewModel {
                             // ── 10-25 通用文字分流（不看 taskType，看文字本身）──
                             // 大模型把要显示的文字放进 structured；这里只做「有没有大量精确文字」的判断，
                             // 命中则：Pro 出无字底图 → TextOverlayRenderer 程序叠字（只叠一次）。
-                            var overlayItems: [TextItem] = []
-                            if let st = structuredArgs {
-                                for (key, value) in st {
-                                    guard let text = value as? String,
-                                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
-                                    let k = key.lowercased()
-                                    let role: TextItem.Role
-                                    if k.contains("电话") || k.contains("phone") || k.contains("tel") || k.contains("邮箱") || k.contains("email") || k.contains("地址") || k.contains("address") {
-                                        role = .contact
-                                    } else if k.contains("姓名") || k.contains("name") || k.contains("公司") || k.contains("company") {
-                                        role = .title
-                                    } else if k.contains("title") || k.contains("职位") || k.contains("标题") {
-                                        role = .subtitle
-                                    } else {
-                                        role = .body
-                                    }
-                                    overlayItems.append(TextItem(role: role, key: key, text: text))
-                                }
-                            }
+                            // 仅 structured.text 是可见文案，且必须按语义分项；视觉 prompt 不参与绘制。
+                            let overlayItems = TextItem.parse(structuredArgs?["text"])
                             let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
-                            // 用户明说"要准"也算；与模型给的 textAccuracyRequired 取并集
+                            // 用户明确要求精确可读时走后处理；视觉 prompt/布局状态不混进请求上下文。
                             let accuracyWords = ["准确", "逐字", "一字不差", "印刷", "不能错", "不要错", "必须清楚", "正式"]
-                            let accuracyByText = accuracyWords.contains { prompt.contains($0) }
-                            let wantsOverlay = TextIntentDecider.needsOverlay(userText: prompt,
+                            let accuracyByText = accuracyWords.contains { prompt.contains($0) || userText.contains($0) }
+                            let wantsOverlay = TextIntentDecider.needsOverlay(userText: userText + "\n" + prompt,
                                                                                extractedFieldCount: overlayItems.count,
                                                                                extractedCharCount: overlayChars,
-                                                                               accuracyRequired: accuracyByText || imageCtx.textAccuracyRequired)
+                                                                               accuracyRequired: accuracyByText)
                             if wantsOverlay && !overlayItems.isEmpty {
                                 // 文字密集任务：底图 → 排版，两个真实阶段
                                 imageWait = ImageWaitState(kind: .textOverlay)
                                 // 1) 只要底图：prompt 明确禁止任何文字
                                 // prompt 是 let，必须走派生方法，不能原地赋值
                                 let baseCtx = imageCtx
+                                    .forTextlessBackground(items: overlayItems)
                                     .appendingPrompt("\n\n【硬约束】画面内不得出现任何文字、字母、数字、标语或水印，只出背景与视觉元素。")
-                                    .withTextPlan(density: "high",
-                                                  accuracyRequired: true,
-                                                  extracted: Dictionary(uniqueKeysWithValues: overlayItems.map { ($0.key, $0.text) }),
-                                                  needsOverlay: true)
                                 // ── 10-25 底图缓存接线（BaseImageCache）──
                                 // 目标：排版失败重试、或用户只改文字时，**不再重画底图**（一次 Pro 约 0.45 元 / 20~30 秒）。
                                 // 命中规则由 BaseImageCache 负责：会话 + 任务指纹 + 比例 + 未过期，四条全中才算 hit。
@@ -668,11 +655,7 @@ extension ChatViewModel {
                                         cache.save(taskId: cacheTaskId,
                                                    conversationId: cacheConversationId,
                                                    baseImage: decoded,
-                                                   aspectRatio: planAspect,
-                                                   extractedText: baseCtx.extractedText,
-                                                   items: renderItems,
-                                                   layout: layoutSpec,
-                                                   canvas: canvas)
+                                                   aspectRatio: planAspect)
                                     } catch let e as ImageService.ImageError where e.isInProgress {
                                         // 任务还在上游跑：给一句固定状态，不要空气泡
                                         imageTurnNote = ImageTaskStatus.waitText(.textOverlay)
@@ -714,12 +697,6 @@ extension ChatViewModel {
                                     continue
                                 }
                             }
-                            // 10-25：补边路径生成完先裁回原构图（把留白去掉），再做比例校验
-                            if let rect = paddingRect, let raw = UIImage(data: imageData),
-                               let restored = ImageGeometry.cropBack(raw, contentRect: rect),
-                               let restoredData = restored.jpegData(compressionQuality: 0.95) {
-                                imageData = restoredData
-                            }
                             // ── 10-25 几何校验：承诺保比例却没保住 → 不展示、不落库、明确失败 ──
                             // 这是"不许裁切"的最后一道闸：参数层面已经锁了 targetSize，
                             // 万一上游还是把画面重构成别的比例，就在这里拦住。
@@ -737,7 +714,7 @@ extension ChatViewModel {
                                     "sourceAspect": String(format: "%.3f", expected),
                                     "requestedSize": plan.targetSize ?? "",
                                     "allowCrop": "0",
-                                    "paddingApplied": paddingRect == nil ? "0" : "1",
+                                    "canvasPolicy": plan.targetSize == nil ? "provider_ratio" : "source_pixels",
                                     "cropDetected": broken ? "1" : "0",
                                     "model": planTier,
                                     "taskKind": imageTaskKind,
@@ -760,7 +737,7 @@ extension ChatViewModel {
                                     "sourceAspect": String(format: "%.3f", Double(srcW) / Double(srcH)),
                                     "requestedSize": plan.targetSize ?? "",
                                     "allowCrop": plan.allowCrop ? "1" : "0",
-                                    "paddingApplied": paddingRect == nil ? "0" : "1",
+                                    "canvasPolicy": plan.targetSize == nil ? "provider_ratio" : "source_pixels",
                                     "cropDetected": "0",
                                 ])
                             }

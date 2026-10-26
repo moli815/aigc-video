@@ -4,7 +4,7 @@
  * 为什么独立：实测 bf-api 的 /api/image 路径在网关层有特殊策略——同代码在
  * /api/test-upstream 稳定 39s，在 /api/image 超时 >320s；新函数新路由 /img/image 正常（25-42s）。
  *
- * 能力：文生图 / 图生图编辑（服务端强制五段式约束）、鉴权、限流、按次记账。
+ * 能力：文生图 / 参考图重设计 / 局部编辑、鉴权、限流、按次记账。
  * 依赖：@cloudbase/node-sdk（与 bf-api 共用同一套 DB 与 tokenSecret）。
  */
 const http = require("http");
@@ -29,8 +29,9 @@ function getDb() {
 
 const {
   ALLOWED_FETCH_SUFFIXES, isPrivateHost, safeFetchURL,
-  clampExplicitSize, probeImageSize, decodedSizeAllowed, inferQualityTier,
+  clampExplicitSize, probeImageSize, decodedSizeAllowed,
 } = require("./media-guards");
+const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
 const { AsyncLocalStorage } = require("async_hooks");
 const reqStore = new AsyncLocalStorage();
@@ -55,24 +56,19 @@ const RT = {
   IMAGE_MODEL_SERIES: process.env.IMAGE_MODEL_SERIES || "",
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "1",
-  IMAGE_PROMPT_ENHANCE: process.env.IMAGE_PROMPT_ENHANCE || "1",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "1.5K",
   IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "0.3",   // Flash ≤1.5K（官方成本 0.12）
   IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "0.45", // Pro ≤1.5K（官方成本 0.30）
   IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "0.9",        // Pro >1.5K（官方成本 0.60）
   RATE_IMAGE_PER_HOUR: process.env.RATE_IMAGE_PER_HOUR || "120",
   IMAGE_API_KEY: process.env.IMAGE_API_KEY || "",
-  CHAT_API_KEY: process.env.CHAT_API_KEY || "",
-  CHAT_BASE_URL: process.env.CHAT_BASE_URL || "",
-  CHAT_MODEL_UTILITY_LITE: process.env.CHAT_MODEL_UTILITY_LITE || "",
 };
 // 注意：IMAGE_API_KEY 是主链路密钥，只认环境变量，**不参与** DB 覆盖——
 // 避免 bf_config 里遗留的旧值把线上出图整体打挂。其余为非敏感调参项，可从 DB 覆盖。
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
-  "IMAGE_FAST_MODE", "IMAGE_PROMPT_ENHANCE", "IMAGE_SIZE",
+  "IMAGE_FAST_MODE", "IMAGE_SIZE",
   "IMAGE_PRICE_FAST", "IMAGE_PRICE_SMALL", "IMAGE_PRICE_2K", "RATE_IMAGE_PER_HOUR",
-  "CHAT_API_KEY", "CHAT_BASE_URL", "CHAT_MODEL_UTILITY_LITE",
 ];
 /**
  * 10-24 模型能力表。**未知 model ID 一律走保守默认**（不传 fast、不支持组图/图层），
@@ -116,9 +112,7 @@ function modelsOf() {
 /**
  * 质量档位归一化（10-25 契约修复）。
  *
- * 事故背景：客户端规划器历史上发的是 "pro"，而这里只认 "high"/"fast"。
- * "pro" 既不是 auto 也不是 high → 一路走到 inferQualityTier 兜底 → **高质量任务被悄悄降级成 Flash**，
- * 账面上看不出来，用户只知道"海报变糊了"。档位是契约，必须先归一化再比较。
+ * 用户/Agent 显式给出的档位必须先归一化再比较，禁止根据 prompt 里的品类关键词二次猜档。
  *
  * 合法输出只有三个：auto / fast / high。未知值一律当 auto（交回服务端推断），不硬猜。
  */
@@ -132,7 +126,7 @@ function normalizeTier(value) {
   return TIER_ALIASES[key] || "auto";
 }
 
-function selectImageRoute({ taskKind, qualityTier, prompt, renderIntent }) {
+function selectImageRoute({ taskKind, qualityTier }) {
   const m = modelsOf();
   const mode = String(RT.IMAGE_ROUTING_MODE || "auto").trim();
   const kind = String(taskKind || "generate").trim();
@@ -157,12 +151,7 @@ function selectImageRoute({ taskKind, qualityTier, prompt, renderIntent }) {
   if (tier === "high") return { model: m.pro, reason: "tier=high" };
   if (tier === "fast") return { model: m.fast, reason: "tier=fast" };
 
-  // auto：先从 prompt 做保守推断（明显是印刷物料才升 Pro）
-  const inferred = inferQualityTier(prompt, renderIntent);
-  if (inferred === "high") return { model: m.pro, reason: "inferred=print" };
-  if (inferred === "fast") return { model: m.fast, reason: "inferred=draft" };
-
-  // 推断不出：默认 Flash（没有配 Flash 就回落 Pro，保证可用性）
+  // auto：尊重当前运行时路由配置，不从自然语言/成品名称二次推断模型档位。
   return { model: m.fast, reason: "tier=auto" };
 }
 
@@ -1117,12 +1106,14 @@ async function editSimilarity(sourceRef, resultUrl) {
   }
 }
 
-// ── 生图（服务端强制五段式约束）──
+// ── 图片任务策略：服务端按操作语义应用唯一一份边界约束 ──
 const EDIT_CONSTRAINTS =
-  "\n\n【一致性】光照方向、色温、景深与透视必须与原图完全一致；\n" +
-  "【阴影】新增或替换的主体必须在地面或相邻物体上产生与现有光照方向一致的接触阴影，阴影软硬程度与原图匹配；\n" +
-  "【保持】原图的构图、人物、背景、色调、光线和所有文字必须完全不变，画面其余部分保持原样；\n" +
-  "【排除】禁止抠图感、悬浮、生硬粘贴；不要添加任何未提及的元素；不要出现水印或额外文字。";
+  "\n\n【局部编辑】只执行用户明确要求的修改；尽量保持未指定区域、人物身份、物体位置与原图画布不变。\n" +
+  "若用户要求更换背景、色调或光线，则允许对应部分发生变化，不得同时要求该部分保持原样。\n" +
+  "新增内容须与场景透视、光照和阴影自然融合；不要添加未提及元素、额外文字或水印。";
+const REFERENCE_CONSTRAINTS =
+  "\n\n【参考图重新设计】把输入图作为主题、主体和关键信息参考，按用户要求重新设计整张作品；" +
+  "允许重新安排构图、版式、颜色和风格，不套用局部编辑的像素保持约束。";
 
 function readBody(req, maxBytes) {
   const limit = Number(maxBytes || 20 * 1024 * 1024);
@@ -1157,39 +1148,32 @@ function readBody(req, maxBytes) {
 /** 结构化字段 → 专业 prompt（字段顺序固定，内容全部来自模型对用户需求的理解） */
 function assembleStructured(structured) {
   if (!structured || typeof structured !== "object") return "";
-  const order = ["subject", "setting", "composition", "lighting", "material", "text", "negative"];
+  const order = ["subject", "setting", "composition", "lighting", "material", "negative"];
   const parts = order.map((k) => String(structured[k] || "").trim()).filter(Boolean);
+  const copy = visibleCopyValues(structured.text);
+  if (copy.length) parts.push("画面中必须准确呈现以下文字：" + copy.join("\n"));
   if (!parts.length) return "";
   return parts.join("。") + "。";
 }
 
-/** 显式宽高比 → 1.5K 档位的画布像素（与 1K 同价区间，避免动辄 2K 计费） */
-const ASPECT_SIZES = {
-  "1:1": "1024x1024",
-  "3:4": "1152x1536",
-  "4:3": "1536x1152",
-  "9:16": "864x1536",
-  "16:9": "1536x864",
-  "1.7:1": "1536x904",   // 横版名片常用比例
-};
+function visibleCopyValues(value) {
+  if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => item && typeof item === "object" ? String(item.text || "").trim() : "")
+    .filter(Boolean);
+}
+
 /**
  * 10-24 安全修复（IMG-02）：显式像素尺寸必须有上限。
  * 旧实现只做格式正则，`99999x99999` 也能通过 —— 上游会拒或产生巨额像素账单。
- * 现在：单边 512~4096，总像素不超过 4.2MP，超限时按比例缩到预算内（保持宽高比）。
+ * 现在：单边 512~4096，总像素不超过 Seedream 5.0 Pro 的 4.622MP 上限，超限时按比例缩放。
  */
 function resolveSize(size, aspectRatio) {
-  const ar = String(aspectRatio || "").trim();
-  if (ar && ASPECT_SIZES[ar]) return ASPECT_SIZES[ar];
-  const s = String(size || RT.IMAGE_SIZE || "1.5K").trim();
-  if (/^(1K|1\.5K|2K)$/i.test(s)) return s.toUpperCase();
-  const fixed = clampExplicitSize(s);
-  if (fixed) return fixed;
-  // 非法/超限：回落默认档位，而不是把危险值透传给上游
-  return "1.5K";
+  return resolveImageSize(size, aspectRatio, RT.IMAGE_SIZE);
 }
 
-/** 出图形态：决定是"可直接印刷的平面稿"还是"带场景的展示稿"。
- *  名片/海报/封面被画成"白纸上的一张卡片"，通常就是缺了 flat_artwork 这条约束。 */
+/** 出图形态约束：仅当 Agent 明确选择后才添加，不根据成品名称猜测。 */
 const RENDER_INTENT_RULES = {
   flat_artwork:
     "【输出形态：平面成稿】直接输出可交付的平面设计稿：设计内容填满整张画布并按比例留出安全边距；" +
@@ -1199,50 +1183,12 @@ const RENDER_INTENT_RULES = {
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
 };
 
-/** 模型没传 render_intent 时的兜底：印刷类物料默认走平面成稿，避免再生成"白纸上的名片"。 */
-function inferRenderIntent(text) {
-  const p = String(text || "");
-  if (/名片|海报|封面|传单|宣传单|易拉宝|展架|证书|logo|标志|门头|菜单|包装|贴纸/i.test(p)) return "flat_artwork";
-  return "";
-}
-
-/** 生图提示词增强：仅在配置了 CHAT_API_KEY 与轻量模型时启用，失败原样返回（增强不是依赖）。 */
-async function enhancePrompt(raw) {
-  const key = String(RT.CHAT_API_KEY || "");
-  const model = String(RT.CHAT_MODEL_UTILITY_LITE || "");
-  if (!key || !model) return raw;   // 不猜模型名：未配置就跳过
-  const base = String(RT.CHAT_BASE_URL || IMAGE_BASE).replace(/\/+$/, "");
-  const sys = "你是资深视觉设计师与 AI 生图提示词工程师。把用户需求改写为高质量生图提示词：" +
-    "①保留原意与所有指定细节（文字/品牌名/数字/颜色原样保留，不得改动）" +
-    "②按需补全构图、光影、材质、色彩、画质，宁少勿滥" +
-    "③只输出改写后的提示词本身，不要解释，长度 120-280 字。";
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
-  try {
-    const r = await fetch(base + "/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
-      body: JSON.stringify({ model, messages: [{ role: "system", content: sys }, { role: "user", content: raw }], max_tokens: 500, temperature: 0.7 }),
-      signal: controller.signal,
-    });
-    if (!r.ok) return raw;
-    const j = await r.json().catch(() => null);
-    const out = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
-    const text = typeof out === "string" ? out.trim() : "";
-    return text.length >= 30 ? text : raw;
-  } catch (e) {
-    return raw;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount }) {
   const apiKey = String(RT.IMAGE_API_KEY || "");
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
   // 10-24 混合路由：模型由服务端决定，App 只表达任务类型与质量偏好。
-  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier, prompt, renderIntent });
+  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier });
   if (route.unsupported) {
     logStage("route_unsupported", { taskKind: taskKind || "generate", reason: route.reason });
     return { ok: false, code: 422, msg: "当前配置的模型不支持该任务", unsupported: true, reason: route.reason };
@@ -1286,28 +1232,39 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     };
   }
 
-  // 文生图：优先用结构化字段拼装（A 方案）；编辑：在用户指令后叠加五段式约束
+  // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
+  const rawPrompt = String(prompt || "").trim();
   const structPrompt = assembleStructured(structured);
-  let basePrompt = structPrompt || String(prompt || "");
-  const isEdit = !!image;
+  // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
+  let basePrompt = rawPrompt || structPrompt;
+  // Reference redesign and local edit both send image input, but their task policies differ.
+  const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
-  // 10-23：structured 非空时不再直接丢弃原始 prompt——用户硬约束（联系方式、指定文字、禁止项）
-  // 往往只写在 prompt 里，丢掉就会让模型自由发挥。两条都保留，去重后拼接。
-  if (structPrompt && String(prompt || "").trim()) {
-    const raw = String(prompt).trim();
-    if (!structPrompt.includes(raw)) basePrompt = raw + "。" + structPrompt;
+  // exact visible copy may be omitted from prompt by contract; append only missing copy values.
+  if (rawPrompt) {
+    const missingCopy = visibleCopyValues(structured && structured.text)
+      .filter((value) => !rawPrompt.includes(value));
+    if (missingCopy.length) {
+      basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
+    }
   }
 
-  // 短提示词增强：只对"纯文生图 + 无结构化字段 + 描述很短"的场景生效，避免拖慢精确改图。
-  if (!isEdit && !structPrompt && RT.IMAGE_PROMPT_ENHANCE === "1" && basePrompt.length > 0 && basePrompt.length < 120) {
-    basePrompt = await enhancePrompt(basePrompt);
-  }
-
-  const intentRule = RENDER_INTENT_RULES[String(renderIntent || "") || inferRenderIntent(basePrompt)] || "";
+  // 只应用 Agent 明确提供的输出形态；不得再按“名片/海报”等关键词套模板。
+  const intentRule = RENDER_INTENT_RULES[String(renderIntent || "")] || "";
   if (intentRule) basePrompt = basePrompt + "\n\n" + intentRule;
-  const finalPrompt = isEdit ? basePrompt + EDIT_CONSTRAINTS : basePrompt;
+  const taskPolicy = isPixelEdit
+    ? EDIT_CONSTRAINTS
+    : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : "");
+  const finalPrompt = basePrompt + taskPolicy;
 
   const resolvedSize = resolveSize(size, aspectRatio);
+  if (!resolvedSize) {
+    logStage("image_size_unsupported", { taskKind, aspectRatio: String(aspectRatio || "") });
+    return {
+      ok: false, code: 422, error: "IMAGE_SIZE_UNSUPPORTED",
+      msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
+    };
+  }
   const payload = {
     model: selectedModel,
     prompt: finalPrompt,
@@ -1452,10 +1409,10 @@ const server = http.createServer(async (req, res) => {
       // 线上任何人一眼能看出"普通/高质量/编辑/组图"分别落到哪个 model。
       routes: (function () {
         const cases = [
-          { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto", prompt: "", renderIntent: "" } },
-          { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro", prompt: "", renderIntent: "" } },
-          { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro", prompt: "", renderIntent: "" } },
-          { key: "series", args: { taskKind: "series", qualityTier: "auto", prompt: "", renderIntent: "" } },
+          { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto" } },
+          { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro" } },
+          { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro" } },
+          { key: "series", args: { taskKind: "series", qualityTier: "auto" } },
         ];
         const out = {};
         for (const c of cases) {
@@ -1510,6 +1467,12 @@ const server = http.createServer(async (req, res) => {
 
     const n = Math.min(SERIES_MAX, Math.max(2, Math.floor(Number(body.requested_count || body.requestedCount) || 2)));
     const resolved = resolveSize(body.size, body.aspect_ratio || body.aspectRatio);
+    if (!resolved) {
+      return send(422, {
+        ok: false, code: 422, error: "IMAGE_SIZE_UNSUPPORTED",
+        msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
+      });
+    }
     const renderIntent = String(body.render_intent || body.renderIntent || "");
     const aspectRatio = String(body.aspect_ratio || body.aspectRatio || "");
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
@@ -1729,6 +1692,12 @@ const server = http.createServer(async (req, res) => {
       }));
     }
     const resolved = resolveSize(input.size, input.aspectRatio);
+    if (!resolved) {
+      return send(422, {
+        ok: false, code: 422, error: "IMAGE_SIZE_UNSUPPORTED",
+        msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
+      });
+    }
     // 防御：历史/畸形 result 不能让整个接口 500
     const prevItems = Array.isArray(prev.items) ? prev.items : [];
     const byIndex = new Map(prevItems.map((it) => [Number(it.index), it]));
@@ -1846,6 +1815,13 @@ const server = http.createServer(async (req, res) => {
     if (taskKind === "series") {
       const n = Math.min(SERIES_MAX, Math.max(2, Math.floor(Number(requestedCount) || 2)));
       const resolved = resolveSize(body.size, aspectRatio);
+      if (!resolved) {
+        await abortIdem(rid, auth.sub, "image_size_unsupported");
+        return send(422, {
+          ok: false, code: 422, error: "IMAGE_SIZE_UNSUPPORTED",
+          msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
+        });
+      }
       const models = modelsOf();
       // 10-24 P1-12：先按最贵档估算，余额不足就不启动任何子图 ——
       // 否则 4 张跑完才发现额度不够，用户拿到半套、账也乱。
@@ -1941,28 +1917,13 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
-    let retried = false;
-    // 编辑场景：像素相似度 < 0.60 判定「整图重绘」，自动重试一次（0 token，仅 +一次生成）
-    if (out.ok && body.image) {
+    const retried = false;
+    // 记录粗略像素差异供诊断；不把它当成“整图重绘”的判决，也不自动再调一次模型。
+    // 全局像素差异会把“换背景/改色调”等用户明确要求误判成失败，自动重试还会重复消耗上游成本。
+    if (out.ok && body.image && taskKind === "edit") {
       const sim = await editSimilarity(Array.isArray(body.image) ? body.image[0] : body.image, out.url);
       if (sim !== null) {
-        logStage("edit_similarity", { sim: Number(sim.toFixed(3)) });
-        if (sim < 0.60) {
-          logStage("edit_over_redraw_retry", { sim: Number(sim.toFixed(3)) });
-          // 重试必须沿用首轮选定的模型：换模型会让相似度对比失真，成本口径也会漂
-          const retry = await generate({
-            prompt: String(body.prompt || "") + "\n\n【重要】仅修改用户指定的区域，画面其余部分必须与原图逐像素保持一致，禁止整体重绘。",
-            image: body.image, size: body.size, structured: body.structured,
-            renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
-            taskKind, qualityTier, requestedCount,
-            model: out.model,
-          });
-          if (retry.ok) {
-            const sim2 = await editSimilarity(Array.isArray(body.image) ? body.image[0] : body.image, retry.url);
-            if (sim2 === null || sim2 > sim) { out = retry; retried = true; }
-            logStage("edit_retry_result", { sim2: sim2 === null ? null : Number(sim2.toFixed(3)), adopted: out === retry });
-          }
-        }
+        logStage("edit_similarity_observed", { sim: Number(sim.toFixed(3)), decision: "diagnostic_only" });
       }
     }
     logStage("generate_done", { sub: auth.sub, ok: !!out.ok, hadImage: !!body.image, size: body.size, ms: Date.now() - tReq, err: out.ok ? undefined : String(out.msg || "").slice(0, 120) });

@@ -25,6 +25,7 @@ test("ERR-01 已知错误码返回自然语言与受控动作", () => {
     ["QUOTA_EXCEEDED", ["view_quota"]],
     ["UPSTREAM_TIMEOUT", ["retry", "edit_request"]],
     ["TASK_UNSUPPORTED", ["single_only", "edit_request", "cancel"]],
+    ["IMAGE_SIZE_UNSUPPORTED", ["edit_request", "cancel"]],
   ];
   for (const [code, actions] of cases) {
     const p = publicError(code, { requestId: "req_test" });

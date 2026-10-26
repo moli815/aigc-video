@@ -153,7 +153,7 @@ test("IMG-02 合法尺寸原样返回，超预算按比例缩小", () => {
   const big = clampExplicitSize("4000x4000");
   assert.ok(big, "4000x4000 应在单边限制内");
   const [w, h] = big.split("x").map(Number);
-  assert.ok(w * h <= 4_200_000, `总像素仍超预算：${w}x${h}`);
+  assert.ok(w * h <= 4_622_220, `总像素仍超预算：${w}x${h}`);
   assert.strictEqual(w % 8, 0, "缩放后应对齐 8");
 });
 
@@ -209,42 +209,6 @@ test("IMG-02 尺寸正常但非图片的数据不通过", () => {
 // 智能档位推断 + 按模型定价（10-24）
 // ─────────────────────────────────────────────────────────────
 
-const { inferQualityTier } = require("../cloudfunctions/bf-image/media-guards");
-
-test("智能分配：只有真正需要精度的物料才升 Pro", () => {
-  for (const p of [
-    "帮我做一个公司 logo",
-    "产品包装设计，牛皮纸质感",
-    "新品发布会主视觉 KV",
-    "名片正面，黑白极简",
-    "易拉宝展架设计",
-    "画册内页排版，需要印刷",
-  ]) {
-    assert.strictEqual(inferQualityTier(p), "high", `「${p}」应判为 high`);
-  }
-});
-
-test("智能分配：海报/封面/传单不自动升级（实测 Flash 已够用）", () => {
-  for (const p of [
-    "咖啡店开业海报，暖色调，木质纹理",
-    "公众号封面图",
-    "促销传单设计",
-    "活动 banner",
-  ]) {
-    assert.strictEqual(inferQualityTier(p), "", `「${p}」不应自动升 Pro`);
-  }
-});
-
-test("智能分配：明确草稿留 Flash", () => {
-  for (const p of ["先出个草稿看看", "随便画个示意图", "快速占位图"]) {
-    assert.strictEqual(inferQualityTier(p), "fast", `「${p}」应判为 fast`);
-  }
-});
-
-test("智能分配：普通描述不瞎判，交给默认", () => {
-  for (const p of ["一个蓝色圆形", "一只猫坐在窗台上", "山水风景，水墨风格"]) {
-    assert.strictEqual(inferQualityTier(p), "", `「${p}」不应被推断，实际 ${inferQualityTier(p)}`);
-  }
-  assert.strictEqual(inferQualityTier(""), "");
-  assert.strictEqual(inferQualityTier(null), "");
+test("模型质量档不再由物料关键词和 prompt 文案二次猜测", () => {
+  assert.equal(typeof require("../cloudfunctions/bf-image/media-guards").inferQualityTier, "undefined");
 });

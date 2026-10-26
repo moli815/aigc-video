@@ -90,6 +90,11 @@ const CATALOG = {
     message: "这个效果目前还没法一次完成。我可以先帮你做出一张，其余的再接着做。",
     actions: ["single_only", "edit_request", "cancel"],
   },
+  IMAGE_SIZE_UNSUPPORTED: {
+    category: "input", retryable: false,
+    message: "当前画布比例超出安全尺寸范围，尚未开始生成。请改用常见比例（如 1:1、4:3、3:4、16:9 或 9:16）后重试。",
+    actions: ["edit_request", "cancel"],
+  },
   FEATURE_DISABLED: {
     category: "capability", retryable: false,
     message: "这个功能暂时没有开放。",

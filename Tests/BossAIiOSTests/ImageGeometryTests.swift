@@ -5,8 +5,8 @@ import CoreGraphics
 @testable import BossAI
 
 // ============================================================================
-// 图片几何（10-25）：像素尺寸 / 尺寸夹取 / 比例校验 / 补边与回映射
-// 这些是"P 图不裁切"的数学底座，任何一条错都会直接把用户的原图切掉边。
+// 图片几何：像素尺寸 / 尺寸夹取 / 输出比例校验。
+// 极端比例不能满足 Provider 约束时拒绝生成，不做补边回裁。
 // ============================================================================
 final class ImageGeometryTests: XCTestCase {
 
@@ -83,7 +83,7 @@ final class ImageGeometryTests: XCTestCase {
     }
 
     func testClampedSizeRejectsExtremeRatio() {
-        // 极窄长：放大到最小边后总像素仍不够 → 明确拒绝，让上层走补边兜底
+        // 极窄长：无法在边长与像素预算内表达 → 明确拒绝，不静默更改画布比例
         XCTAssertNil(ImageGeometry.clampedSize(width: 9000, height: 200))
     }
 
@@ -96,6 +96,9 @@ final class ImageGeometryTests: XCTestCase {
         // 输出与要求一致 → 不算坏
         XCTAssertFalse(ImageGeometry.isAspectBroken(outputWidth: 1536, outputHeight: 864,
                                                     expectedAspect: 16.0 / 9.0))
+        XCTAssertTrue(ImageGeometry.isAspectBroken(outputWidth: 0, outputHeight: 0,
+                                                   expectedAspect: 16.0 / 9.0),
+                      "无法读取生成图尺寸时，保比例任务必须拒绝结果")
     }
 
     func testAspectDeviationTolerance() {
@@ -103,33 +106,6 @@ final class ImageGeometryTests: XCTestCase {
         let dev = ImageGeometry.aspectDeviation(outputWidth: 1200, outputHeight: 900, expectedAspect: expected)
         XCTAssertEqual(dev ?? 1, 0, accuracy: 0.0001)
         XCTAssertEqual(ImageGeometry.aspectTolerance, 0.03)
-    }
-
-    func testNearestSupportedRatio() {
-        XCTAssertEqual(ImageGeometry.nearestSupportedRatio(16.0 / 9.0), "16:9")
-        XCTAssertEqual(ImageGeometry.nearestSupportedRatio(1.0), "1:1")
-        XCTAssertEqual(ImageGeometry.nearestSupportedRatio(0.75), "3:4")
-        XCTAssertEqual(ImageGeometry.nearestSupportedRatio(1.333), "4:3")
-    }
-
-    // MARK: - 补边 + 回映射（固定比例兜底路径）
-
-    func testPaddedReferenceKeepsWholeImageAndCropBackRestoresAspect() {
-        // 3:2 横图，硬塞进 16:9 画布
-        let source = image(width: 1200, height: 800)
-        guard let padded = ImageGeometry.composePaddedReference(source, ratio: "16:9") else {
-            return XCTFail("补边失败")
-        }
-        XCTAssertEqual(padded.contentRect.height, 1.0, accuracy: 0.001, "横向补边应在上下留白")
-        XCTAssertLessThan(padded.contentRect.width, 1.0)
-        // 生成结果（用补边图冒充模型输出）裁回内容区 → 比例应回到 3:2
-        guard let generated = UIImage(data: padded.data),
-              let restored = ImageGeometry.cropBack(generated, contentRect: padded.contentRect),
-              let restoredSize = ImageGeometry.pixelSize(of: restored.jpegData(compressionQuality: 0.9) ?? Data()) else {
-            return XCTFail("回映射失败")
-        }
-        let aspect = Double(restoredSize.width) / Double(restoredSize.height)
-        XCTAssertEqual(aspect, 1200.0 / 800.0, accuracy: 0.03, "裁回后应恢复原图 3:2")
     }
 
     /// editSimilarity 只是日志字段（不参与展示决策）。

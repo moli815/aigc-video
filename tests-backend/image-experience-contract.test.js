@@ -26,6 +26,7 @@ const STATUS = read("BossAI/Services/ImageTaskStatus.swift");
 const GEOM = read("BossAI/Services/ImageGeometry.swift");
 const PLANNER = read("BossAI/Services/ImageTaskPlanner.swift");
 const SERVICE = read("BossAI/Services/ImageService.swift");
+const COMPILER = read("BossAI/Services/ImageProviderRequestCompiler.swift");
 const PIPELINE = read("BossAI/Services/ToolPipeline.swift");
 
 test("IMG-01 图片轮次在数据流上隔离：模型正文不渲染、不落库", () => {
@@ -71,10 +72,10 @@ test("IMG-03 等待态只有一个轻量组件，支持 Reduce Motion，无 Canv
 
 test("IMG-04 编辑任务比例只认用户原话，模型自带 aspect_ratio 不算授权", () => {
   assert.match(PLANNER, /userSaid: String\? = nil/, "规划器未接收用户原话");
-  assert.match(PLANNER, /let userRatio = firstAspectToken\(in: userLowered\)/,
+  assert.match(PLANNER, /let userAspect = explicitUserAspect\(in: userLowered\)/,
     "未从用户原话里解析比例");
   assert.match(PLANNER, /let modelRatio = normalizeAspect\(aspectRatio\)/, "未区分模型给的比例");
-  assert.match(PLANNER, /if let userRatio \{[\s\S]{0,400}allowCrop = true/,
+  assert.match(PLANNER, /if let userAspect \{[\s\S]{0,400}allowCrop = true/,
     "允许裁切的分支没有绑定到用户原话");
   // 编辑任务不能再落到 1:1 默认
   const editBranch = PLANNER.slice(PLANNER.indexOf("if editLike {"), PLANNER.indexOf("} else {", PLANNER.indexOf("if editLike {")));
@@ -85,20 +86,21 @@ test("IMG-04 编辑任务比例只认用户原话，模型自带 aspect_ratio �
 
 test("IMG-05 显式尺寸一路透传到请求体，且优先于 aspect_ratio", () => {
   assert.match(SERVICE, /let targetSize: String\?/, "上下文缺少 targetSize");
-  assert.match(SERVICE, /if !explicitSize\.isEmpty \{[\s\S]{0,80}body\["size"\] = explicitSize/,
-    "请求体没有把显式尺寸写进 size");
-  assert.match(SERVICE, /else if let aspectRatio, !aspectRatio\.isEmpty \{[\s\S]{0,60}body\["aspect_ratio"\]/,
-    "有显式尺寸时仍会同时发 aspect_ratio（服务端会按预设比例重新构图）");
+  assert.match(SERVICE, /ImageProviderRequestCompiler\.hosted\(/, "Hosted 请求未交给 Hosted adapter");
+  assert.match(COMPILER, /if let targetSize[\s\S]{0,180}body\["size"\]/,
+    "Hosted adapter 未把显式尺寸编译成 size");
+  assert.match(COMPILER, /else if let aspectRatio[\s\S]{0,100}body\["aspect_ratio"\]/,
+    "仅在没有显式尺寸时才允许发送 aspect_ratio");
   assert.match(STREAM, /targetSize: plan\.targetSize/, "调用点未把 targetSize 带进上下文");
 });
 
-test("IMG-06 固定比例兜底：补边 + 生成后裁回原构图", () => {
-  assert.match(GEOM, /static func composePaddedReference/, "缺少补边实现");
-  assert.match(GEOM, /static func cropBack/, "缺少回映射实现");
-  assert.match(GEOM, /static func nearestSupportedRatio/, "缺少最近支持比例");
-  assert.match(STREAM, /paddingRect = padded\.contentRect/, "调用点未记录内容区");
-  assert.match(STREAM, /ImageGeometry\.cropBack\(raw, contentRect: rect\)/, "生成后未裁回原构图");
-  assert.doesNotMatch(GEOM + STREAM + PLANNER, /centerCrop|center_crop/, "仍存在中心裁切路径");
+test("IMG-06 极端原图比例 fail closed，不再补边生成后裁回", () => {
+  assert.doesNotMatch(GEOM + STREAM, /composePaddedReference|cropBack|paddingRect|nearestSupportedRatio/,
+    "旧补边/回裁路径仍可被图片主链路调用");
+  assert.match(PLANNER, /极端比例超出当前模型可安全生成的画布范围/,
+    "不可表达的原图比例未明确询问用户");
+  assert.match(PLANNER, /ask = .*允许改变比例\/允许裁切/,
+    "必须让用户明确授权改变原图画布");
 });
 
 test("IMG-07 生成后几何校验：坏比例不展示、不落库、明确失败", () => {
@@ -107,7 +109,7 @@ test("IMG-07 生成后几何校验：坏比例不展示、不落库、明确失�
   assert.ok(idxCheck > 0 && idxPersist > idxCheck, "几何校验必须在落库之前");
   assert.match(STREAM, /imageTurnNote = ImageTaskStatus\.Failure\.aspectMismatch\.message/,
     "疑似裁切时未给出明确失败文案");
-  assert.match(STREAM, /"paddingApplied":/);
+  assert.match(STREAM, /"canvasPolicy":/);
   assert.match(STREAM, /"cropDetected":/);
   assert.match(STREAM, /"sourceAspect":/);
 });

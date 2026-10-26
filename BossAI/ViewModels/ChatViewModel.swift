@@ -296,22 +296,30 @@ final class ChatViewModel: ObservableObject {
         return f.string(from: Date())
     }
 
-    /// P0-57 取用户上传的图片数据作为生图参考图。
-    /// 10-23 修复：此前只查"最后一条用户消息"，当前消息是文字时找不到附件；
-    /// 现在回查最近 3 条带图片附件的用户消息，让"先传图识别、再发文字做新海报"这类
-    /// 多轮流程仍能把原图传进 image_edit / 多模态上下文。
+    /// 图片模型可见的参考图候选：优先使用本轮附件（保持上传顺序），
+    /// 只有本轮无图时才取与多模态上下文相同的那一张历史承接图。
+    func imageReferenceCandidates(currentAttachments: [StoredFile], in conv: Conversation) -> [Data] {
+        let currentFiles = Array(currentAttachments.filter(\.isImage).prefix(6))
+        if !currentFiles.isEmpty {
+            // Keep original 1-based attachment indices. A failed file read stays as an empty
+            // slot and is rejected by ImageReferenceResolver; compactMap would shift later images
+            // into the wrong slot or silently fall back to a historical image.
+            return currentFiles.map { file in
+                (try? Data(contentsOf: FileStore.url(for: file))) ?? Data()
+            }
+        }
+        if let carried = attachedImageData(in: conv) { return [carried] }
+        return []
+    }
+
+    /// 历史承接只取最近两轮中最后一张图，与 buildAPIMessages 注入的 carriedImageURL 保持一致。
     func attachedImageData(in conv: Conversation) -> Data? {
-        let imgExts = ["png", "jpg", "jpeg", "webp", "heic"]
         let recentUserMsgs = conv.messages
             .filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
             .sorted { $0.createdAt < $1.createdAt }
-            .suffix(3)
-        for userMsg in recentUserMsgs.reversed() {
-            for file in files(for: userMsg) where imgExts.contains(file.ext.lowercased()) {
-                if let data = try? Data(contentsOf: FileStore.url(for: file)) { return data }
-            }
-        }
-        return nil
+            .suffix(2)
+        guard let file = recentUserMsgs.flatMap({ files(for: $0) }).last(where: \.isImage) else { return nil }
+        return try? Data(contentsOf: FileStore.url(for: file))
     }
 
     /// P0-74 视觉审核（调服务端 qwen3-vl-plus）：判断生成图是否满足"用户要求"。
@@ -789,7 +797,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
             caps.append("深度研究：最多可并行检索 8 个主题并逐页读取原文，适合多品牌对比、参数核实")
         }
         // 10-23 关键修复：此前清单里完全没有"作图"，模型面对"设计名片/做海报"会退化成给文字方案或 Word。
-        caps.append("图片生成：用户说「做一张图 / 设计海报 / 重新设计名片 / 出封面 / 配图 / 画个示意图」时，**必须直接调用 image_generate 出图**（改已有图用 image_edit），不要用文字描述、规格清单或 Word 文档代替图片——用户要的是图，不是排版说明")
+        caps.append("图片生成：用户说「做一张图 / 设计海报 / 出封面 / 配图 / 画个示意图」时，**必须直接调用图片工具出图**；根据上传图重新设计新作品用 image_generate + source=attached，只有用户明确要求保留画面并局部修改时才用 image_edit。不要用文字方案或文档代替用户要的图片。准确可见文案仅放 structured.text，视觉指令不得混入其中。")
         if HostedAccount.cachedExportDocEnabled {
             caps.append("文档导出：回答完成后，用户可点击右上角导出按钮把整段对话生成 Word/PPT/Excel/PDF 文件——当用户要'文件/表格/文档'时，请直接给出完整内容并提醒用户使用导出功能，严禁说'我无法生成文件'")
         }

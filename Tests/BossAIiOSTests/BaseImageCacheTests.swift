@@ -36,10 +36,6 @@ final class BaseImageCacheTests: XCTestCase {
                                    conversationId: conversationId,
                                    baseImage: img(),
                                    aspectRatio: aspect,
-                                   extractedText: ["phone": "13800000000"],
-                                   items: [TextItem(role: .contact, key: "phone", text: "13800000000")],
-                                   layout: LayoutSpec(),
-                                   canvas: CanvasSpec(size: CGSize(width: 1600, height: 900), expectedAspect: 16.0 / 9.0),
                                    now: stamp ?? now)
     }
 
@@ -113,10 +109,7 @@ final class BaseImageCacheTests: XCTestCase {
                                        conversationId: "conv-\(index % 3)",
                                        baseImage: self.img(shade: CGFloat(index % 10) / 10),
                                        aspectRatio: "16:9",
-                                       extractedText: [:],
-                                       items: [],
-                                       layout: LayoutSpec(),
-                                       canvas: CanvasSpec(size: CGSize(width: 1600, height: 900), expectedAspect: 16.0 / 9.0))
+                                       now: now)
             _ = BaseImageCache.shared.lookup(conversationId: "conv-\(index % 3)",
                                              taskId: "task-\(index)", aspectRatio: "16:9")
         }

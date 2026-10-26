@@ -201,7 +201,7 @@ test("IMG-01 响应体有大小上限与 MIME 校验", () => {
 
 test("IMG-02 显式像素尺寸有上下限与总像素预算", () => {
   assert.match(GUARDS, /const SIZE_MAX_EDGE = 4096/);
-  assert.match(GUARDS, /const SIZE_MAX_PIXELS = 4_200_000/);
+  assert.match(GUARDS, /const SIZE_MAX_PIXELS = 4_622_220/);
   assert.match(GUARDS, /function clampExplicitSize\(raw\)/);
   assert.match(GUARDS, /if \(w \* h > SIZE_MAX_PIXELS\)/, "超出像素预算时未按比例缩放");
   // 解码前保护（图片炸弹）
@@ -298,7 +298,7 @@ test("定价按模型分档，Flash 与 Pro 不同价", () => {
   assert.match(IMAGE, /IMAGE_PRICE_2K: process\.env\.IMAGE_PRICE_2K \|\| "0\.9"/, "bf-image 2K 默认值未对齐 0.9");
 });
 
-test("智能分配只在未显式指定时生效", () => {
+test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
   const fn = IMAGE.slice(IMAGE.indexOf("function selectImageRoute"));
   const body = fn.slice(0, fn.indexOf("let _rtLoadedAt"));
   // 10-25：原来靠 `rawTier !== "auto"` 判显式，pro/hd 这类别名会漏判并静默降级；
@@ -306,8 +306,10 @@ test("智能分配只在未显式指定时生效", () => {
   assert.match(body, /const tier = normalizeTier\(qualityTier\)/, "未先归一化档位");
   assert.match(body, /if \(tier === "high"\) return \{ model: m\.pro/, "high 未走 Pro");
   assert.match(body, /if \(tier === "fast"\) return \{ model: m\.fast/, "fast 未走 Flash");
-  assert.match(body, /inferQualityTier\(prompt, renderIntent\)/, "未做 prompt 推断（auto 分支）");
-  assert.match(body, /inferred === "high"[\s\S]{0,80}m\.pro/, "推断 high 未走 Pro");
+  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT|prompt|renderIntent/,
+    "路由仍从提示词或物料类型隐式推断模型档位");
+  assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/,
+    "Pro 强制模式必须优先于质量档位分支");
 });
 
 // ── DS4.1 §3.1：鉴权不得因密钥未加载而抛异常（2026-10-25）──────────────────

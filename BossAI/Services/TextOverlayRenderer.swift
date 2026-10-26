@@ -25,12 +25,37 @@ struct TextItem: Equatable {
     var role: Role
     var key: String          // 字段名，仅用于报错定位（如 "phone"）
     var text: String         // 原文，逐字绘制，不做任何改写
+
+    /// 新契约用有语义的逐条文字；兼容旧版 structured.text 字符串。
+    static func parse(_ value: Any?) -> [TextItem] {
+        if let entries = value as? [[String: Any]] {
+            return entries.enumerated().compactMap { index, entry in
+                guard let text = entry["text"] as? String,
+                      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                let role = (entry["role"] as? String).flatMap { Role(rawValue: $0) } ?? .body
+                let key = (entry["key"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "text-\(index + 1)"
+                return TextItem(role: role, key: key, text: text)
+            }
+        }
+        if let legacy = value as? String, !legacy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return legacy.components(separatedBy: .newlines).enumerated().compactMap { index, line in
+                let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                return TextItem(role: .body, key: "legacy-text-\(index + 1)", text: text)
+            }
+        }
+        return []
+    }
+
+    static func values(from value: Any?) -> [String] {
+        parse(value).map(\.text)
+    }
 }
 
 /// 版式意图（由模型给出，宽泛描述；渲染器负责落地）
 struct LayoutSpec {
     enum Columns: Int { case one = 1, two = 2 }
-    var columns: Columns = .two
+    var columns: Columns = .one
     /// 左列放哪些角色（默认：标题类）
     var primaryRoles: [TextItem.Role] = [.title, .subtitle, .label]
     var marginRatio: CGFloat = 0.06
@@ -104,6 +129,8 @@ enum TextIntentDecider {
         if t.contains("艺术字") || t.contains("文字可以") || t.contains("随意") { return false }
         // 大模型判定"必须精确" → 直接程序排版（优先级最高，不受字数影响）
         if accuracyRequired && extractedCharCount > 0 { return true }
+        // 单个长文案字段同样属于文字密集内容；不能因为 Agent 把多字段合并成一段而漏分流。
+        if extractedCharCount >= 40 { return true }
         // 字段多且字数大 → 必须程序排版
         if extractedFieldCount >= 3 && extractedCharCount >= 20 { return true }
         // 关键词兜底（信息类物料，本身就要求文字准确）
@@ -130,14 +157,18 @@ enum TextOverlayRenderer {
             }
         }
         let (leftRect, rightRect) = columnRects(layout: layout, canvas: canvas.size)
-        let leftItems = items.filter { layout.primaryRoles.contains($0.role) }
-        let others = items.filter { !layout.primaryRoles.contains($0.role) }
-
-        if usedHeight(leftItems, width: leftRect.width) > leftRect.height { issues.append("左栏文字超出") }
-        if usedHeight(others, width: rightRect.width) > rightRect.height { issues.append("右栏文字超出") }
+        if layout.columns == .one {
+            if usedHeight(items, width: leftRect.width) > leftRect.height { issues.append("文字超出画布") }
+        } else {
+            let leftItems = items.filter { layout.primaryRoles.contains($0.role) }
+            let others = items.filter { !layout.primaryRoles.contains($0.role) }
+            if usedHeight(leftItems, width: leftRect.width) > leftRect.height { issues.append("左栏文字超出") }
+            if usedHeight(others, width: rightRect.width) > rightRect.height { issues.append("右栏文字超出") }
+        }
         // 单条超长也要报出来（定位到具体字段）
         for item in items {
-            let w = item.role == .title ? leftRect.width : rightRect.width
+            let w = layout.columns == .one || layout.primaryRoles.contains(item.role)
+                ? leftRect.width : rightRect.width
             if lines(item.text, size: fontSize(for: item.role), bold: item.role == .title, maxWidth: w) > maxLines(for: item.role) {
                 issues.append(item.key)
             }
@@ -190,25 +221,19 @@ enum TextOverlayRenderer {
                 y += ceil(h) + lineGap(for: item.role)
             }
 
-            // 左栏：标题类，自底向上排（与常见名片/海报版式一致）
-            var leftY = leftRect.maxY
-            for item in items.filter({ layout.primaryRoles.contains($0.role) }).reversed() {
-                let font = item.role == .title
-                    ? UIFont.boldSystemFont(ofSize: fontSize(for: item.role))
-                    : UIFont.systemFont(ofSize: fontSize(for: item.role))
-                let attrs: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: para]
-                let h = (item.text as NSString).boundingRect(with: CGSize(width: leftRect.width, height: .greatestFiniteMagnitude),
-                                                             options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                                             attributes: attrs, context: nil).height
-                leftY -= ceil(h) + lineGap(for: item.role)
-                var y = leftY
-                draw(item, in: leftRect, y: &y)
-            }
-
-            // 右栏：正文/联系方式，自顶向下
-            var rightY = rightRect.minY
-            for item in items.filter({ !layout.primaryRoles.contains($0.role) }) {
-                draw(item, in: rightRect, y: &rightY)
+            if layout.columns == .one {
+                // 单栏严格按 Agent 提供的文字顺序从上到下布局，不能把左右两组画在同一矩形重叠。
+                var y = leftRect.minY
+                for item in items { draw(item, in: leftRect, y: &y) }
+            } else {
+                var leftY = leftRect.minY
+                for item in items where layout.primaryRoles.contains(item.role) {
+                    draw(item, in: leftRect, y: &leftY)
+                }
+                var rightY = rightRect.minY
+                for item in items where !layout.primaryRoles.contains(item.role) {
+                    draw(item, in: rightRect, y: &rightY)
+                }
             }
             _ = margin
         }

@@ -89,10 +89,10 @@ enum ToolRegistry {
         CapabilityPlugin(
             id: "image_generate", toolset: "media", displayName: "文生图", executor: .local,
             abilities: [
-                "纯文生图（海报/插画/封面/示意图），无任何参考图入参",
-                "【使用时机】用户说「做图/设计/海报/名片/封面/配图/插画」→ 立即调用本工具，禁止用文字方案或文档代替",
+                "纯文生图，以及基于用户上传参考图重新设计的新作品",
+                "【使用时机】用户说「做图/设计/海报/名片/封面/配图/插画」→ 立即调用本工具；基于上传图创作时必须选择 source=attached 和正确 source_index",
             ],
-            limits: ["改图/加元素/换背景必须用 image_edit——禁止用本工具处理已有图片"],
+            limits: ["仅局部修改、换背景、增删元素时使用 image_edit；不得丢弃用户明确指定的参考图"],
             requiresEnv: ["生图 API Key"],
             // 10-23 修复：此前用「额度剩余百分比」决定工具是否出现——
             // 额度显示为 0 时工具直接从 tools[] 消失，模型只能回答"配置禁用了图片生成"（用户看到的能力缺失）。
@@ -105,8 +105,8 @@ enum ToolRegistry {
         CapabilityPlugin(
             id: "image_edit", toolset: "media", displayName: "图片编辑", executor: .local,
             abilities: [
-                "编辑最近生成的图（source=last）",
-                "编辑用户上传的图（source=attached）",
+                "局部编辑最近生成的图（source=last）",
+                "局部编辑用户上传的图（source=attached）",
                 "双图融合：上传素材叠加到生成图（source=both）",
             ],
             limits: ["source 必填；找不到底图时明确报错，绝不退化成文生图"],
@@ -165,7 +165,7 @@ enum ToolRegistry {
             ],
             limits: [
                 "默认只产出常规比例（1:1 / 4:3 / 3:4 / 16:9 / 9:16），用户明确指定其他比例时按预算精确输出",
-                "画面中极小文字可能出错，长文/小字建议用文档承载",
+                "prompt 是唯一完整视觉指令；精确可见文字按标题/正文/联系方式等语义拆条放 structured.text，不能把整段扁平合成一个 body",
             ],
             requiresEnv: ["生图 API Key"],
             // 10-23 修复：旧 ID 的 availability 同样不能用「额度百分比」——

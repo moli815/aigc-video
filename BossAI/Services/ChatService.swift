@@ -579,79 +579,112 @@ final class ChatService {
 
     // ── 10-19 拆 4 工具（仿 Harness"工具即契约"）：职责隔离，消除"忘带图→退化成文生图" ──
 
-    /// ① 纯文生图：**不存在**任何图片入参（模型想"编辑"只能换工具）
-    /// 10-21 新增 structured：把需求拆成 7 个视觉字段，服务端按模板拼装成专业 prompt（信息更可控、文字更准）
+    /// 图片任务结构化的唯一用途：精确可见文案和可选版式元数据。
+    private static let imageStructuredSchema: [String: Any] = [
+        "type": "object",
+        "description": "仅承载程序需要精确处理的文字与版式元数据。所有视觉构思只写在 prompt，避免多份互相冲突的视觉指令。text 按语义分条逐字保留；无可见文字时填空数组。",
+        "properties": [
+            "text": [
+                "type": "array",
+                "description": "最终画面里必须出现的精确文案。按标题/副标题/正文/标签/联系方式/页脚拆成多项，逐字照录，不要把整段合并成一个 body；不需要文字时填空数组。",
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "role": ["type": "string", "enum": ["title", "subtitle", "body", "label", "contact", "footer"]],
+                        "key": ["type": "string", "description": "稳定的字段名，仅用于布局与错误定位，例如 company/phone/address。"],
+                        "text": ["type": "string", "description": "要显示的精确文字，必须逐字保留用户提供内容。"],
+                    ],
+                    "required": ["role", "text"],
+                ],
+            ],
+            "layout": [
+                "type": "object",
+                "description": "可选文字排版意图，只决定文字布局，不属于画面文案。",
+                "properties": [
+                    "columns": ["type": "integer", "enum": [1, 2]],
+                    "marginRatio": ["type": "number", "minimum": 0.02, "maximum": 0.2],
+                    "gutterRatio": ["type": "number", "minimum": 0.01, "maximum": 0.15],
+                    "primaryRoles": ["type": "array", "items": ["type": "string", "enum": ["title", "subtitle", "body", "label", "contact", "footer"]]],
+                ],
+            ],
+        ],
+        "required": ["text"],
+    ]
+
+    /// ① 新作品生成：支持纯文生图，也支持把用户上传图作为参考重新设计；局部编辑走 image_edit。
+    /// structured.text 必须存在；无可见文案时为空数组，避免执行端猜测。
     static let imageGenerateFunction: [String: Any] = [
         "name": "image_generate",
-        "description": "纯文生图：根据文字描述从零生成一张全新图片（海报、名片、封面、插画、示意图等）。**没有任何参考图入参**——用户要修改已有图片时必须改用 image_edit，禁止用本工具处理「改图/加东西/换背景」。当用户说「根据这张图/这些图片的内容帮我做一张新的海报/名片/封面」时，属于根据描述做全新图，必须使用本工具；不要误用 image_edit。数据统计图请改用 Markdown 数据表。**优先用 structured 传结构化字段**（信息更可控、画面文字更准确）；只有确实无法拆分时才用 prompt。",
+        "description": "生成新图；可纯文生图或基于上传图重新设计。prompt 是唯一完整的视觉指令，包含主体/场景/构图/光影/风格/约束；App 只归一任务参数，服务端只应用对应任务边界，不再二次改写视觉指令。把需准确呈现的原文单独放入 structured.text。明确只修改原图局部时用 image_edit；整图重新设计时用本工具并选择 source=attached。source_index 从 1 开始。",
         "parameters": [
             "type": "object",
             "properties": [
-                "prompt": ["type": "string", "description": "（可选，structured 的兜底）详细的图像描述（中文）：主体、场景、构图、光影、材质、文字"],
-                // 10-23 出图形态契约：不写死"好看就行"——名片/海报要平面成稿，不要白底样机
+                "prompt": ["type": "string", "description": "唯一完整的视觉指令：主体、场景、构图、光影、风格和用户要求；不要把精确可见文字混入此字段，原文放 structured.text。"],
                 "render_intent": [
                     "type": "string",
                     "enum": ["flat_artwork", "mockup"],
-                    "description": "输出形态。flat_artwork=可直接交付/印刷的平面成稿：内容填满画布、无白底外衬、无桌面/相框/手持等展示场景——名片、海报、封面、传单、证书默认选它；mockup=带真实场景的展示效果图，仅当用户明确说“看效果/场景图/放在桌上什么样”时才用。",
+                    "description": "按用户实际交付目标选择输出形态。flat_artwork=独立平面设计稿；mockup=置于真实环境中的展示效果。用户未要求展示场景时不要擅自添加外部样机。",
                 ],
                 "aspect_ratio": [
                     "type": "string",
-                    "description": "画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1（横版名片）。用户没指定可不填。",
+                    "description": "输出画布比例。用户未指定时，根据作品用途与构图自主选择合适的横/竖/方比例并明确填写，不要把所有任务默认为同一比例；有参考图时按用户意图区分沿用原画布还是重新设计。用户明确指定方向时必须优先遵守。",
                 ],
-                // 10-24 混合路由：让模型按意图选档；不传则由服务端按关键词保守推断
+                "source": [
+                    "type": "string",
+                    "enum": ["none", "attached"],
+                    "description": "none=纯文生图；attached=将用户上传图作为参考输入。用户要求基于、参考或重新设计上传图片时选 attached。",
+                ],
+                "source_index": [
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 6,
+                    "description": "source=attached 时选择本轮第几张图片，按用户附件显示顺序从 1 开始；只有一张图时填 1。",
+                ],
                 "quality_tier": [
                     "type": "string",
                     "enum": ["fast", "high"],
-                    "description": "画质档位。fast=更快更省，适合图标/插画/普通海报/封面/示意图（默认）；high=更精细，适合印刷物料、logo/标志/商标、名片、包装、画册、展架、需要大量文字或复杂场景。**用户没明确要求高质量时不要传**，交给服务端判断。",
+                    "description": "仅在用户明确指定速度/精度，或任务本身对细节精度有明确要求时选择；不要根据固定素材类别套用档位。未指定时省略，由当前服务端路由策略决定。",
                 ],
-                "structured": [
-                    "type": "object",
-                    "description": "结构化视觉字段（推荐）：每字段用完整短句描述，每段独立成句。内容必须来自用户需求，禁止套用示例的具体主体/场景，禁止编造用户未给的店名/地址/电话/价格。",
-                    "properties": [
-                        "subject": ["type": "string", "description": "主体：是什么、什么状态、在做什么"],
-                        "setting": ["type": "string", "description": "场景/环境：地点、前后景、环境元素"],
-                        "composition": ["type": "string", "description": "镜头/构图：视角（俯/平/仰）、焦段、主体位置、留白区域"],
-                        "lighting": ["type": "string", "description": "光影：光源方向、色温、明暗关系、阴影特征"],
-                        "material": ["type": "string", "description": "材质/画质：纹理细节、摄影或插画风格"],
-                        "text": ["type": "string", "description": "画面文字：要渲染的精确文案 + 位置（用户没给就不填）"],
-                        "negative": ["type": "string", "description": "排除项：不要出现的内容，以「禁止」开头"],
-                    ],
-                    "required": ["subject", "setting", "composition", "lighting", "material"],
-                ],
+                "structured": imageStructuredSchema,
             ],
-            "required": [],
+            "required": ["prompt", "structured", "aspect_ratio"],
         ],
     ]
 
     /// ② 图生图编辑：source 必须明确指定底图（enum 强制，不再靠两个 boolean 猜）
     static let imageEditFunction: [String: Any] = [
         "name": "image_edit",
-        "description": "编辑已有图片（改风格/加元素/去元素/换背景）。**仅当用户明确要求修改/编辑/改某张已有图片时才调用**。**source 必填**：last=最近生成的图、attached=用户上传的图、both=双图融合（底图+上传素材）。用户说「这张图/这张照片」且刚上传过图 → attached；说「刚才那张/你生成的」→ last；要把 Logo/人物加到生成图上 → both。如果用户说「根据这张图做一张新的/全新的海报/名片/封面」，那是生成新图，必须使用 image_generate，禁止用 image_edit。",
+        "description": "对已有图片做局部编辑（换背景、增删元素、修图），并尽量保持未提及区域、主体位置与原图画布。source 必填：last=最近生成图，attached=用户上传图，both=生成图底图+上传素材。source_index 从 1 开始选择本轮附件。若用户想基于原图重新设计一张全新作品，使用 image_generate + source=attached，避免局部编辑的像素保留约束。",
         "parameters": [
             "type": "object",
             "properties": [
-                "prompt": ["type": "string", "description": "编辑指令：具体改什么、在哪里、保持什么不变（会由服务端叠加一致性/阴影/保持/排除约束）"],
-                // 10-23：编辑同样要区分"改展示稿"还是"导出平面成稿"——否则会把白底大画布一起保留
+                "prompt": ["type": "string", "description": "唯一完整的局部编辑指令：说明改什么、哪里改、哪些内容保持；服务端只追加不与修改要求冲突的编辑边界。"],
                 "render_intent": [
                     "type": "string",
                     "enum": ["flat_artwork", "mockup"],
-                    "description": "编辑目标形态。flat_artwork=把作品从原图场景中取出来做成可直接交付的平面稿（去掉外部白底/桌面/投影，按比例重新排布）；mockup=保留原图场景与摆放，只改用户指定部分。用户说“导出成能印刷的/去掉白边/只要名片本身”用 flat_artwork。",
+                    "description": "按用户实际目标选择。flat_artwork=将作品整理为独立平面设计稿；mockup=保留原图中的展示环境，只改用户指定内容。未要求改变原图展示形态时，不要擅自移除场景。",
                 ],
                 "aspect_ratio": [
                     "type": "string",
-                    "description": "目标画布比例：1:1、3:4、4:3、9:16、16:9、1.7:1。不填则沿用原图比例。",
+                    "description": "目标画布比例。仅用户明确要求改比例时填写；未要求改变时沿用原图比例。可填写常用比例或等价比例。",
                 ],
-                // 10-24 混合路由：让模型按意图选档；不传则由服务端按关键词保守推断
                 "quality_tier": [
                     "type": "string",
                     "enum": ["fast", "high"],
-                    "description": "画质档位。fast=更快更省，适合图标/插画/普通海报/封面/示意图（默认）；high=更精细，适合印刷物料、logo/标志/商标、名片、包装、画册、展架、需要大量文字或复杂场景。**用户没明确要求高质量时不要传**，交给服务端判断。",
+                    "description": "仅在用户明确指定速度/精度，或任务本身对细节精度有明确要求时选择；不要根据固定素材类别套用档位。未指定时省略，由当前服务端路由策略决定。",
                 ],
                 "source": [
                     "type": "string",
                     "enum": ["last", "attached", "both"],
                     "description": "底图来源：last=最近生成 | attached=用户上传 | both=双图融合（第一张为底图，第二张为叠加素材）",
                 ],
+                "source_index": [
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 6,
+                    "description": "source=attached/both 时选择本轮第几张图片，按附件显示顺序从 1 开始。",
+                ],
+                "structured": imageStructuredSchema,
             ],
             "required": ["prompt", "source"],
         ],
@@ -666,6 +699,7 @@ final class ChatService {
             "properties": [
                 "prompt": ["type": "string", "description": "说明要拆哪些元素（可选；不填则整体拆分）"],
                 "source": ["type": "string", "enum": ["last", "attached"], "description": "拆分哪张图：last=最近生成 | attached=用户上传"],
+                "source_index": ["type": "integer", "minimum": 1, "maximum": 6, "description": "source=attached 时的附件序号，从 1 开始。"],
             ],
             "required": ["source"],
         ],

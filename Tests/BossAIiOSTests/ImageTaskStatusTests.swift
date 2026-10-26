@@ -68,8 +68,11 @@ final class ImageEditAspectPolicyTests: XCTestCase {
         XCTAssertFalse(plan.allowCrop, "用户没要求改比例就不许裁切")
         XCTAssertNotNil(plan.targetSize, "必须给出显式像素尺寸，比例才锁得住")
         XCTAssertFalse(plan.aspectRatio.hasPrefix("1:1"), "编辑任务绝不能再默认 1:1")
-        XCTAssertTrue(plan.prompt.contains("不裁切"), "提示词必须带几何约束")
-        XCTAssertFalse(plan.prompt.contains("画面比例 1:1"), "不能写死 1:1 这种重构指令")
+        XCTAssertEqual(plan.prompt, "把背景换成海边", "Planner 不得给用户提示词追加互相冲突的语义")
+        let dimensions = (plan.targetSize ?? "").split(separator: "x").compactMap { Double($0) }
+        guard dimensions.count == 2 else { return XCTFail("targetSize must contain width and height") }
+        XCTAssertEqual(dimensions[0] / dimensions[1], 4.0 / 3.0, accuracy: 0.01,
+                       "几何约束通过结构化尺寸参数传递")
     }
 
     func testModelSuppliedRatioIsIgnoredForEdit() {
@@ -92,6 +95,26 @@ final class ImageEditAspectPolicyTests: XCTestCase {
         XCTAssertTrue(plan.allowCrop, "用户明确要方图，才允许裁切")
         XCTAssertEqual(plan.aspectRatio, "1:1")
         XCTAssertFalse(plan.preserveSourceAspect)
+    }
+
+    func testExplicitPortraitOrientationOverridesAgentRatioForReferenceRedesign() {
+        let plan = ImageTaskPlanner.plan(userText: "重新设计这张海报，改成竖版",
+                                         referenceCount: 1,
+                                         aspectRatio: "1:1",
+                                         sourceSize: landscape,
+                                         userSaid: "重新设计这张海报，改成竖版",
+                                         preferReferenceRedesign: true)
+        XCTAssertEqual(plan.taskType, .reference)
+        XCTAssertEqual(plan.aspectRatio, "9:16", "用户方向必须压过 Agent 的 1:1 建议")
+        XCTAssertTrue(plan.allowCrop, "用户明确要求改变画布方向才授权改比例")
+        XCTAssertFalse(plan.preserveSourceAspect)
+    }
+
+    func testExplicitLandscapeOrientationOverridesAgentRatioForGeneration() {
+        let plan = ImageTaskPlanner.plan(userText: "做一张科技封面，横版",
+                                         aspectRatio: "1:1",
+                                         userSaid: "做一张科技封面，横版")
+        XCTAssertEqual(plan.aspectRatio, "16:9", "用户明确横版时不能被 Agent 的方图参数覆盖")
     }
 
     func testSixteenByNinePhotoNotForcedToSquare() {

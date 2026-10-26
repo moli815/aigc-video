@@ -5,8 +5,8 @@ import XCTest
 // ImageTaskPlannerTests —— 图片任务规划器的规则回归（2026-10-24 新增）
 //
 // 规划器是纯函数（不联网、不调模型），所以这里能给出确定性断言。
-// 覆盖五类任务 + 参数推断 + 追问：
-//   文生图 / 编辑 / 参考图 / 海报 / 组图，以及比例、张数、档位、文字策略、保留约束。
+// 覆盖四种执行语义 + 参数推断 + 追问：
+//   文生图 / 编辑 / 参考图 / 组图；物料名称不创建额外执行分支。
 // ============================================================================
 
 final class ImageTaskPlannerTests: XCTestCase {
@@ -17,38 +17,100 @@ final class ImageTaskPlannerTests: XCTestCase {
         let plan = ImageTaskPlanner.plan(userText: "画一只橘猫坐在窗台看夕阳，写实摄影")
         XCTAssertEqual(plan.taskType, .generate)
         XCTAssertEqual(plan.outputCount, 1)
-        XCTAssertFalse(plan.preserveOriginal)
-        XCTAssertEqual(plan.textPolicy, .avoid)
     }
 
     func testEditWithReferenceImage() {
         let plan = ImageTaskPlanner.plan(userText: "把这张照片的背景改成海边，人物保持不变", referenceCount: 1)
         XCTAssertEqual(plan.taskType, .edit)
-        XCTAssertTrue(plan.preserveOriginal, "编辑任务必须保留原图约束")
-        XCTAssertTrue(plan.negativeConstraints.contains { $0.contains("不要改变人物面部特征") })
         XCTAssertEqual(plan.qualityTier, "high", "编辑走高质量档")
     }
 
     func testReferenceStyleTransfer() {
         let plan = ImageTaskPlanner.plan(userText: "参考这张图的配色，生成一张科技封面", referenceCount: 1)
         XCTAssertEqual(plan.taskType, .reference, "说的是借风格，不该判成编辑")
-        XCTAssertFalse(plan.preserveOriginal)
     }
 
-    func testPosterForcesProgrammaticText() {
+    func testPosterRedesignWithSourceKeepsReferenceSemanticsAndSourceCanvas() {
+        let plan = ImageTaskPlanner.plan(userText: "创建一张现代科技风格海报",
+                                         referenceCount: 1,
+                                         sourceSize: (width: 1600, height: 900),
+                                         userSaid: "帮我重新设计一下这张海报")
+        XCTAssertEqual(plan.taskType, .reference, "原图重设计不是纯文生图，也不是像素级局部编辑")
+        XCTAssertTrue(plan.preserveSourceAspect, "未要求改比例时沿用原图画布")
+        XCTAssertEqual(plan.aspectRatio, "1600:900", "不能被海报默认 3:4 覆盖")
+    }
+
+    func testAgentRewriteCannotEraseOriginalReferenceIntent() {
+        let plan = ImageTaskPlanner.plan(userText: "生成一张新的蓝色企业宣传图",
+                                         referenceCount: 1,
+                                         sourceSize: (width: 1200, height: 800),
+                                         userSaid: "基于我上传的原图重新设计")
+        XCTAssertEqual(plan.taskType, .reference)
+        XCTAssertEqual(plan.aspectRatio, "1200:800")
+    }
+
+    func testWholePosterRedesignIsNotMisclassifiedAsPixelEditWhenStyleChanges() {
+        let text = "重新设计这张海报，整体改成简约科技风"
+        let plan = ImageTaskPlanner.plan(userText: text,
+                                         referenceCount: 1,
+                                         sourceSize: (width: 1600, height: 900),
+                                         userSaid: text)
+        XCTAssertEqual(plan.taskType, .reference)
+        XCTAssertTrue(plan.preserveSourceAspect)
+    }
+
+    func testAttachedImageGenerateToolMeansReferenceCreationUnlessUserSaysLocalOnly() {
+        let plan = ImageTaskPlanner.plan(userText: "极简科技风企业海报",
+                                         referenceCount: 1,
+                                         sourceSize: (width: 1600, height: 900),
+                                         userSaid: "帮我重新设计一下",
+                                         preferReferenceRedesign: true)
+        XCTAssertEqual(plan.taskType, .reference)
+        XCTAssertTrue(plan.preserveSourceAspect)
+    }
+
+    func testReferenceWithUnrepresentableSourceCanvasRequiresExplicitUserChoice() {
+        let plan = ImageTaskPlanner.plan(userText: "重新设计这张图",
+                                         referenceCount: 1,
+                                         sourceSize: (width: 9000, height: 200),
+                                         userSaid: "重新设计这张图")
+        XCTAssertTrue(plan.needsClarification)
+        XCTAssertTrue(plan.preserveSourceAspect)
+        XCTAssertNil(plan.targetSize)
+        XCTAssertTrue(plan.clarification?.contains("极端比例") == true)
+    }
+
+    func testExplicitLocalOnlyChangeRemainsPixelEdit() {
+        let text = "重新设计这张照片，只把背景换成海边，其余部分保持原样"
+        let plan = ImageTaskPlanner.plan(userText: text,
+                                         referenceCount: 1,
+                                         sourceSize: (width: 1200, height: 800),
+                                         userSaid: text)
+        XCTAssertEqual(plan.taskType, .edit)
+        XCTAssertTrue(plan.preserveSourceAspect)
+    }
+
+    func testArtworkNamesDoNotCreateSpecialPlannerBranches() {
         let plan = ImageTaskPlanner.plan(userText: "做一张 AI 职业培训宣传海报，价格 2999 元")
-        XCTAssertEqual(plan.taskType, .poster)
-        XCTAssertEqual(plan.textPolicy, .programmatic, "海报文字必须程序排版")
-        XCTAssertEqual(plan.qualityTier, "high")
-        XCTAssertEqual(plan.aspectRatio, "3:4")
-        XCTAssertTrue(plan.prompt.contains("不要绘制任何文字"), "海报提示词必须禁止模型画字")
+        XCTAssertEqual(plan.taskType, .generate)
+        XCTAssertEqual(plan.qualityTier, "auto")
+        XCTAssertEqual(plan.aspectRatio, "1:1", "缺少比例意图时仅使用通用默认，不按物料类型强制竖版")
+        XCTAssertEqual(plan.prompt, "做一张 AI 职业培训宣传海报，价格 2999 元",
+                       "规划器只分类和归一参数，不再生成第二份提示词")
+    }
+
+    func testBusinessCardUsesAgentOrUserAspectWithoutCardSpecificRules() {
+        let plan = ImageTaskPlanner.plan(userText: "帮我重新设计一张名片",
+                                         aspectRatio: "3:2")
+        XCTAssertEqual(plan.taskType, .generate)
+        XCTAssertEqual(plan.aspectRatio, "3:2", "名片一词不得覆盖 Agent 对用户需求的比例规划")
+        XCTAssertEqual(plan.qualityTier, "auto", "名片一词不得静默触发专属质量档位")
     }
 
     func testSeriesWithCount() {
         let plan = ImageTaskPlanner.plan(userText: "生成四张风格统一的 AI 科普封面")
         XCTAssertEqual(plan.taskType, .series)
         XCTAssertEqual(plan.outputCount, 4)
-        XCTAssertTrue(plan.negativeConstraints.contains { $0.contains("统一配色") })
     }
 
     // MARK: - 参数推断
@@ -94,14 +156,13 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertNil(plan.clarification)
     }
 
-    // MARK: - 提示词只加约束、不编造内容
+    // MARK: - 提示词由 Agent 单独负责，规划器不二次改写
 
-    func testPromptKeepsUserWordsAndAddsDirectives() {
+    func testPlannerPreservesPromptWithoutAppendingCompetingDirectives() {
         let text = "画一只橘猫坐在窗台看夕阳"
         let plan = ImageTaskPlanner.plan(userText: text)
-        XCTAssertTrue(plan.prompt.contains(text), "用户原话必须保留")
-        XCTAssertTrue(plan.prompt.contains("画面比例"), "应补充比例要求")
-        XCTAssertFalse(plan.prompt.contains("橘猫坐在沙发上"), "不得替用户编造画面内容")
+        XCTAssertEqual(plan.prompt, text)
+        XCTAssertFalse(plan.prompt.contains("画面比例"), "比例走结构化请求参数，不能重复写入 prompt")
     }
 
     // MARK: - 与服务端 task_kind 的映射（规划类型必须能落到服务端认识的四个值）
@@ -110,8 +171,7 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertEqual(ImageService.taskKind(for: .generate), "generate")
         XCTAssertEqual(ImageService.taskKind(for: .edit), "edit")
         XCTAssertEqual(ImageService.taskKind(for: .series), "series")
-        XCTAssertEqual(ImageService.taskKind(for: .reference), "generate", "参考图生成走普通生成")
-        XCTAssertEqual(ImageService.taskKind(for: .poster), "generate", "海报底图仍走生成，文字由排版层负责")
+        XCTAssertEqual(ImageService.taskKind(for: .reference), "reference", "参考图创作需与局部编辑区分")
     }
 
     // MARK: - 质量档位契约（10-25 修复：服务端只认 auto/fast/high）

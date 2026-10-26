@@ -72,7 +72,8 @@ const SIZE_MAX_EDGE = 4096;
  * 现在低于下限时按比例**放大**到刚好满足，而不是直接拒绝（用户意图仍然被尊重）。
  */
 const SIZE_MIN_PIXELS = 921_600;
-const SIZE_MAX_PIXELS = 4_200_000;
+// Seedream 5.0 Pro's documented 2K canvas can reach 4,622,220 pixels.
+const SIZE_MAX_PIXELS = 4_622_220;
 
 /** 显式像素尺寸钳制：非法/越界返回 null（由调用方回落默认档位） */
 function clampExplicitSize(raw) {
@@ -142,49 +143,6 @@ function decodedSizeAllowed(size) {
   return true;
 }
 
-// ── 质量档位推断 ──
-/**
- * 10-24：服务端的"智能分配"层。
- *
- * 背景：真正的档位信息（用户到底要做什么）在 prompt 里，但服务端之前完全不读它 ——
- * 只要 App 不传 quality_tier 就一律走 fast，等于没有分配逻辑。
- *
- * 这里做的是**保守推断**，只在两种明确场景下介入：
- *   · 印刷/品牌物料 → 升 Pro（这类场景画质和文字准确性直接决定能不能用，省这 0.15 不值）
- *   · 明确说"草稿/示意/随便" → 留 Flash
- *   · 其余一律不判断，交给默认（fast）
- *
- * 注意：这是**兜底**，不是主路径。主路径应当是 App 侧把 quality_tier 传上来
- * （LLM 读得懂意图，比关键词准）。App 传了就优先用 App 的。
- */
-/**
- * 10-24 实测校准：**"海报"被移出自动升级名单**。
- *
- * 三组场景对比（Flash vs Pro，同一 prompt）后发现：
- *   · 咖啡店开业海报：Flash 14.6s/¥0.3 的成品已接近可直接交付
- *     （书法体、中英混排、卖点排版全部正确）
- *   · Pro 22.8s/¥0.45 的优势不在清晰度，而在"场景更丰富、文字更多"
- *   · 中文文字场景同理：Flash 的「新品上市」字形正确、质感到位
- *
- * 结论：海报/封面/传单/banner 这类**平面设计稿**，Flash 已经够用。
- * 只有真正需要印刷精度、矢量感、多面排版的物料才值得升 Pro。
- * 把高频词"海报"留在名单里 = 让用户多花钱却感知不到明显提升。
- */
-const PRINT_INTENT_RE = /印刷|画册|包装|logo|标志|商标|VI|主视觉|KV|易拉宝|展架|门头|证书|名片/i;
-const DRAFT_INTENT_RE = /草稿|示意|草图|大概|随便|快速|占位|先看个效果/i;
-
-function inferQualityTier(prompt, renderIntent) {
-  const p = String(prompt || "");
-  if (!p) return "";
-  // render_intent 已被显式判为平面成稿 → 属于交付级物料
-  if (String(renderIntent || "") === "flat_artwork" && p.length > 0) {
-    if (PRINT_INTENT_RE.test(p)) return "high";
-  }
-  if (PRINT_INTENT_RE.test(p)) return "high";
-  if (DRAFT_INTENT_RE.test(p)) return "fast";
-  return "";
-}
-
 module.exports = {
   ALLOWED_FETCH_SUFFIXES,
   isPrivateHost,
@@ -198,5 +156,4 @@ module.exports = {
   DECODE_MAX_PIXELS,
   probeImageSize,
   decodedSizeAllowed,
-  inferQualityTier,
 };

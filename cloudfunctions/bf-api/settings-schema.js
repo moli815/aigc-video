@@ -12,7 +12,7 @@
 // ── 分区（管理员视角的业务分类，不按代码变量名分）──
 const SECTIONS = [
   { id: "model_provider", title: "模型与服务商", desc: "对话/生图/向量用哪个平台、哪个模型、走哪个端点。换平台只改这里，App 无需发版。" },
-  { id: "generation", title: "生成与性能", desc: "超时、重试、提速模式、提示词增强、图片尺寸与压缩质量，以及用户看到的进度文案。" },
+  { id: "generation", title: "生成与性能", desc: "超时、重试、提速模式、图片尺寸与压缩质量，以及用户看到的进度文案。" },
   { id: "context_rules", title: "上下文与回答规则", desc: "上下文压缩策略与全局回答规则。长文本改动影响所有对话，建议小步调整并观察。" },
   { id: "membership_cost", title: "会员、额度与成本", desc: "对会员记账的价格、额度池与提醒线。注意区分「向会员计价」和「供应商实际成本」。" },
   { id: "security_limits", title: "权限、安全与限流", desc: "能力总开关、单账号限流、服务时段与自动审核。改动直接影响用户可用性。" },
@@ -33,7 +33,7 @@ const SECTION_OF = {
   generation: [
     "APP_CHAT_TIMEOUT", "APP_CHAT_FIRST_TOKEN_TIMEOUT", "APP_IMAGE_TIMEOUT",
     "APP_STREAM_RETRY", "APP_IMAGE_RETRY", "APP_IMAGE_VERIFY",
-    "IMAGE_FAST_MODE", "IMAGE_PROMPT_ENHANCE", "IMAGE_SIZE", "IMAGE_PRICE_FAST",
+    "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_PRICE_FAST",
     "IMAGE_MAX_EDGE", "IMAGE_QUALITY", "IMAGE_MAX_PIXELS", "IMAGE_2K_PIXELS",
     "IMGPROG_STAGE1", "IMGPROG_STAGE2", "IMGPROG_STAGE3", "IMGPROG_ETA",
   ],
@@ -103,8 +103,6 @@ const META = {
     description: "运维止损用。flash_only 可在高质量模型故障时立刻把全站切到快速档；pro_only 用于临时提质量对比。" },
   IMAGE_FAST_MODE: { title: "生图提速模式", widget: "toggle", risk: "medium",
     description: "开启=fast（更快）；关闭=standard（质量优先）。由 bf-image 实际读取。" },
-  IMAGE_PROMPT_ENHANCE: { title: "生图提示词增强", widget: "toggle", risk: "medium",
-    description: "短提示词由轻量模型补全构图/光影。需同时配置 CHAT_API_KEY 与 CHAT_MODEL_UTILITY_LITE，否则自动跳过。" },
   IMAGE_SIZE: { title: "生图默认尺寸", widget: "enum", enum: ["1K", "1.5K", "2K"], risk: "high",
     description: "客户端不再传尺寸，统一由这里决定。1.5K 与 1K 同价、画质更好；2K 单价更高。" },
   IMAGE_MAX_EDGE: { title: "参考图压缩长边", widget: "number", min: 256, max: 4096, step: 64, unit: "像素", risk: "low",

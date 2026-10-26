@@ -17,10 +17,9 @@ import Foundation
 /// 支持文生图；火山 Seedream 支持参考图编辑（多轮改图）；云端模式支持组图编排。
 /// 单图类任务（文生图 / 编辑 / 参考图 / 图层拆分）的**不可变参数集**。
 ///
-/// 边界（10-25 明确）：**组图（image_series）不走这里**——它有自己的
-/// `runSeriesTask` 子任务编排（逐张 step + 部分成功 + 失败项重试），
-/// 用 `requestedCount` 表达"这次要几张"对它没有意义。名片也不走这里：
-/// 名片是 `/poster` 底图 + `BusinessCardRenderer` 排版，不经过图片模型重试链。
+/// 边界：**组图（image_series）不走这里**——它有自己的
+/// `runSeriesTask` 子任务编排（逐张 step + 部分成功 + 失败项重试）。
+/// 其他单图任务共享这一契约；需要精确可见文案时，另由通用文字后处理完成。
 ///
 /// 为什么需要它：视觉复核失败后的重试曾经只传 prompt/aspectRatio，
 /// 把 taskKind、qualityTier、requestedCount 全丢了 —— 于是"Pro 编辑重试变成普通生图"、
@@ -38,26 +37,14 @@ struct ImageRequestContext {
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
 
-    // ── 10-25：文字密度分流（由大模型判定，不看 taskType）──
-    /// none / low / high
-    let textDensity: String
-    /// 文字是否必须精确可读
-    let textAccuracyRequired: Bool
-    /// 需要程序绘制的文字（字段名 → 原文），为空表示不叠字
-    let extractedText: [String: String]
-    /// 是否需要"无字底图 + 程序排版"
-    let needsTextOverlay: Bool
     /// 10-25 几何保护：显式像素尺寸（"1200x800"）。
-    /// 有值时请求走 size 字段、**不再发 aspect_ratio**——服务端只有 6 种预设比例，
-    /// 发比例就等于允许模型重新构图（横版照片被拉成 1:1 的根源）。
+    /// 有值时请求走 size 字段，精确保留来源画布比例；服务端再按该尺寸请求模型。
     let targetSize: String?
 
-    /// 显式 init：4 个文字字段带默认值，既有调用点零改动；一旦构造即不可变。
+    /// 显式初始化不可变请求契约；文字排版状态不属于模型请求参数。
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
-         textDensity: String = "low", textAccuracyRequired: Bool = false,
-         extractedText: [String: String] = [:], needsTextOverlay: Bool = false,
          targetSize: String? = nil) {
         self.prompt = prompt
         self.references = references
@@ -68,10 +55,6 @@ struct ImageRequestContext {
         self.renderIntent = renderIntent
         self.structured = structured
         self.layerDecomposition = layerDecomposition
-        self.textDensity = textDensity
-        self.textAccuracyRequired = textAccuracyRequired
-        self.extractedText = extractedText
-        self.needsTextOverlay = needsTextOverlay
         self.targetSize = targetSize
     }
 
@@ -86,37 +69,60 @@ struct ImageRequestContext {
                             renderIntent: renderIntent,
                             structured: structured,
                             layerDecomposition: layerDecomposition,
-                            textDensity: textDensity,
-                            textAccuracyRequired: textAccuracyRequired,
-                            extractedText: extractedText,
-                            needsTextOverlay: needsTextOverlay,
                             targetSize: targetSize)
     }
 
-    /// 派生：写入文字分流结果（保持不可变语义，返回新实例）
-    func withTextPlan(density: String,
-                      accuracyRequired: Bool,
-                      extracted: [String: String],
-                      needsOverlay: Bool) -> ImageRequestContext {
-        ImageRequestContext(prompt: prompt,
-                            references: references,
-                            taskKind: taskKind,
-                            qualityTier: qualityTier,
-                            requestedCount: requestedCount,
-                            aspectRatio: aspectRatio,
-                            renderIntent: renderIntent,
-                            structured: structured,
-                            layerDecomposition: layerDecomposition,
-                            textDensity: density,
-                            textAccuracyRequired: accuracyRequired,
-                            extractedText: extracted,
-                            needsTextOverlay: needsOverlay,
-                            targetSize: targetSize)
+    /// Builds a text-free background request: remove exact display copy from both prompt
+    /// sources while retaining visual direction such as composition, lighting, and style.
+    func forTextlessBackground(items: [TextItem]) -> ImageRequestContext {
+        var backgroundPrompt = prompt
+        let visibleCopy = Set(items.flatMap { item in
+            let full = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let separators = CharacterSet.newlines.union(CharacterSet(charactersIn: "，,；;。"))
+            let fragments = item.text.components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { $0.count >= 3 }
+            return ([full] + fragments).filter { $0.count >= 3 }
+        })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.count > $1.count }
+        for text in visibleCopy {
+            backgroundPrompt = backgroundPrompt.replacingOccurrences(of: text, with: " ")
+        }
+        var visualFields = structured ?? [:]
+        visualFields.removeValue(forKey: "text")
+        visualFields = visualFields.mapValues { Self.removingVisibleCopy($0, values: visibleCopy) }
+        return ImageRequestContext(prompt: backgroundPrompt,
+                                   references: references,
+                                   taskKind: taskKind,
+                                   qualityTier: qualityTier,
+                                   requestedCount: requestedCount,
+                                   aspectRatio: aspectRatio,
+                                   renderIntent: renderIntent,
+                                   structured: visualFields.isEmpty ? nil : visualFields,
+                                   layerDecomposition: layerDecomposition,
+                                   targetSize: targetSize)
+    }
+
+    private static func removingVisibleCopy(_ value: Any, values: [String]) -> Any {
+        if let text = value as? String {
+            return values.reduce(text) { partial, visible in
+                partial.replacingOccurrences(of: visible, with: " ")
+            }
+        }
+        if let dictionary = value as? [String: Any] {
+            return dictionary.mapValues { removingVisibleCopy($0, values: values) }
+        }
+        if let array = value as? [Any] {
+            return array.map { removingVisibleCopy($0, values: values) }
+        }
+        return value
     }
 
     /// 派生重试上下文：除 prompt 追加说明外，**其余参数原样继承**
     func retrying(note: String) -> ImageRequestContext {
-        // 重试必须继承文字分流结果，不能重新推断；一次性构造，不逐字段赋值
+        // 重试只能改变 prompt，不逐字段赋值或重新推断请求参数。
         return ImageRequestContext(prompt: prompt + "\n\n【重要修正】" + note,
                                    references: references,
                                    taskKind: taskKind,
@@ -126,10 +132,6 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: structured,
                                    layerDecomposition: layerDecomposition,
-                                   textDensity: textDensity,
-                                   textAccuracyRequired: textAccuracyRequired,
-                                   extractedText: extractedText,
-                                   needsTextOverlay: needsTextOverlay,
                                    targetSize: targetSize)
     }
 }
@@ -141,6 +143,7 @@ final class ImageService {
         case badResponse(Int, String)
         case noImage
         case unsupportedEdit
+        case unsupportedAspectRatio
         /// 云端会员模式的结构化错误（历史形态，保留兼容）
         case hosted(Int, String, String)
         /// 10-24：带完整信封（actions / requestId / retryable）的云端错误
@@ -154,6 +157,7 @@ final class ImageService {
         var errorDescription: String? {
             switch self {
             case .unsupportedEdit: return "当前作图服务不支持参考图编辑，请切换支持编辑的服务商。"
+            case .unsupportedAspectRatio: return "当前图像服务无法准确应用这个画布比例，请切换支持该比例的服务商或改用常见比例。"
             case .missingKey: return "未配置作图 API Key"
             case .badResponse(let code, let body): return "生图失败（\(code)）：\(body.prefix(300))"
             case .noImage: return "生图接口未返回图片"
@@ -312,42 +316,36 @@ final class ImageService {
         // 组图是串行生成，超时必须按时长放大，否则客户端先超时、服务端还在跑（会重复扣费）
         request.timeoutInterval = min(600, baseTimeout * Double(count))
 
-        var body: [String: Any] = [
-            "model": profile.model,
-            "prompt": prompt,
-        ]
-        if let structured, !structured.isEmpty {
-            body["structured"] = structured
+        let isHosted = profile.id == "hosted"
+        var body: [String: Any]
+        if isHosted {
+            body = ImageProviderRequestCompiler.hosted(model: profile.model, prompt: prompt,
+                                                       structured: structured, requestId: requestId,
+                                                       layerDecomposition: layerDecomposition,
+                                                       renderIntent: renderIntent, aspectRatio: aspectRatio,
+                                                       taskKind: taskKind, qualityTier: qualityTier,
+                                                       requestedCount: requestedCount, targetSize: targetSize)
+        } else {
+            switch profile.style {
+            case .volc:
+                body = try ImageProviderRequestCompiler.seedream(model: profile.model, prompt: prompt,
+                                                                 references: references, structured: structured,
+                                                                 layerDecomposition: layerDecomposition,
+                                                                 aspectRatio: aspectRatio, taskKind: taskKind,
+                                                                 requestedCount: requestedCount,
+                                                                 targetSize: targetSize)
+            case .zhipu:
+                body = try ImageProviderRequestCompiler.zhipu(model: profile.model, prompt: prompt,
+                                                              references: references, structured: structured,
+                                                              layerDecomposition: layerDecomposition,
+                                                              aspectRatio: aspectRatio, taskKind: taskKind,
+                                                              requestedCount: requestedCount,
+                                                              targetSize: targetSize)
+            }
         }
-        if let requestId, !requestId.isEmpty {
-            body["requestId"] = requestId
-        }
-        if layerDecomposition {
-            body["layer_decomposition"] = true
-        }
-        if let renderIntent, !renderIntent.isEmpty {
-            body["render_intent"] = renderIntent
-        }
-        // 10-25 几何保护：显式像素尺寸优先于比例。
-        // 服务端 resolveSize 会先查 6 种预设比例，命中就按预设尺寸出图（=重新构图/裁切）；
-        // 传 WxH 走 clampExplicitSize，比例与原图一致，才真正锁得住"不裁切"。
-        let explicitSize = (targetSize ?? "").trimmingCharacters(in: .whitespaces)
-        if !explicitSize.isEmpty {
-            body["size"] = explicitSize
-        } else if let aspectRatio, !aspectRatio.isEmpty {
-            body["aspect_ratio"] = aspectRatio
-        }
-        // 10-24 混合路由：任务类型 + 质量偏好交给服务端判断，客户端不指定模型
-        if let taskKind, !taskKind.isEmpty { body["task_kind"] = taskKind }
-        if let qualityTier, !qualityTier.isEmpty { body["quality_tier"] = qualityTier }
-        if let requestedCount, requestedCount > 1 { body["requested_count"] = requestedCount }
 
         switch profile.style {
         case .volc:
-            // 会员模式默认不传 size（尺寸由 bf-image 按云端配置决定），
-            // 但 10-25 起：**显式几何尺寸必须透传**，否则"保证原图比例"只是口头承诺。
-            // 自带 Key 直连上游没有服务端夹取逻辑，保持 2K 规格。
-            if explicitSize.isEmpty, !HostedAccount.isHostedActive { body["size"] = "2K" }
             body["response_format"] = "b64_json"
             body["watermark"] = false
             if !references.isEmpty {
@@ -363,7 +361,6 @@ final class ImageService {
                 body["image"] = uris.count == 1 ? uris[0] : uris
             }
         case .zhipu:
-            if !references.isEmpty { throw ImageError.unsupportedEdit }
             break
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -408,7 +405,7 @@ final class ImageService {
 
     // MARK: - 单图（保持原契约，旧调用点零改动）
 
-    /// 生成图片；reference 非空时为参考图编辑。返回：图片二进制（PNG/JPEG）。
+    /// 执行单图请求；reference 可用于整体重设计，edit 才表示局部编辑。返回图片二进制。
     func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil) async throws -> Data {
         let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
                                             requestId: requestId, layerDecomposition: layerDecomposition,
@@ -460,12 +457,13 @@ final class ImageService {
                            targetSize: plan.targetSize)
     }
 
-    /// 规划类型 → 服务端 task_kind（服务端只认 generate / edit / series / decompose）
+    /// 规划类型 → 服务端 task_kind；reference 与 edit 都可带图，但服务端策略不同。
     static func taskKind(for type: ImageTaskType) -> String {
         switch type {
         case .edit: return "edit"
+        case .reference: return "reference"
         case .series: return "series"
-        case .poster, .reference, .generate: return "generate"
+        case .generate: return "generate"
         }
     }
 

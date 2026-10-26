@@ -68,10 +68,13 @@ test("ROUTE-07 记账与响应记录真实模型", () => {
     "响应未回传模型与路由原因");
 });
 
-test("ROUTE-08 重试沿用首轮模型，避免换模型", () => {
-  // 重试块中间隔着一行长 prompt 拼接，放宽到 1200 字符
-  assert.match(IMAGE, /重试必须沿用首轮选定[\s\S]{0,1200}model: out\.model/,
-    "编辑重试未固定模型");
+test("ROUTE-08 图片相似度只用于诊断，不自动重绘或重复扣费", () => {
+  assert.match(IMAGE, /decision: "diagnostic_only"/,
+    "相似度信号必须标记为诊断用途");
+  assert.doesNotMatch(IMAGE, /edit_over_redraw_retry/,
+    "全图像素差异不能触发第二次模型调用");
+  assert.match(IMAGE, /const retried = false;/,
+    "兼容响应里的 retried 字段应明确表达本链路不做隐式重试");
 });
 
 test("ROUTE-09 bf-api 配置项与管理端 schema 同步", () => {
