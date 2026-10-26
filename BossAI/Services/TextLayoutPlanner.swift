@@ -10,6 +10,7 @@ struct TextBlockSpec {
     var colorHex: String = "#FFFFFF"
     var fontScale: CGFloat = 1
     var backdrop: Bool = true
+    var fontStyle: String? = nil
 
     static func parse(_ raw: [String: Any]) -> TextBlockSpec? {
         guard let key = raw["key"] as? String, !key.isEmpty,
@@ -27,6 +28,7 @@ struct TextBlockSpec {
             block.fontScale = CGFloat(min(1.5, max(0.75, scale)))
         }
         block.backdrop = raw["backdrop"] as? Bool ?? true
+        if let style = raw["fontStyle"] as? String, ["sans", "serif", "rounded"].contains(style) { block.fontStyle = style }
         return block
     }
 }
@@ -39,6 +41,7 @@ struct TextPlacement {
     let alignment: NSTextAlignment
     let colorHex: String
     let backdrop: Bool
+    let fontStyle: String
 }
 
 enum TextLayoutPlanner {
@@ -77,9 +80,11 @@ enum TextLayoutPlanner {
             let bounds = fontRange(role)
             let low = shortEdge * bounds.0
             let high = shortEdge * bounds.1 * block.fontScale
-            let size = try fittedSize(item: item, role: role, frame: frame, minimum: low, maximum: max(low, high), alignment: block.alignment)
+            let style = block.fontStyle ?? layout.fontStyle
+            let size = try fittedSize(item: item, role: role, frame: frame, minimum: low,
+                                     maximum: max(low, high), alignment: block.alignment, fontStyle: style)
             return TextPlacement(item: item, role: role, frame: frame, fontSize: size,
-                                 alignment: block.alignment, colorHex: block.colorHex, backdrop: block.backdrop)
+                                 alignment: block.alignment, colorHex: block.colorHex, backdrop: block.backdrop, fontStyle: style)
         }
     }
 
@@ -94,12 +99,14 @@ enum TextLayoutPlanner {
         return "\n\n【后期文字区域】以下区域稍后由程序排字：\(regions)。为这些区域预留低细节、对比稳定的负空间，视觉主体安排在其他区域。保持用户要求的风格与颜色；不要画文字、伪字、占位字或文本框。"
     }
 
-    static func attributes(role: TextItem.Role, size: CGFloat, alignment: NSTextAlignment) -> [NSAttributedString.Key: Any] {
+    static func attributes(role: TextItem.Role, size: CGFloat, alignment: NSTextAlignment, fontStyle: String = "sans") -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
         paragraph.alignment = alignment
         paragraph.lineSpacing = size * 0.16
-        let font = UIFont.systemFont(ofSize: size, weight: role == .title ? .bold : (role == .subtitle ? .medium : .regular))
+        var font = UIFont.systemFont(ofSize: size, weight: role == .title ? .bold : (role == .subtitle ? .medium : .regular))
+        let design: UIFontDescriptor.SystemDesign = fontStyle == "serif" ? .serif : (fontStyle == "rounded" ? .rounded : .default)
+        if let descriptor = font.fontDescriptor.withDesign(design) { font = UIFont(descriptor: descriptor, size: size) }
         return [.font: font, .paragraphStyle: paragraph]
     }
 
@@ -109,9 +116,9 @@ enum TextLayoutPlanner {
     }
 
     private static func fittedSize(item: TextItem, role: TextItem.Role, frame: CGRect,
-                                   minimum: CGFloat, maximum: CGFloat, alignment: NSTextAlignment) throws -> CGFloat {
+                                   minimum: CGFloat, maximum: CGFloat, alignment: NSTextAlignment, fontStyle: String) throws -> CGFloat {
         func fits(_ size: CGFloat) -> Bool {
-            let attributes = self.attributes(role: role, size: size, alignment: alignment)
+            let attributes = self.attributes(role: role, size: size, alignment: alignment, fontStyle: fontStyle)
             let measured = self.measured(item.text, width: frame.width, attributes: attributes)
             return ceil(measured.height) <= frame.height && ceil(measured.width) <= frame.width + 1
         }

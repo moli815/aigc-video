@@ -58,6 +58,30 @@ final class TextLayoutPlannerTests: XCTestCase {
         for item in copy { XCTAssertFalse(prompt.contains(item.text)) }
     }
 
+    func testRequestedTypefaceIsSharedByMeasurementAndDrawing() throws {
+        let layout = LayoutSpec.from(["fontStyle": "serif"])
+        let placements = try TextLayoutPlanner.placements(items: copy, layout: layout, canvas: CGSize(width: 2048, height: 1152))
+        XCTAssertTrue(placements.allSatisfy { $0.fontStyle == "serif" })
+    }
+
+    func testLightBackgroundGetsOnlyALocalContrastLayer() throws {
+        let size = CGSize(width: 1200, height: 1200)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let base = UIGraphicsImageRenderer(size: size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+        let items = [TextItem(role: .title, key: "headline", text: "清晰阅读")]
+        let result = try TextOverlayRenderer.render(base: base, items: items, layout: LayoutSpec(),
+            canvas: CanvasSpec(size: size, expectedAspect: 1))
+        let attachment = XCTAttachment(image: result)
+        attachment.name = "design-bright-background-contrast"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(result.cgImage?.width, 1200)
+    }
+
     func testTextModeSurvivesEveryDerivedRequest() {
         let original = ImageRequestContext(prompt: "scene", references: [], taskKind: "reference", qualityTier: "high",
             requestedCount: 1, aspectRatio: "16:9", renderIntent: "flat_artwork", structured: nil, layerDecomposition: false)

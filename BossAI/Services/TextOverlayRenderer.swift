@@ -63,6 +63,7 @@ struct LayoutSpec {
     /// Generic composition, independent of the deliverable's name.
     var preset: String = "editorial"
     var blocks: [TextBlockSpec] = []
+    var fontStyle: String = "sans"
 }
 
 extension LayoutSpec {
@@ -72,6 +73,8 @@ extension LayoutSpec {
         guard let raw else { return spec }
         if let preset = raw["preset"] as? String,
            ["editorial", "centered", "split"].contains(preset) { spec.preset = preset }
+        if let font = raw["fontStyle"] as? String,
+           ["sans", "serif", "rounded"].contains(font) { spec.fontStyle = font }
         spec.blocks = (raw["blocks"] as? [[String: Any]] ?? []).compactMap(TextBlockSpec.parse)
         if let cols = raw["columns"] as? Int, cols == 1 || cols == 2 {
             spec.columns = (cols == 1) ? .one : .two
@@ -184,8 +187,14 @@ enum TextOverlayRenderer {
             base.draw(in: CGRect(origin: .zero, size: size))
             for placement in placements {
                 let color = textColor(placement.colorHex)
-                if placement.backdrop { drawBackdrop(placement.frame, color: color, canvas: size, in: context.cgContext) }
-                var attributes = TextLayoutPlanner.attributes(role: placement.role, size: placement.fontSize, alignment: placement.alignment)
+                var attributes = TextLayoutPlanner.attributes(role: placement.role, size: placement.fontSize,
+                    alignment: placement.alignment, fontStyle: placement.fontStyle)
+                let measured = TextLayoutPlanner.measured(placement.item.text, width: placement.frame.width, attributes: attributes)
+                let textFrame = CGRect(x: placement.frame.minX, y: placement.frame.minY,
+                    width: placement.frame.width, height: min(placement.frame.height, ceil(measured.height)))
+                if placement.backdrop && needsBackdrop(base, frame: textFrame, color: color, canvas: size) {
+                    drawBackdrop(textFrame, color: color, canvas: size, in: context.cgContext)
+                }
                 attributes[.foregroundColor] = color
                 let shadow = NSShadow()
                 shadow.shadowColor = UIColor.black.withAlphaComponent(0.22)
@@ -205,6 +214,36 @@ enum TextOverlayRenderer {
                        blue: CGFloat(rgb & 255) / 255, alpha: 1)
     }
 
+    /// Sample the background beneath the real text, avoiding unconditional opaque cards.
+    private static func needsBackdrop(_ image: UIImage, frame: CGRect, color: UIColor, canvas: CGSize) -> Bool {
+        guard image.imageOrientation == .up, let cg = image.cgImage else { return true }
+        let pixelRect = CGRect(x: frame.minX * CGFloat(cg.width) / canvas.width,
+                               y: frame.minY * CGFloat(cg.height) / canvas.height,
+                               width: frame.width * CGFloat(cg.width) / canvas.width,
+                               height: frame.height * CGFloat(cg.height) / canvas.height)
+        guard let crop = cg.cropping(to: pixelRect) else { return true }
+        var bytes = [UInt8](repeating: 0, count: 8 * 8 * 4)
+        let sampled = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: 8, height: 8, bitsPerComponent: 8,
+                bytesPerRow: 32, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(crop, in: CGRect(x: 0, y: 0, width: 8, height: 8))
+            return true
+        }
+        guard sampled else { return true }
+        func linear(_ value: CGFloat) -> CGFloat { value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4) }
+        func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> CGFloat {
+            0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let foreground = luminance(r, g, b)
+        let readable = stride(from: 0, to: bytes.count, by: 4).filter { index in
+            let background = luminance(CGFloat(bytes[index]) / 255, CGFloat(bytes[index + 1]) / 255, CGFloat(bytes[index + 2]) / 255)
+            return (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05) >= 4.5
+        }.count
+        return readable < 58
+    }
+
     private static func drawBackdrop(_ frame: CGRect, color: UIColor, canvas: CGSize, in context: CGContext) {
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
@@ -213,10 +252,10 @@ enum TextOverlayRenderer {
         let padding = min(canvas.width, canvas.height) * 0.012
         let region = frame.insetBy(dx: -padding, dy: -padding)
         context.saveGState()
-        context.addPath(UIBezierPath(roundedRect: region, cornerRadius: padding).cgPath)
+        context.addRect(region)
         context.clip()
-        let colors = [background.withAlphaComponent(lightText ? 0.52 : 0.88).cgColor,
-                      background.withAlphaComponent(lightText ? 0.18 : 0.50).cgColor] as CFArray
+        let colors = [background.withAlphaComponent(0.62).cgColor,
+                      background.withAlphaComponent(0.22).cgColor] as CFArray
         if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
             context.drawLinearGradient(gradient, start: CGPoint(x: region.midX, y: region.minY),
                                        end: CGPoint(x: region.midX, y: region.maxY), options: [])

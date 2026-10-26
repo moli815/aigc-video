@@ -602,6 +602,7 @@ final class ChatService {
                 "description": "可选文字排版意图，只决定文字布局，不属于画面文案。",
                 "properties": [
                     "preset": ["type": "string", "enum": ["editorial", "centered", "split"], "description": "构图骨架：标题/主视觉/信息带；居中；左右错位分栏。按内容选择。"],
+                    "fontStyle": ["type": "string", "enum": ["sans", "serif", "rounded"], "description": "无衬线/衬线/圆体。按用户风格选择，避免所有作品都套同一字体。"],
                     "blocks": [
                         "type": "array", "description": "可选自由布局，必须覆盖 text 中每个唯一 key。坐标为画布比例，不是像素，区域不得重叠。",
                         "items": ["type": "object", "properties": [
@@ -613,7 +614,8 @@ final class ChatService {
                             "align": ["type": "string", "enum": ["left", "center", "right"]],
                             "color": ["type": "string", "description": "文字色 #RRGGBB，必须与底图有足够对比。"],
                             "fontScale": ["type": "number", "minimum": 0.75, "maximum": 1.5],
-                            "backdrop": ["type": "boolean", "description": "默认 true，以轻量对比底层保证可读性。"],
+                            "fontStyle": ["type": "string", "enum": ["sans", "serif", "rounded"]],
+                            "backdrop": ["type": "boolean", "description": "默认 true，仅在文字与底图对比不足时自动启用轻量底层。"],
                         ], "required": ["key", "x", "y", "width", "height"]],
                     ],
                     "columns": ["type": "integer", "enum": [1, 2]],

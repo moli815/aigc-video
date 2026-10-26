@@ -16,3 +16,5 @@ TestArtifacts/
 
 # 构建产物
 BossAI.zip
+node_modules/
+outputs/
