@@ -169,8 +169,12 @@ enum ImageTaskPlanner {
                                  requestedCount: Int?,
                                  preferReferenceRedesign: Bool) -> ImageTaskType {
         let hasSeriesWord = contains(text, any: seriesWords)
-        let wantsMany = (requestedCount ?? 0) >= 2 || parseCount(text) >= 2
-        if hasSeriesWord || (wantsMany && contains(text, any: ["张", "幅", "组"])) {
+        // 10-26：只认"3 张 / 四幅 / 两组"这类真数量。
+        // 旧实现是 `parseCount>=2 && contains("张")`，于是
+        // 「把这张照片里的女士旁边加一个人」会因"这张"+"两个人"被判成组图，
+        // 单图局部编辑被扩成多张生成（多扣费、还丢掉原图画布约束）。
+        let wantsMany = (requestedCount ?? 0) >= 2 || imageCountHint(text) >= 2
+        if hasSeriesWord || wantsMany {
             return .series
         }
         if referenceCount > 0 {
@@ -193,6 +197,27 @@ enum ImageTaskPlanner {
 
     // MARK: - 参数推断
 
+    /// 真·数量提示：只认「数词 + 张/幅/组」，并排除「这张/那张/几张」这种量词用法。
+    /// 用途只有一处——判断是否是组图；单图任务的数量推断仍走 parseCount。
+    static func imageCountHint(_ text: String) -> Int {
+        let numerals: [Character: Int] = ["一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                                          "1": 1, "2": 2, "3": 3, "4": 4]
+        let chars = Array(text)
+        var best = 1
+        for (i, c) in chars.enumerated() where c == "张" || c == "幅" || c == "组" {
+            var j = i - 1
+            while j >= 0, chars[j] == " " || chars[j] == "\n" { j -= 1 }
+            guard j >= 0, let value = numerals[chars[j]] else { continue }
+            let before = j - 1
+            // 「这张照片」「那两张图」「几张」是量词，不是数量
+            if before >= 0, chars[before] == "这" || chars[before] == "那" || chars[before] == "几" {
+                continue
+            }
+            best = max(best, value)
+        }
+        return min(4, max(1, best))
+    }
+
     /// 解析中文/阿拉伯数字张数，1...4；没提数量返回 1
     static func parseCount(_ text: String) -> Int {
         let map: [(String, Int)] = [("四", 4), ("4", 4), ("三", 3), ("3", 3), ("两", 2), ("二", 2), ("2", 2)]
@@ -212,7 +237,10 @@ enum ImageTaskPlanner {
         if let requested, requested > 0 { return min(4, max(1, requested)) }
         let parsed = parseCount(text)
         if type == .series { return max(2, min(4, parsed == 1 ? 2 : parsed)) }
-        return min(4, max(1, parsed))
+        // 10-26：非组图任务的张数**只**由 Agent 显式指定。
+        // 文案里的"两个人/三个元素"是画面元素，不是要生成几张图；
+        // 旧实现会把「加两个人」当成 2 张来生成（多扣费 + 打乱画布约束）。
+        return 1
     }
 
     /// 质量档位归一化（10-25 契约修复）。

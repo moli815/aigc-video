@@ -75,6 +75,29 @@ final class ImageEditAspectPolicyTests: XCTestCase {
                        "几何约束通过结构化尺寸参数传递")
     }
 
+    /// 回归：单图局部编辑不能被"这张照片 + 两个人"误判成组图。
+    /// 误判后果是生成多张、多扣费，并且丢掉"保留原图画布"的约束。
+    func testSinglePhotoEditIsNotClassifiedAsSeries() {
+        let plan = ImageTaskPlanner.plan(userText: "把这张照片里的女士旁边加一个人",
+                                         referenceCount: 1,
+                                         sourceSize: (4032, 3024),
+                                         userSaid: "在这个人左边 p 一个马云 两个人友好握手")
+        XCTAssertNotEqual(plan.taskType, .series, "「这张照片 + 两个人」不是组图")
+        XCTAssertEqual(plan.outputCount, 1, "单图编辑只能生成 1 张")
+        XCTAssertTrue(plan.preserveSourceAspect)
+        XCTAssertNotNil(plan.targetSize)
+    }
+
+    /// 反向：真正的组图请求仍要识别出来
+    func testRealSeriesStillDetected() {
+        XCTAssertEqual(ImageTaskPlanner.imageCountHint("生成四张风格统一的封面"), 4)
+        XCTAssertEqual(ImageTaskPlanner.imageCountHint("做 3 张同系列海报"), 3)
+        XCTAssertEqual(ImageTaskPlanner.imageCountHint("把这张照片里的人换个背景"), 1)
+        let plan = ImageTaskPlanner.plan(userText: "生成四张风格统一的 AI 科普封面")
+        XCTAssertEqual(plan.taskType, .series)
+        XCTAssertEqual(plan.outputCount, 4)
+    }
+
     func testModelSuppliedRatioIsIgnoredForEdit() {
         // 模型经常顺手传 aspect_ratio=1:1；这不是用户授权，必须忽略
         let plan = ImageTaskPlanner.plan(userText: "把这张照片里的女士旁边加一个人",
