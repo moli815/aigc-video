@@ -55,7 +55,9 @@ test("text overlay background excludes visible copy while retaining visual struc
 
 test("only pixel edits receive edit boundaries; pixel similarity is diagnostic only", () => {
   assert.match(imageFunction, /const isPixelEdit = !!image && String\(taskKind \|\| ""\) === "edit"/);
-  assert.match(imageFunction, /const finalPrompt = basePrompt \+ taskPolicy/);
+  // 10-26：finalPrompt 现在多了"底图无字"这一层，但 EDIT_CONSTRAINTS 仍只给像素编辑
+  assert.match(imageFunction, /const finalPrompt = basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
+  assert.match(imageFunction, /const taskPolicy = isPixelEdit[\s\S]{0,160}EDIT_CONSTRAINTS/);
   assert.match(imageFunction, /if \(out\.ok && body\.image && taskKind === "edit"\)[\s\S]{0,400}decision: "diagnostic_only"/);
   assert.doesNotMatch(imageFunction, /edit_over_redraw_retry/);
   assert.doesNotMatch(imageFunction, /逐像素保持一致，禁止整体重绘/);
@@ -96,4 +98,39 @@ test("exact visible copy is typed instead of flattened into one body paragraph",
   assert.match(baseImageCache, /TextItem\.values\(from: context\.structured\?\["text"\]\)/);
   assert.match(imageFunction, /visibleCopyValues\(structured && structured\.text\)/);
   assert.match(imageFunction, /画面中必须准确呈现以下文字/);
+});
+
+// ── 2026-10-26：海报/重设计质量事故（截图：重设计结果≈原图 + 乱码小字）────────────
+test("reference redesign forbids replicating the source layout/colors", () => {
+  const start = imageFunction.indexOf("const REFERENCE_CONSTRAINTS");
+  const end = imageFunction.indexOf("function readBody", start);
+  const block = imageFunction.slice(start, end);
+  assert.ok(start > 0, "缺少 REFERENCE_CONSTRAINTS");
+  assert.match(block, /必须重新设计整张作品/, "没要求重做整张");
+  assert.match(block, /不复刻参考图的布局/, "没禁止复刻版式");
+  assert.match(block, /用户要求的新风格优先级最高/, "没把用户的新风格设为最高优先");
+  assert.match(block, /不得出现/, "没处理用户明确否定的风格");
+});
+
+test("base image is wordless in overlay mode and never gets copy appended back", () => {
+  const start = imageFunction.indexOf("const overlayMode");
+  const end = imageFunction.indexOf("const resolvedSize", start);
+  const block = imageFunction.slice(start, end);
+  assert.ok(start > 0, "缺少 overlayMode 判定");
+  assert.match(imageFunction, /const NO_TEXT_CONSTRAINTS/, "缺少无字约束常量");
+  assert.match(block, /if \(rawPrompt && !overlayMode\)/, "overlay 模式仍会把精确文案追加回底图 prompt");
+  assert.match(block, /needsNoText/, "缺少无字判定");
+  assert.match(block, /NO_TEXT_CONSTRAINTS/, "无字约束没有被拼进 finalPrompt");
+});
+
+test("client sends text_mode=overlay so the server can strip copy", () => {
+  const compiler = read("BossAI/Services/ImageProviderRequestCompiler.swift");
+  assert.match(compiler, /body\["text_mode"\] = textMode/, "hosted envelope 没有透出 text_mode");
+  assert.match(imageService, /textMode: textMode/, "ImageService 没有把 textMode 传给编译器");
+  assert.match(chatViewModel, /textMode: context\.needsTextOverlay \? "overlay" : nil/,
+    "调用链没有在 overlay 时置 text_mode");
+});
+
+test("reference redesign uses the high quality tier", () => {
+  assert.match(planner, /case \.reference: return "high"/, "参考图重设计仍走低档，细节会明显掉");
 });

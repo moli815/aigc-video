@@ -8,12 +8,23 @@ final class ImageProviderRequestCompilerTests: XCTestCase {
                                                        requestId: "rid-1", layerDecomposition: false,
                                                        renderIntent: "flat_artwork", aspectRatio: "16:9",
                                                        taskKind: "reference", qualityTier: "high",
-                                                       requestedCount: 1, targetSize: nil)
+                                                       requestedCount: 1, targetSize: nil, textMode: nil)
         XCTAssertEqual(body["task_kind"] as? String, "reference")
         XCTAssertEqual(body["quality_tier"] as? String, "high")
         XCTAssertEqual(body["aspect_ratio"] as? String, "16:9")
         XCTAssertEqual(body["requestId"] as? String, "rid-1")
         XCTAssertNil(body["size"])
+    }
+
+    /// overlay = 底图无字；服务端据此不再把精确文案追加回 prompt（否则底图画一遍、排版再画一遍）
+    func testHostedEnvelopeCarriesTextModeForOverlay() {
+        let body = ImageProviderRequestCompiler.hosted(model: "hosted-image", prompt: "poster scene",
+                                                       structured: ["text": [["text": "准确文案"]]],
+                                                       requestId: nil, layerDecomposition: false,
+                                                       renderIntent: "flat_artwork", aspectRatio: "3:4",
+                                                       taskKind: "generate", qualityTier: "high",
+                                                       requestedCount: 1, targetSize: nil, textMode: "overlay")
+        XCTAssertEqual(body["text_mode"] as? String, "overlay")
     }
 
     func testSeedreamUsesNativePixelsAndDoesNotLeakHostedEnvelopeFields() throws {

@@ -13,7 +13,8 @@ enum ImageProviderRequestCompiler {
                        taskKind: String?,
                        qualityTier: String?,
                        requestedCount: Int?,
-                       targetSize: String?) -> [String: Any] {
+                       targetSize: String?,
+                       textMode: String?) -> [String: Any] {
         var body: [String: Any] = ["model": model, "prompt": prompt]
         if let structured, !structured.isEmpty { body["structured"] = structured }
         if let requestId, !requestId.isEmpty { body["requestId"] = requestId }
@@ -24,6 +25,8 @@ enum ImageProviderRequestCompiler {
         } else if let aspectRatio, !aspectRatio.isEmpty {
             body["aspect_ratio"] = aspectRatio
         }
+        // overlay = 底图必须无字，文案由客户端排版层绘制；服务端据此不再把文案塞回 prompt
+        if let textMode, !textMode.isEmpty { body["text_mode"] = textMode }
         if let taskKind, !taskKind.isEmpty { body["task_kind"] = taskKind }
         if let qualityTier, !qualityTier.isEmpty { body["quality_tier"] = qualityTier }
         if let requestedCount, requestedCount > 1 { body["requested_count"] = requestedCount }

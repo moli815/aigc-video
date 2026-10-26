@@ -318,6 +318,7 @@ enum ImageTaskPlanner {
         }
         switch type {
         case .edit: return "high"        // 编辑要尽量保真，走高质量档
+        case .reference: return "high"   // 基于参考图重新设计成品，质量优先（低档会明显掉细节）
         case .series: return "auto"      // 组图由服务端的 series 模型决定
         default: return "auto"
         }

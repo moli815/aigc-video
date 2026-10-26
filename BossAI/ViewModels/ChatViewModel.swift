@@ -364,7 +364,8 @@ final class ChatViewModel: ObservableObject {
                                          taskKind: context.taskKind,
                                          qualityTier: context.qualityTier,
                                          requestedCount: context.requestedCount,
-                                         targetSize: context.targetSize)
+                                         targetSize: context.targetSize,
+                                         textMode: context.needsTextOverlay ? "overlay" : nil)
     }
 
     /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。

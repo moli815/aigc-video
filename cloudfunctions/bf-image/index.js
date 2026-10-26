@@ -1112,8 +1112,17 @@ const EDIT_CONSTRAINTS =
   "若用户要求更换背景、色调或光线，则允许对应部分发生变化，不得同时要求该部分保持原样。\n" +
   "新增内容须与场景透视、光照和阴影自然融合；不要添加未提及元素、额外文字或水印。";
 const REFERENCE_CONSTRAINTS =
-  "\n\n【参考图重新设计】把输入图作为主题、主体和关键信息参考，按用户要求重新设计整张作品；" +
-  "允许重新安排构图、版式、颜色和风格，不套用局部编辑的像素保持约束。";
+  "\n\n【参考图重新设计】输入图只提供主题、主体与关键信息，**必须重新设计整张作品**：" +
+  "①重做版式与元素排列，不复刻参考图的布局、图标排布、分割方式；" +
+  "②按用户要求更换配色、光影与美术风格，用户要求的新风格优先级最高；" +
+  "③不要在同一套版式上只改颜色，也不要保留参考图的现成构图；" +
+  "④用户明确否定的风格（如“不要蓝色科技风”）一律不得出现；" +
+  "⑤不套用局部编辑的像素保持约束——这是重新创作，不是修图。";
+
+// 无字底图：需要呈现的文案由客户端排版层绘制；底图里模型画的字必然是垃圾（截图里的乱码小字）
+const NO_TEXT_CONSTRAINTS =
+  "\n\n【画面内不得出现任何文字】不要绘制任何文字、字母、数字、标语、水印或类似文字的装饰物；" +
+  "需要呈现的文案由客户端排版层另行绘制，你只需要留出干净的版面空间。";
 
 function readBody(req, maxBytes) {
   const limit = Number(maxBytes || 20 * 1024 * 1024);
@@ -1183,7 +1192,7 @@ const RENDER_INTENT_RULES = {
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
 };
 
-async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount }) {
+async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode }) {
   const apiKey = String(RT.IMAGE_API_KEY || "");
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
@@ -1240,8 +1249,11 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
+  // 10-26：overlay 模式下底图必须是"无字"的，文案由客户端排版层绘制。
+  // 旧实现会把 missingCopy 追加回 prompt，导致底图出现模型画的乱码小字，排版层再叠一遍。
+  const overlayMode = String(textMode || "") === "overlay";
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
-  if (rawPrompt) {
+  if (rawPrompt && !overlayMode) {
     const missingCopy = visibleCopyValues(structured && structured.text)
       .filter((value) => !rawPrompt.includes(value));
     if (missingCopy.length) {
@@ -1255,7 +1267,11 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const taskPolicy = isPixelEdit
     ? EDIT_CONSTRAINTS
     : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : "");
-  const finalPrompt = basePrompt + taskPolicy;
+  // 底图一律无字：overlay 模式必然无字；平面成稿且没有任何精确文案时也不许模型自己编字
+  const hasVisibleCopy = visibleCopyValues(structured && structured.text).length > 0;
+  const needsNoText = overlayMode
+    || (String(renderIntent || "") === "flat_artwork" && !hasVisibleCopy);
+  const finalPrompt = basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
 
   const resolvedSize = resolveSize(size, aspectRatio);
   if (!resolvedSize) {
@@ -1905,6 +1921,7 @@ const server = http.createServer(async (req, res) => {
       prompt: body.prompt, image: body.image, size: body.size, structured: body.structured,
       renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
       taskKind, qualityTier, requestedCount,
+      textMode: String(body.text_mode || ""),
     });
     // 能力不支持：任务已在路由阶段被拦下，这里不再重试、不再吞成 502
     if (!out.ok && out.unsupported) {

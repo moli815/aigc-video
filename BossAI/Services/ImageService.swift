@@ -281,7 +281,8 @@ final class ImageService {
                              taskKind: String?,
                              qualityTier: String?,
                              requestedCount: Int?,
-                             targetSize: String? = nil) async throws -> URLRequest {
+                             targetSize: String? = nil,
+                             textMode: String? = nil) async throws -> URLRequest {
         let apiKey: String
         if profile.id == "hosted" {
             guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
@@ -324,7 +325,8 @@ final class ImageService {
                                                        layerDecomposition: layerDecomposition,
                                                        renderIntent: renderIntent, aspectRatio: aspectRatio,
                                                        taskKind: taskKind, qualityTier: qualityTier,
-                                                       requestedCount: requestedCount, targetSize: targetSize)
+                                                       requestedCount: requestedCount, targetSize: targetSize,
+                                                       textMode: textMode)
         } else {
             switch profile.style {
             case .volc:
@@ -406,12 +408,13 @@ final class ImageService {
     // MARK: - 单图（保持原契约，旧调用点零改动）
 
     /// 执行单图请求；reference 可用于整体重设计，edit 才表示局部编辑。返回图片二进制。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil) async throws -> Data {
         let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
                                             requestId: requestId, layerDecomposition: layerDecomposition,
                                             renderIntent: renderIntent, aspectRatio: aspectRatio,
                                             taskKind: taskKind, qualityTier: qualityTier,
-                                            requestedCount: requestedCount, targetSize: targetSize)
+                                            requestedCount: requestedCount, targetSize: targetSize,
+                                            textMode: textMode)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
