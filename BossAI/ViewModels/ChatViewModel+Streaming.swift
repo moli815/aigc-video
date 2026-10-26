@@ -609,19 +609,21 @@ extension ChatViewModel {
                             if wantsOverlay && !overlayItems.isEmpty {
                                 // 文字密集任务：底图 → 排版，两个真实阶段
                                 imageWait = ImageWaitState(kind: .textOverlay)
+                                let layoutSpec = LayoutSpec.from(structuredArgs?["layout"] as? [String: Any])
+                                let expectedAspect = Self.aspectRatioValue(planAspect)
                                 // 1) 只要底图：prompt 明确禁止任何文字
                                 // prompt 是 let，必须走派生方法，不能原地赋值
                                 let baseCtx = imageCtx
                                     .forTextlessBackground(items: overlayItems)
                                     .appendingPrompt("\n\n【硬约束】画面内不得出现任何文字、字母、数字、标语或水印，只出背景与视觉元素。")
+                                    .appendingPrompt(TextLayoutPlanner.backgroundConstraint(items: overlayItems,
+                                        layout: layoutSpec, aspect: expectedAspect ?? 1))
                                 // ── 10-25 底图缓存接线（BaseImageCache）──
                                 // 目标：排版失败重试、或用户只改文字时，**不再重画底图**（一次 Pro 约 0.45 元 / 20~30 秒）。
                                 // 命中规则由 BaseImageCache 负责：会话 + 任务指纹 + 比例 + 未过期，四条全中才算 hit。
                                 let cache = BaseImageCache.shared
                                 let cacheConversationId = conv.id.uuidString
                                 let cacheTaskId = BaseImageTaskKey.make(context: baseCtx, items: overlayItems)
-                                let expectedAspect = Self.aspectRatioValue(planAspect)
-                                let layoutSpec = LayoutSpec.from(structuredArgs?["layout"] as? [String: Any])
                                 // 要绘制的文字用**本轮最新**的（用户改了电话就必须画新的电话），
                                 // 底图与画布才复用缓存——这才是"只改文字不重画"的正确切分。
                                 // layout 同理用本轮意图：模型这次没说就落回安全默认，不拿旧版式硬套新文案。
@@ -642,7 +644,7 @@ extension ChatViewModel {
                                 } else {
                                     do {
                                         // 底图必须无字：文案由 TextOverlayRenderer 画一次，服务端据此不再把 structured.text 追加回 prompt
-                                        let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService, textMode: "overlay")
+                                        let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
                                         guard let decoded = UIImage(data: base) else {
                                             imageTurnNote = ImageTaskStatus.Failure.generateFailed.message
                                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
@@ -675,8 +677,8 @@ extension ChatViewModel {
                                     guard let png = composed.pngData() else { throw TextOverlayError.renderFailed }
                                     imageData = png
                                     PerformanceTrace.event("text_overlay_completed")
-                                    // 成品已出，底图不再需要 → 精确清掉**这一条**（别的并发任务不受影响）
-                                    cache.markOverlayDoneAndEvict(conversationId: cacheConversationId, taskId: cacheTaskId)
+                                    // TTL/容量负责回收；保留成功底图以便只改文案时复用。
+                                    cache.markOverlayDone(conversationId: cacheConversationId, taskId: cacheTaskId)
                                 } catch {
                                     // 排版失败：明确失败，不退回普通生图伪装成功；
                                     // **缓存保留不动**——下次重试直接复用这张底图重排，这正是缓存存在的理由。

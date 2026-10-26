@@ -1119,7 +1119,7 @@ const REFERENCE_CONSTRAINTS =
   "④用户明确否定的风格（如“不要蓝色科技风”）一律不得出现；" +
   "⑤不套用局部编辑的像素保持约束——这是重新创作，不是修图。";
 
-// 无字底图：需要呈现的文案由客户端排版层绘制；底图里模型画的字必然是垃圾（截图里的乱码小字）
+// 无字底图：需要呈现的精确文案由客户端排版层绘制。
 const NO_TEXT_CONSTRAINTS =
   "\n\n【画面内不得出现任何文字】不要绘制任何文字、字母、数字、标语、水印或类似文字的装饰物；" +
   "需要呈现的文案由客户端排版层另行绘制，你只需要留出干净的版面空间。";
@@ -1155,11 +1155,11 @@ function readBody(req, maxBytes) {
 }
 
 /** 结构化字段 → 专业 prompt（字段顺序固定，内容全部来自模型对用户需求的理解） */
-function assembleStructured(structured) {
+function assembleStructured(structured, includeText = true) {
   if (!structured || typeof structured !== "object") return "";
   const order = ["subject", "setting", "composition", "lighting", "material", "negative"];
-  const parts = order.map((k) => String(structured[k] || "").trim()).filter(Boolean);
-  const copy = visibleCopyValues(structured.text);
+  const parts = order.map((k) => typeof structured[k] === "string" ? structured[k].trim() : "").filter(Boolean);
+  const copy = includeText ? visibleCopyValues(structured.text) : [];
   if (copy.length) parts.push("画面中必须准确呈现以下文字：" + copy.join("\n"));
   if (!parts.length) return "";
   return parts.join("。") + "。";
@@ -1169,7 +1169,7 @@ function visibleCopyValues(value) {
   if (typeof value === "string") return value.trim() ? [value.trim()] : [];
   if (!Array.isArray(value)) return [];
   return value
-    .map((item) => item && typeof item === "object" ? String(item.text || "").trim() : "")
+    .map((item) => item && typeof item === "object" && typeof item.text === "string" ? item.text.trim() : "")
     .filter(Boolean);
 }
 
@@ -1242,8 +1242,9 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   }
 
   // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
+  const overlayMode = String(textMode || "") === "overlay";
   const rawPrompt = String(prompt || "").trim();
-  const structPrompt = assembleStructured(structured);
+  const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
   // Reference redesign and local edit both send image input, but their task policies differ.
@@ -1251,7 +1252,6 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
 
   // 10-26：overlay 模式下底图必须是"无字"的，文案由客户端排版层绘制。
   // 旧实现会把 missingCopy 追加回 prompt，导致底图出现模型画的乱码小字，排版层再叠一遍。
-  const overlayMode = String(textMode || "") === "overlay";
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
   if (rawPrompt && !overlayMode) {
     const missingCopy = visibleCopyValues(structured && structured.text)
@@ -1267,10 +1267,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const taskPolicy = isPixelEdit
     ? EDIT_CONSTRAINTS
     : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : "");
-  // 底图一律无字：overlay 模式必然无字；平面成稿且没有任何精确文案时也不许模型自己编字
-  const hasVisibleCopy = visibleCopyValues(structured && structured.text).length > 0;
-  const needsNoText = overlayMode
-    || (String(renderIntent || "") === "flat_artwork" && !hasVisibleCopy);
+  // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
+  const needsNoText = overlayMode;
   const finalPrompt = basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
 
   const resolvedSize = resolveSize(size, aspectRatio);

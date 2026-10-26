@@ -32,14 +32,12 @@ final class TextOverlayRendererTests: XCTestCase {
     }
 
     func testSingleColumnOverflowChecksAllItemsTogether() {
-        let items = (1...4).map { index in
-            TextItem(role: .body, key: "line-\(index)", text: "第\(index)行")
-        }
+        let items = [TextItem(role: .body, key: "oversized", text: String(repeating: "完整内容不得被截断", count: 1000))]
         let issues = TextOverlayRenderer.check(items: items,
                                                layout: LayoutSpec(),
                                                canvas: CanvasSpec(size: CGSize(width: 300, height: 120),
                                                                   expectedAspect: nil))
 
-        XCTAssertTrue(issues.contains("文字超出画布"), "单栏要累计所有条目高度，不能分别检查后重叠绘制")
+        XCTAssertFalse(issues.isEmpty, "可读字号仍放不下时必须拒绝，不能截断文案")
     }
 }

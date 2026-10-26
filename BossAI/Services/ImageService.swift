@@ -25,6 +25,8 @@ import Foundation
 /// 把 taskKind、qualityTier、requestedCount 全丢了 —— 于是"Pro 编辑重试变成普通生图"、
 /// "组图 4 张重试变 1 张"、"名片重试不走排版"。参数一旦分散在调用点，就一定会漏。
 /// 现在首轮构造一次，所有重试从同一份上下文派生，只允许追加"修正说明"。
+enum ImageTextMode: String { case native, overlay }
+
 struct ImageRequestContext {
     let prompt: String
     let references: [Data]
@@ -36,6 +38,7 @@ struct ImageRequestContext {
     let structured: [String: Any]?
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
+    let textMode: ImageTextMode
 
     /// 10-25 几何保护：显式像素尺寸（"1200x800"）。
     /// 有值时请求走 size 字段，精确保留来源画布比例；服务端再按该尺寸请求模型。
@@ -45,7 +48,7 @@ struct ImageRequestContext {
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
-         targetSize: String? = nil) {
+         targetSize: String? = nil, textMode: ImageTextMode = .native) {
         self.prompt = prompt
         self.references = references
         self.taskKind = taskKind
@@ -56,6 +59,7 @@ struct ImageRequestContext {
         self.structured = structured
         self.layerDecomposition = layerDecomposition
         self.targetSize = targetSize
+        self.textMode = textMode
     }
 
     /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
@@ -69,7 +73,7 @@ struct ImageRequestContext {
                             renderIntent: renderIntent,
                             structured: structured,
                             layerDecomposition: layerDecomposition,
-                            targetSize: targetSize)
+                            targetSize: targetSize, textMode: textMode)
     }
 
     /// Builds a text-free background request: remove exact display copy from both prompt
@@ -102,7 +106,7 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: visualFields.isEmpty ? nil : visualFields,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize)
+                                   targetSize: targetSize, textMode: .overlay)
     }
 
     private static func removingVisibleCopy(_ value: Any, values: [String]) -> Any {
@@ -132,7 +136,7 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: structured,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize)
+                                   targetSize: targetSize, textMode: textMode)
     }
 }
 

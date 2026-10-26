@@ -165,12 +165,12 @@ test("DEL-13 底图缓存：字典键（会话+任务）+ 锁 + 会话级清理"
   assert.match(CACHE, /func evictExpired\(now: Date = Date\(\)\)/, "缺少过期清理");
 });
 
-test("DEL-19 排版分支：底图成功即缓存、命中跳过 Pro、成功才清、失败保留、命中不计额度", () => {
+test("DEL-19 排版分支：底图成功即缓存、命中跳过 Pro、成功与失败均保留到 TTL、命中不计额度", () => {
   assert.match(STREAMING, /if lookup == \.hit,/, "命中分支缺失（仍会重画底图）");
   assert.match(STREAMING, /let cached = cache\.entry\(conversationId: cacheConversationId, taskId: cacheTaskId\)/,
     "命中后未按会话+任务取条目");
-  assert.match(STREAMING, /cache\.markOverlayDoneAndEvict\(conversationId: cacheConversationId, taskId: cacheTaskId\)/,
-    "排版成功后未精确清理该条");
+  assert.match(STREAMING, /cache\.markOverlayDone\(conversationId: cacheConversationId, taskId: cacheTaskId\)/,
+    "排版完成后必须保留可复用底图");
   assert.match(STREAMING, /cache\.retainAfterOverlayFailure\(conversationId: cacheConversationId, taskId: cacheTaskId\)/,
     "排版失败未显式保留缓存");
   assert.match(STREAMING, /if baseImageFromCache \{[\s\S]{0,260}else \{[\s\S]{0,120}BudgetTracker\.addImageGeneration\(\)/,

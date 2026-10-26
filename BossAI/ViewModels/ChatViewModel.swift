@@ -352,11 +352,9 @@ final class ChatViewModel: ObservableObject {
     
     /// 图片请求的**唯一入口**（10-25 收口）：所有生成/重试都从不可变 context 取参数。
     /// 旧的九参数版本已收为 private 实现 `performImageGeneration`，业务代码无法再绕过 context。
-    /// textMode 由**调用点**决定（目前只有"底图 + 程序排版"这条路会传 "overlay"），
-    /// 不塞进 ImageRequestContext：上下文承载的是"画什么"，文字由谁绘制是任务边界。
+    /// 文字模式属于上游请求语义，必须随不可变上下文和重试一起继承。
     nonisolated static func generateImageWithRetry(context: ImageRequestContext,
-                                                   service: ImageService,
-                                                   textMode: String? = nil) async throws -> Data {
+                                                   service: ImageService) async throws -> Data {
         try await performImageGeneration(prompt: context.prompt,
                                          references: context.references,
                                          service: service,
@@ -368,7 +366,7 @@ final class ChatViewModel: ObservableObject {
                                          qualityTier: context.qualityTier,
                                          requestedCount: context.requestedCount,
                                          targetSize: context.targetSize,
-                                         textMode: textMode)
+                                         textMode: context.textMode == .overlay ? "overlay" : nil)
     }
 
     /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。
@@ -802,6 +800,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
         }
         // 10-23 关键修复：此前清单里完全没有"作图"，模型面对"设计名片/做海报"会退化成给文字方案或 Word。
         caps.append("图片生成：用户说「做一张图 / 设计海报 / 出封面 / 配图 / 画个示意图」时，**必须直接调用图片工具出图**；根据上传图重新设计新作品用 image_generate + source=attached，只有用户明确要求保留画面并局部修改时才用 image_edit。不要用文字方案或文档代替用户要的图片。准确可见文案仅放 structured.text，视觉指令不得混入其中。")
+        caps.append(ImageDesignGuidance.instructions)
         if HostedAccount.cachedExportDocEnabled {
             caps.append("文档导出：回答完成后，用户可点击右上角导出按钮把整段对话生成 Word/PPT/Excel/PDF 文件——当用户要'文件/表格/文档'时，请直接给出完整内容并提醒用户使用导出功能，严禁说'我无法生成文件'")
         }

@@ -152,9 +152,9 @@ final class BaseImageTaskKeyTests: XCTestCase {
         // 用户改电话后重试：命中，直接排版
         XCTAssertEqual(BaseImageCache.shared.lookup(conversationId: "conv-1", taskId: keyB, aspectRatio: "16:9"), .hit)
 
-        // 排版成功：清缓存
-        BaseImageCache.shared.markOverlayDoneAndEvict(conversationId: "conv-1", taskId: keyB)
-        XCTAssertNil(BaseImageCache.shared.entry(conversationId: "conv-1", taskId: keyB))
+        // 排版成功仍保留到 TTL/容量淘汰，后续只改文案可继续复用。
+        BaseImageCache.shared.markOverlayDone(conversationId: "conv-1", taskId: keyB)
+        XCTAssertNotNil(BaseImageCache.shared.entry(conversationId: "conv-1", taskId: keyB))
     }
 
     func testAspectRatioValueParsesPlanString() {

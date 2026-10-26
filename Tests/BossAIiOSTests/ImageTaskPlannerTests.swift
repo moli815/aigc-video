@@ -119,6 +119,8 @@ final class ImageTaskPlannerTests: XCTestCase {
         XCTAssertEqual(ImageTaskPlanner.parseCount("画 3 张猫"), 3)
         XCTAssertEqual(ImageTaskPlanner.parseCount("四张海报"), 4)
         XCTAssertEqual(ImageTaskPlanner.parseCount("做一个 3 秒的动效说明图"), 1, "3 秒不是 3 张")
+        XCTAssertEqual(ImageTaskPlanner.plan(userText: "生成两张图，每张画四个人").outputCount, 2,
+                       "组图数量也不能把四个人读成四张")
     }
 
     func testAspectNormalization() {

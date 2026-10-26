@@ -131,12 +131,13 @@ final class BaseImageCacheTests: XCTestCase {
 
     // MARK: - 清理语义
 
-    func testOverlaySuccessEvictsOnlyThatEntry() {
+    func testOverlaySuccessKeepsBaseForCopyOnlyEdits() {
         seed(taskId: "tA", conversationId: "c1")
         seed(taskId: "tB", conversationId: "c1")
-        BaseImageCache.shared.markOverlayDoneAndEvict(conversationId: "c1", taskId: "tA")
-        XCTAssertNil(BaseImageCache.shared.entry(conversationId: "c1", taskId: "tA", now: now),
-                     "排版成功的那条必须清掉")
+        BaseImageCache.shared.markOverlayDone(conversationId: "c1", taskId: "tA")
+        XCTAssertEqual(BaseImageCache.shared.entry(conversationId: "c1", taskId: "tA", now: now)?.overlayDone, true)
+        XCTAssertEqual(BaseImageCache.shared.lookup(conversationId: "c1", taskId: "tA", aspectRatio: "16:9", now: now), .hit,
+                       "成功底图必须可复用，改文字不应重新生成")
         XCTAssertNotNil(BaseImageCache.shared.entry(conversationId: "c1", taskId: "tB", now: now),
                         "另一个并发任务的底图不许被误清")
     }

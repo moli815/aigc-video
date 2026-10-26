@@ -29,7 +29,7 @@ import CryptoKit
 //   · 排版失败不删缓存（这正是它存在的理由）
 //
 // 清理时机（全部有对应入口，不靠"反正有 TTL"）：
-//   · 排版成功   → markOverlayDoneAndEvict(会话, 任务)  精确清这一条
+//   · 排版成功   → markOverlayDone(会话, 任务)，保留到 TTL/容量淘汰，支持只改文案
 //   · 用户取消   → evict(conversationId:)               清该会话全部
 //   · 会话删除   → evict(conversationId:)               同上
 //   · 任务超时   → lookup/save 内 sweep + evictExpired()
@@ -172,15 +172,14 @@ final class BaseImageCache {
 
     // MARK: - 清理
 
-    /// 排版成功后清理**这一条**（成品已出，底图不再需要）。
-    /// 只清自己的键：另一个并发任务的底图不受影响。
-    func markOverlayDoneAndEvict(conversationId: String, taskId: String) {
+    /// 完成排版后仍可复用底图；按 TTL/容量上限回收。
+    func markOverlayDone(conversationId: String, taskId: String) {
         lock.lock()
         defer { lock.unlock() }
         let key = cacheKey(conversationId, taskId)
         guard storage[key] != nil else { return }
-        storage.removeValue(forKey: key)
-        PerformanceTrace.event("cache_evicted")
+        storage[key]?.overlayDone = true
+        PerformanceTrace.event("cache_overlay_completed")
     }
 
     /// 排版失败后**保留**缓存。

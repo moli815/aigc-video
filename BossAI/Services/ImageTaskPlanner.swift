@@ -220,17 +220,7 @@ enum ImageTaskPlanner {
 
     /// 解析中文/阿拉伯数字张数，1...4；没提数量返回 1
     static func parseCount(_ text: String) -> Int {
-        let map: [(String, Int)] = [("四", 4), ("4", 4), ("三", 3), ("3", 3), ("两", 2), ("二", 2), ("2", 2)]
-        for (token, value) in map where text.contains(token) {
-            // 必须与"张/幅/组/个"相邻，否则"3 秒"会被误判成张数
-            if let range = text.range(of: token) {
-                let tail = text[range.upperBound...].prefix(3)
-                if tail.contains("张") || tail.contains("幅") || tail.contains("组") || tail.contains("个") {
-                    return min(4, max(1, value))
-                }
-            }
-        }
-        return 1
+        imageCountHint(text)
     }
 
     private static func resolveCount(text: String, type: ImageTaskType, requested: Int?) -> Int {

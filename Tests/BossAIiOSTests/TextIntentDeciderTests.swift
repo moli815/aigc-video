@@ -32,4 +32,9 @@ final class TextIntentDeciderTests: XCTestCase {
                                                        extractedFieldCount: 5,
                                                        extractedCharCount: 100))
     }
+
+    func testLayoutFreedomDoesNotMeanCustomerCopyMayBeWrong() {
+        XCTAssertTrue(TextIntentDecider.needsOverlay(userText: "排版随意，但文字必须准确",
+            extractedFieldCount: 4, extractedCharCount: 80, accuracyRequired: true))
+    }
 }

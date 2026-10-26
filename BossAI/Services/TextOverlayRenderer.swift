@@ -14,7 +14,7 @@ import UIKit
 // 硬约束：
 //   1. 唯一合成入口 `render(base:items:layout:canvas:)`，不提供分层拼装 API → 杜绝二次叠字。
 //   2. 文字只来自 `items`（由模型提取 / 用户原文），渲染器**不改写**任何字符。
-//   3. 放不下就抛 `textOverflow`，不缩字号、不截断。
+//   3. 在可读字号范围内适配文本框，完整文案仍放不下才报错，不截断。
 //   4. 支持横版/竖版/自定义比例，多列、多行、中英文混排。
 
 // MARK: - 输入模型
@@ -60,6 +60,9 @@ struct LayoutSpec {
     var primaryRoles: [TextItem.Role] = [.title, .subtitle, .label]
     var marginRatio: CGFloat = 0.06
     var gutterRatio: CGFloat = 0.04
+    /// Generic composition, independent of the deliverable's name.
+    var preset: String = "editorial"
+    var blocks: [TextBlockSpec] = []
 }
 
 extension LayoutSpec {
@@ -67,6 +70,9 @@ extension LayoutSpec {
     static func from(_ raw: [String: Any]?) -> LayoutSpec {
         var spec = LayoutSpec()
         guard let raw else { return spec }
+        if let preset = raw["preset"] as? String,
+           ["editorial", "centered", "split"].contains(preset) { spec.preset = preset }
+        spec.blocks = (raw["blocks"] as? [[String: Any]] ?? []).compactMap(TextBlockSpec.parse)
         if let cols = raw["columns"] as? Int, cols == 1 || cols == 2 {
             spec.columns = (cols == 1) ? .one : .two
         }
@@ -125,10 +131,10 @@ enum TextIntentDecider {
         let t = userText.lowercased()
         // 明确不要文字 → 不叠
         if t.contains("不要文字") || t.contains("无文字") || t.contains("不要加字") { return false }
-        // 明确"可以艺术化/随便画" → 交给模型
-        if t.contains("艺术字") || t.contains("文字可以") || t.contains("随意") { return false }
         // 大模型判定"必须精确" → 直接程序排版（优先级最高，不受字数影响）
         if accuracyRequired && extractedCharCount > 0 { return true }
+        // “排版随意”不是允许写错客户文案，只有明确授权文字艺术化才交给模型。
+        if t.contains("艺术字") || t.contains("文字可以艺术化") || t.contains("文字可以随意") { return false }
         // 单个长文案字段同样属于文字密集内容；不能因为 Agent 把多字段合并成一段而漏分流。
         if extractedCharCount >= 40 { return true }
         // 字段多且字数大 → 必须程序排版
@@ -143,165 +149,78 @@ enum TextIntentDecider {
 // MARK: - 渲染器
 
 enum TextOverlayRenderer {
-
-    /// 校验：能否放下。返回问题列表（空 = 可渲染）
     static func check(items: [TextItem], layout: LayoutSpec, canvas: CanvasSpec) -> [String] {
-        guard canvas.size.width > 0, canvas.size.height > 0 else { return ["画布尺寸无效"] }
-        guard !items.isEmpty else { return ["没有可绘制的文字内容"] }
-
-        var issues: [String] = []
-        if let expected = canvas.expectedAspect, expected > 0 {
-            let actual = canvas.size.width / canvas.size.height
-            if abs(actual - expected) / expected > canvas.aspectTolerance {
-                issues.append("底图比例不符")
-            }
+        if let expected = canvas.expectedAspect, expected > 0, canvas.size.height > 0,
+           abs(canvas.size.width / canvas.size.height - expected) / expected > canvas.aspectTolerance {
+            return ["底图比例不符"]
         }
-        let (leftRect, rightRect) = columnRects(layout: layout, canvas: canvas.size)
-        if layout.columns == .one {
-            if usedHeight(items, width: leftRect.width) > leftRect.height { issues.append("文字超出画布") }
-        } else {
-            let leftItems = items.filter { layout.primaryRoles.contains($0.role) }
-            let others = items.filter { !layout.primaryRoles.contains($0.role) }
-            if usedHeight(leftItems, width: leftRect.width) > leftRect.height { issues.append("左栏文字超出") }
-            if usedHeight(others, width: rightRect.width) > rightRect.height { issues.append("右栏文字超出") }
-        }
-        // 单条超长也要报出来（定位到具体字段）
-        for item in items {
-            let w = layout.columns == .one || layout.primaryRoles.contains(item.role)
-                ? leftRect.width : rightRect.width
-            if lines(item.text, size: fontSize(for: item.role), bold: item.role == .title, maxWidth: w) > maxLines(for: item.role) {
-                issues.append(item.key)
-            }
-        }
-        return issues
+        do {
+            _ = try TextLayoutPlanner.placements(items: items, layout: layout, canvas: canvas.size)
+            return []
+        } catch { return [error.localizedDescription] }
     }
 
-    /// 唯一合成入口：在无字底图上完成**一次**文字绘制
+    /// Layout and drawing use identical font metrics. One render, exact output pixels.
     static func render(base: UIImage, items: [TextItem], layout: LayoutSpec, canvas: CanvasSpec) throws -> UIImage {
-        let size = canvas.size.width > 0 ? canvas.size : base.size
-        guard size.width > 0, size.height > 0 else { throw TextOverlayError.invalidCanvas }
-        guard !items.isEmpty else { throw TextOverlayError.emptyContent }
-        if let expected = canvas.expectedAspect, expected > 0 {
-            let actual = size.width / size.height
-            if abs(actual - expected) / expected > canvas.aspectTolerance {
-                throw TextOverlayError.wrongAspect(actual: actual, expected: expected)
-            }
+        let size = canvas.size
+        guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+              base.size.width > 0, base.size.height > 0 else { throw TextOverlayError.invalidCanvas }
+        let aspect = size.width / size.height
+        let sourceAspect = base.size.width / base.size.height
+        guard abs(sourceAspect - aspect) / aspect <= canvas.aspectTolerance else {
+            throw TextOverlayError.wrongAspect(actual: sourceAspect, expected: aspect)
         }
-        let issues = check(items: items, layout: layout, canvas: CanvasSpec(size: size,
-                                                                          expectedAspect: canvas.expectedAspect,
-                                                                          aspectTolerance: canvas.aspectTolerance))
-        if let field = issues.first(where: { $0 != "底图比例不符" }) {
-            throw TextOverlayError.textOverflow(field: field)
+        if let expected = canvas.expectedAspect, expected > 0,
+           abs(aspect - expected) / expected > canvas.aspectTolerance {
+            throw TextOverlayError.wrongAspect(actual: aspect, expected: expected)
         }
-
-        let margin = size.width * layout.marginRatio
-        let (leftRect, rightRect) = columnRects(layout: layout, canvas: size)
-
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let out = renderer.image { _ in
+        let placements = try TextLayoutPlanner.placements(items: items, layout: layout, canvas: size)
+        let format = UIGraphicsImageRendererFormat()
+        // UIKit defaults to the DEVICE scale; on a 3x device the old renderer silently
+        // created a 6K image from a 2K background, wasting memory without adding detail.
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { context in
             base.draw(in: CGRect(origin: .zero, size: size))
-
-            let para = NSMutableParagraphStyle()
-            para.lineBreakMode = .byWordWrapping
-
-            func draw(_ item: TextItem, in rect: CGRect, y: inout CGFloat) {
-                let font = item.role == .title
-                    ? UIFont.boldSystemFont(ofSize: fontSize(for: item.role))
-                    : UIFont.systemFont(ofSize: fontSize(for: item.role))
-                let attrs: [NSAttributedString.Key: Any] = [
-                    .font: font,
-                    .foregroundColor: color(for: item.role),
-                    .paragraphStyle: para,
-                ]
-                let h = (item.text as NSString).boundingRect(with: CGSize(width: rect.width, height: .greatestFiniteMagnitude),
-                                                             options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                                             attributes: attrs, context: nil).height
-                (item.text as NSString).draw(in: CGRect(x: rect.minX, y: y, width: rect.width, height: ceil(h)),
-                                             withAttributes: attrs)
-                y += ceil(h) + lineGap(for: item.role)
+            for placement in placements {
+                let color = textColor(placement.colorHex)
+                if placement.backdrop { drawBackdrop(placement.frame, color: color, canvas: size, in: context.cgContext) }
+                var attributes = TextLayoutPlanner.attributes(role: placement.role, size: placement.fontSize, alignment: placement.alignment)
+                attributes[.foregroundColor] = color
+                let shadow = NSShadow()
+                shadow.shadowColor = UIColor.black.withAlphaComponent(0.22)
+                shadow.shadowBlurRadius = placement.fontSize * 0.08
+                shadow.shadowOffset = CGSize(width: 0, height: placement.fontSize * 0.025)
+                attributes[.shadow] = shadow
+                (placement.item.text as NSString).draw(with: placement.frame,
+                    options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes, context: nil)
             }
-
-            if layout.columns == .one {
-                // 单栏严格按 Agent 提供的文字顺序从上到下布局，不能把左右两组画在同一矩形重叠。
-                var y = leftRect.minY
-                for item in items { draw(item, in: leftRect, y: &y) }
-            } else {
-                var leftY = leftRect.minY
-                for item in items where layout.primaryRoles.contains(item.role) {
-                    draw(item, in: leftRect, y: &leftY)
-                }
-                var rightY = rightRect.minY
-                for item in items where !layout.primaryRoles.contains(item.role) {
-                    draw(item, in: rightRect, y: &rightY)
-                }
-            }
-            _ = margin
-        }
-        return out
-    }
-
-    // MARK: - 版式计算
-
-    private static func columnRects(layout: LayoutSpec, canvas: CGSize) -> (CGRect, CGRect) {
-        let margin = canvas.width * layout.marginRatio
-        let gutter = canvas.width * layout.gutterRatio
-        if layout.columns == .one {
-            let r = CGRect(x: margin, y: margin, width: canvas.width - margin * 2, height: canvas.height - margin * 2)
-            return (r, r)
-        }
-        let leftW = (canvas.width - margin * 2 - gutter) * 0.42
-        let left = CGRect(x: margin, y: margin, width: leftW, height: canvas.height - margin * 2)
-        let right = CGRect(x: margin + leftW + gutter, y: margin,
-                           width: canvas.width - margin * 2 - leftW - gutter,
-                           height: canvas.height - margin * 2)
-        return (left, right)
-    }
-
-    private static func fontSize(for role: TextItem.Role) -> CGFloat {
-        switch role {
-        case .title: return 34
-        case .subtitle: return 22
-        case .label: return 16
-        case .contact: return 18
-        case .body: return 17
-        case .footer: return 13
         }
     }
 
-    private static func lineGap(for role: TextItem.Role) -> CGFloat {
-        switch role {
-        case .title: return 12
-        case .subtitle: return 8
-        default: return 6
+    private static func textColor(_ hex: String) -> UIColor {
+        guard hex.count == 7, let rgb = UInt32(hex.dropFirst(), radix: 16) else { return .white }
+        return UIColor(red: CGFloat((rgb >> 16) & 255) / 255,
+                       green: CGFloat((rgb >> 8) & 255) / 255,
+                       blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    }
+
+    private static func drawBackdrop(_ frame: CGRect, color: UIColor, canvas: CGSize, in context: CGContext) {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let lightText = 0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.5
+        let background: UIColor = lightText ? .black : .white
+        let padding = min(canvas.width, canvas.height) * 0.012
+        let region = frame.insetBy(dx: -padding, dy: -padding)
+        context.saveGState()
+        context.addPath(UIBezierPath(roundedRect: region, cornerRadius: padding).cgPath)
+        context.clip()
+        let colors = [background.withAlphaComponent(lightText ? 0.52 : 0.88).cgColor,
+                      background.withAlphaComponent(lightText ? 0.18 : 0.50).cgColor] as CFArray
+        if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+            context.drawLinearGradient(gradient, start: CGPoint(x: region.midX, y: region.minY),
+                                       end: CGPoint(x: region.midX, y: region.maxY), options: [])
         }
-    }
-
-    private static func maxLines(for role: TextItem.Role) -> Int {
-        switch role {
-        case .title: return 2
-        case .subtitle: return 2
-        case .body, .contact, .label: return 3
-        case .footer: return 2
-        }
-    }
-
-    private static func color(for role: TextItem.Role) -> UIColor {
-        role == .footer ? UIColor.white.withAlphaComponent(0.8) : .white
-    }
-
-    private static func textWidth(_ text: String, size: CGFloat, bold: Bool) -> CGFloat {
-        (text as NSString).size(withAttributes: [.font: bold ? UIFont.boldSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size)]).width
-    }
-
-    static func lines(_ text: String, size: CGFloat, bold: Bool, maxWidth: CGFloat) -> Int {
-        guard !text.isEmpty, maxWidth > 0 else { return 0 }
-        return max(1, Int(ceil(textWidth(text, size: size, bold: bold) / maxWidth)))
-    }
-
-    private static func usedHeight(_ items: [TextItem], width: CGFloat) -> CGFloat {
-        items.reduce(0) { acc, item in
-            let n = lines(item.text, size: fontSize(for: item.role), bold: item.role == .title, maxWidth: width)
-            return acc + CGFloat(n) * (fontSize(for: item.role) * 1.3) + lineGap(for: item.role)
-        }
+        context.restoreGState()
     }
 }

@@ -24,6 +24,8 @@ on:
     paths:
       - 'BossAI/**'
       - 'Tests/**'
+      - 'cloudfunctions/**'
+      - 'tests-backend/**'
       - 'Package.swift'
       - 'Package.resolved'
       - 'project.yml'
@@ -40,6 +42,17 @@ permissions:
   contents: read
 
 jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Backend and image contract regression
+        run: node --test tests-backend/*.test.js
+
   # 第一道：SPM 单测（检索质量 + ExpertCore 回归），不过则不出包
   swift-core:
     runs-on: macos-15
@@ -151,6 +164,18 @@ jobs:
           echo "===== 失败用例 ====="
           grep -nE "error: -\[|' failed \(|XCTAssert|Assertion Failure" /tmp/ios-tests.log | head -60 || true
 
+      - name: Export visual regression samples
+        if: success()
+        run: xcrun xcresulttool export attachments --path TestResults.xcresult --output-path visual-qa
+
+      - name: Upload visual regression samples
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-design-visual-qa
+          path: visual-qa
+          retention-days: 7
+
       - name: Upload test results on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -240,7 +265,7 @@ jobs:
   # 第四道：发布门禁。只有候选包与 iOS 单测都成功，才发布正式可下载的 IPA。
   # 放在 ubuntu runner 上：只做产物搬运，不需要 macOS，几秒钟完成。
   publish:
-    needs: [build, ios-tests]
+    needs: [build, ios-tests, backend-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
