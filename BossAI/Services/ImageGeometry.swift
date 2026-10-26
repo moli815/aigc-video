@@ -52,10 +52,14 @@ enum ImageGeometry {
 
     /// 把像素尺寸夹到服务端允许的显式尺寸（尽量保持宽高比，8 的倍数）。
     /// 极端窄长比例无法在边长/像素预算内表达时返回 nil；调用方不能补边后再裁回。
-    static func clampedSize(width: Int, height: Int) -> String? {
+    static func clampedSize(width: Int, height: Int, targetPixels: Double? = nil) -> String? {
         guard width > 0, height > 0 else { return nil }
         var w = Double(width)
         var h = Double(height)
+        if let pixels = targetPixels, pixels.isFinite, pixels > 0 {
+            let scale = sqrt(min(pixels, Double(maxPixels)) / (w * h))
+            w *= scale; h *= scale
+        }
 
         // ① 单边越界：先等比缩到边内
         let edgeScale = min(1.0, min(Double(maxEdge) / w, Double(maxEdge) / h))

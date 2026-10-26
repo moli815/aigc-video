@@ -1,9 +1,31 @@
 import Foundation
 
 /// A compact planning skill, applied once before tool selection. Research and provenance:
-/// docs/image/2026-10-26-design-pipeline.md. User requirements always outrank defaults.
+/// BossAI/IMAGE-DESIGN-REVIEW-20261026.md. User requirements always outrank defaults.
 enum ImageDesignGuidance {
-    static let instructions = """
+    struct Reference: Decodable {
+        let id: String
+        let name: String
+        let principles: String
+        let layout: String
+        let font: String
+    }
+    private struct Library: Decodable { let patterns: [Reference] }
+    static let references: [Reference] = {
+        guard let url = Bundle.main.url(forResource: "ImageDesignReferences", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let library = try? JSONDecoder().decode(Library.self, from: data) else { return [] }
+        return library.patterns
+    }()
+
+    static var instructions: String {
+        let examples = references.map { reference in
+            "\(reference.name)：\(reference.principles) 可参考 layout=\(reference.layout)、fontStyle=\(reference.font)。"
+        }.joined(separator: "\n")
+        return baseInstructions + "\n【成熟设计库的静态设计参考】以下是可组合的参考，不是固定模板；用户指定风格、完整原文和品牌要求始终优先，不匹配时自主设计。\n" + examples
+    }
+
+    private static let baseInstructions = """
     图片设计方法：调用工具前在内部完成简短设计判断，不把过程写成一大段让用户反复选方案。
     1. 先确定用途、受众、用户指定风格及禁止项，选一个清晰视觉方向。用户说动漫就明确线稿、色块、角色/场景表现；不要自动套蓝色霓虹城市、发光图标或玻璃科技风。
     2. 画面只有一个主视觉焦点，主次通过大小、位置、明暗形成。使用连贯配色与有意的留白；视觉元素服务主题，不为显得丰富而堆装饰。

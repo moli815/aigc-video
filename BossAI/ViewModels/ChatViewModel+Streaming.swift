@@ -396,7 +396,14 @@ extension ChatViewModel {
                         imageToolAttempted = true
                         // 10-25：等待文案统一由 imageWait 承担（这里不再写"约 20 秒"这种伪预估）
                         statusText = nil
-                        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
+                        let args: [String: Any]?
+                        do {
+                            args = try ImageToolArguments.decode(call.arguments, toolName: call.name, userText: userText)
+                        } catch {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.failureNote(pluginID: call.name, reason: error.localizedDescription)])
+                            continue
+                        }
                         let prompt = args?["prompt"] as? String ?? userText
                         // P0-64 missingArgsNote 接入：prompt 缺失（且无用户原话兜底）时明确报错而非执行空请求
                         if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -505,6 +512,12 @@ extension ChatViewModel {
                                 userSaid: userText,
                                 preferReferenceRedesign: toolName == "image_generate" && !refs.isEmpty)
                             // 服务端区分“参考图创作”与“局部编辑”：两者都传图，只有后者才要求像素级保留。
+                            if plan.taskType == .series && toolName != "image_series" {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                    "content": ToolPipeline.failureNote(pluginID: toolName,
+                                        reason: "这是多图任务，请改用 image_series 编排工具；不要通过单图工具传多张数量。尚未生成或计费。")])
+                                continue
+                            }
                             let imageTaskKind: String = {
                                 switch toolName {
                                 case "image_decompose": return "decompose"
@@ -601,7 +614,8 @@ extension ChatViewModel {
                             let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
                             // 用户明确要求精确可读时走后处理；视觉 prompt/布局状态不混进请求上下文。
                             let accuracyWords = ["准确", "逐字", "一字不差", "印刷", "不能错", "不要错", "必须清楚", "正式"]
-                            let accuracyByText = accuracyWords.contains { prompt.contains($0) || userText.contains($0) }
+                            let accuracyByText = overlayItems.contains { $0.role == .contact }
+                                || accuracyWords.contains { prompt.contains($0) || userText.contains($0) }
                             let wantsOverlay = TextIntentDecider.needsOverlay(userText: userText + "\n" + prompt,
                                                                                extractedFieldCount: overlayItems.count,
                                                                                extractedCharCount: overlayChars,

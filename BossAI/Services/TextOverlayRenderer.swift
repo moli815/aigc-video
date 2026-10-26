@@ -142,9 +142,7 @@ enum TextIntentDecider {
         if extractedCharCount >= 40 { return true }
         // 字段多且字数大 → 必须程序排版
         if extractedFieldCount >= 3 && extractedCharCount >= 20 { return true }
-        // 关键词兜底（信息类物料，本身就要求文字准确）
-        let heavy = ["海报", "名片", "证书", "宣传单", "菜单", "信息图", "课程表", "价目表", "价格表", "标签", "易拉宝"]
-        if heavy.contains(where: { t.contains($0) }) && extractedCharCount >= 12 { return true }
+        // 短标题可使用 Pro 原生文字能力；不按“海报/名片”等品类强制进入排版。
         return false
     }
 }

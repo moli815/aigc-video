@@ -374,7 +374,8 @@ final class ChatViewModel: ObservableObject {
     nonisolated static func aspectRatioValue(_ raw: String) -> CGFloat? {
         let parts = raw.split(separator: ":")
         guard parts.count == 2,
-              let width = Double(parts[0]), let height = Double(parts[1]), height > 0 else { return nil }
+              let width = Double(parts[0]), let height = Double(parts[1]),
+              width.isFinite, height.isFinite, width > 0, height > 0, (width / height).isFinite else { return nil }
         return CGFloat(width / height)
     }
 

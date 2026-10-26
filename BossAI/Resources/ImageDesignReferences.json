@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "source": {
+    "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+    "commit": "a38d04c3d5c298c851dbe5e6ee1965ee3de42cb5",
+    "file": "src/ui-ux-pro-max/data/styles.csv",
+    "license": "MIT",
+    "notice": "Copyright (c) 2024 Next Level Builder. Adapted for static Chinese graphic design; no upstream scripts, UI components or fonts are executed or bundled. See ImageDesignReferences-LICENSE.txt."
+  },
+  "patterns": [
+    {"id":"swiss","sourceStyle":"minimalism-and-swiss-style","name":"瑞士网格","principles":"用严格对齐、几何网格和高对比无衬线字体建立秩序；黑白或克制配色，主要视觉与信息明确分区，靠留白而非装饰提升质感。","layout":"editorial","font":"sans"},
+    {"id":"bold-minimal","sourceStyle":"exaggerated-minimalism","name":"大字极简","principles":"一个强焦点、醒目大标题、大面积负空间、一种强调色；压低装饰密度，让主视觉和标题承担表达，正文作为次级信息。","layout":"centered","font":"sans"},
+    {"id":"flat-illustration","sourceStyle":"flat-design","name":"平面插画","principles":"采用清晰二维色块、有限且连贯的色板、简洁线条和几何形；用插画叙事与大小关系组织画面，避免把所有服务都画成同样发光图标。","layout":"editorial","font":"rounded"},
+    {"id":"organic","sourceStyle":"organic-biophilic","name":"自然有机","principles":"以自然曲线、纸张或自然材质和低刺激色彩表达亲和感；绿色、米色或土色只是候选，按用户品牌调整；保持充足呼吸空间。","layout":"split","font":"serif"},
+    {"id":"modular","sourceStyle":"bento-box-grid","name":"模块信息设计","principles":"按信息重要程度使用不同大小的模块，共享网格和对齐线；主模块突出，辅助模块有节奏；只适用于信息密集需求，不要给所有文案套相同卡片。","layout":"editorial","font":"sans"},
+    {"id":"graphic-contrast","sourceStyle":"neubrutalism","name":"鲜明平面图形","principles":"在用户需要醒目年轻风格时使用强对比、大字和清晰图形边界；控制强调色数量与装饰，不适合被默认套到正式、轻柔或写实需求。","layout":"split","font":"sans"}
+  ]
+}

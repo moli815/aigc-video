@@ -124,7 +124,8 @@ enum ImageTaskPlanner {
             } else if let source = sourceSize {
                 ratio = "\(source.width):\(source.height)"
                 preserveAspect = true
-                if let clamped = ImageGeometry.clampedSize(width: source.width, height: source.height) {
+                if let clamped = ImageGeometry.clampedSize(width: source.width, height: source.height,
+                    targetPixels: tier == "high" ? 4_194_304 : nil) {
                     // 没要求改比例 → 按原图真实像素要尺寸，比例天然一致
                     targetSize = clamped
                 } else {
@@ -259,12 +260,12 @@ enum ImageTaskPlanner {
         guard parts.count == 2,
               let w = Double(parts[0].trimmingCharacters(in: .whitespaces)),
               let h = Double(parts[1].trimmingCharacters(in: .whitespaces)),
-              w > 0, h > 0 else { return nil }
+              w.isFinite, h.isFinite, w > 0, h > 0, (w / h).isFinite else { return nil }
         return "\(format(w)):\(format(h))"
     }
 
     private static func format(_ v: Double) -> String {
-        v == v.rounded() ? String(Int(v)) : String(v)
+        v == v.rounded() && v < Double(Int.max) ? String(Int(v)) : String(v)
     }
 
     private static func inferAspect(text: String, type: ImageTaskType) -> String {

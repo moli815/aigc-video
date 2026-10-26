@@ -117,7 +117,7 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
-  IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "1.5K" },
+  IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "2K" },
   IMAGE_PRICE_FAST:   { type: "num", label: "作图价 · Flash ≤1.5K（元/张，官方成本 0.12）", def: () => Number(process.env.IMAGE_PRICE_FAST || 0.3) },
   IMAGE_PRICE:        { type: "num", label: "作图价 · Pro ≤1.5K（元/张，官方成本 0.30）", def: () => Number(process.env.IMAGE_PRICE || 0.45) },
   IMAGE_PRICE_PRO:    { type: "num", label: "作图价 · 高质量（元/张）", def: () => Number(process.env.IMAGE_PRICE_PRO || 0.24) },
@@ -144,7 +144,7 @@ const RUNTIME_SPECS = {
   // P0-62 服务端能力开关（P0-62 能力声明表驱动）：admin 在系统设置改 1/0 —— 关闭后该能力 API 返回 503 + 明确文案
   CAP_CHAT_ENABLED:   { type: "str", label: "能力开关 · 智能对话（1=开 / 0=关）", def: () => process.env.CAP_CHAT_ENABLED || "1" },
   // P0-64 App 远程行为配置（在线可修复）：App 端写死的超时/重试改为云端下发，出问题管理台改数不出包
-  IMAGE_FAST_MODE:    { type: "str", label: "生图提速模式（1=fast 极速 / 0=standard 质量优先）· 官方文档：fast 仅 pro 支持、耗时更短", def: () => process.env.IMAGE_FAST_MODE || "1" },
+  IMAGE_FAST_MODE:    { type: "str", label: "生图提速模式（1=fast 极速 / 0=standard 质量优先）· Pro 调试阶段使用标准模式", def: () => process.env.IMAGE_FAST_MODE || "0" },
   DEEPSEEK_SEARCH_KEY: { type: "secret", label: "DeepSeek 搜索/抓取 API Key（api.deepseek.com，5元/1000次成功请求）", def: () => process.env.DEEPSEEK_SEARCH_KEY || "" },
   APP_CHAT_TIMEOUT:   { type: "num", label: "App·对话请求超时（秒）", def: () => Number(process.env.APP_CHAT_TIMEOUT || 165) },
   // 10-23：首包 watchdog 超时（此前客户端只能写死 45s，管理端改不了）
@@ -3079,13 +3079,14 @@ async function callImageUpstream(payload) {
   }
   // ── 火山 Seedream 5.0 Pro ──
   // P0-54 性能修复：强制 response_format=url（App 传 b64_json 导致几 MB base64 回传，慢）
-  // P0-66 提速：optimize_prompt_options.mode=fast（官方文档：仅 pro 支持，生成耗时更短）；
-  // 云端开关 IMAGE_FAST_MODE（默认 1=fast，质量优先可设 0 走 standard）
+  // 标准质量为默认；pro_only 不受历史 fast 配置影响。
   const arkPayload = Object.assign({}, payload, { response_format: "url" });
   // 10-19 豆包官方意见：编辑场景不启用 optimize_prompt_options（它会改写 prompt，稀释【保持】【阴影】等
   // 五段式约束 → 低质重绘）；仅文生图用 fast 加速。
   const hasRefImg = Array.isArray(payload.image) ? payload.image.length > 0 : !!payload.image;
-  if (String(RUNTIME.IMAGE_FAST_MODE || "1") !== "0" && !payload.optimize_prompt_options && !hasRefImg) {
+  if (RUNTIME.IMAGE_ROUTING_MODE === "pro_only") {
+    arkPayload.optimize_prompt_options = { mode: "standard" };
+  } else if (String(RUNTIME.IMAGE_FAST_MODE || "0") === "1" && !payload.optimize_prompt_options && !hasRefImg) {
     arkPayload.optimize_prompt_options = { mode: "fast" };
   }
   // P0-78 透明通道（官方能力补齐）：用户要求透明背景/抠图时自动设置 background=transparent（需 png）
@@ -3107,14 +3108,7 @@ async function callImageUpstream(payload) {
       if (url) return { ok: true, status: 200, url, fetchMs: Date.now() - __t0 };
     }
   } catch (e) { /* Seedream 超时/异常 → 走降级 */ }
-  // P0-55 降级兜底：Seedream 失败/超时/空返回 → 自动降级到千问 qwen-image（CHAT_API_KEY 为百炼 key），
-  // 根治"偶发生图接口没有返回图片"——只要还有任一可用生图模型，用户就能出图。
-  if (RUNTIME.CHAT_API_KEY) {
-    try {
-      const fb = null;   // 10-19 按用户要求：删除千问生图兜底，全量使用 Seedream 5.0 Pro（失败即报错）
-      if (fb.ok) return fb;
-    } catch (e) { /* ignore */ }
-  }
+  // Seedream 失败明确返回；不换供应商，也不保留故意触发异常的假兜底。
   return { ok: false, status: 502, url: "", fetchMs: Date.now() - __t0 };
 }
 
@@ -3143,7 +3137,7 @@ async function handlePoster(req, res) {
 
   const prompt = `${styleText}。这是一张海报的背景底图：**画面中不得出现任何文字、字母、数字、标语或水印**；` +
     `上方约三分之一为干净留白区域（用于放置大标题），中部留出副标题与要点区域，主体视觉元素集中在下方，整体构图专业、留白充足。`;
-  const payload = { model: UPSTREAM.image.tiers.pro.model, prompt, size: /^(auto|1K|1\.5K|2K)$/i.test(String(size || "")) ? String(size) : "1.5K" };
+  const payload = { model: UPSTREAM.image.tiers.pro.model, prompt, size: /^(1K|1\.5K|2K)$/i.test(String(size || "")) ? String(size) : String(RUNTIME.IMAGE_SIZE || "2K") };
   if (logo && (Array.isArray(logo) ? logo.length : true)) payload.image = logo;
 
   let out;

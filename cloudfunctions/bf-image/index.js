@@ -55,8 +55,8 @@ const RT = {
   IMAGE_MODEL_PRO: process.env.IMAGE_MODEL_PRO || "",
   IMAGE_MODEL_SERIES: process.env.IMAGE_MODEL_SERIES || "",
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
-  IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "1",
-  IMAGE_SIZE: process.env.IMAGE_SIZE || "1.5K",
+  IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
+  IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
   IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "0.3",   // Flash ≤1.5K（官方成本 0.12）
   IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "0.45", // Pro ≤1.5K（官方成本 0.30）
   IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "0.9",        // Pro >1.5K（官方成本 0.60）
@@ -124,6 +124,13 @@ const TIER_ALIASES = {
 function normalizeTier(value) {
   const key = String(value || "").trim().toLowerCase();
   return TIER_ALIASES[key] || "auto";
+}
+
+// Quality tuning uses the official standard optimizer, even if an old runtime config
+// still requests fast. Fast is an explicit opt-in only outside pro_only.
+function promptOptimizationMode(routingMode, fastMode) {
+  return String(routingMode || "").trim() === "pro_only" || String(fastMode || "0") !== "1"
+    ? "standard" : "fast";
 }
 
 function selectImageRoute({ taskKind, qualityTier }) {
@@ -1289,8 +1296,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
-  if (caps.fastPromptMode && String(RT.IMAGE_FAST_MODE) !== "0") {
-    payload.optimize_prompt_options = { mode: "fast" };
+  if (caps.fastPromptMode) {
+    payload.optimize_prompt_options = { mode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE) };
   }
   if (image) payload.image = image;
   // 10-23 图层拆分（Seedream 5.0 pro 原生能力）：仅支持 1 张图，返回底图 + 最多 16 个透明 PNG 图层
@@ -1412,6 +1419,9 @@ const server = http.createServer(async (req, res) => {
     return send(200, {
       ok: true,
       routingMode: String(RT.IMAGE_ROUTING_MODE || "auto"),
+      promptOptimizationMode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE),
+      resolutionTier: String(RT.IMAGE_SIZE || "1.5K"),
+      seriesMode: "single_image_orchestration",
       models: m,
       caps,
       keys: {
@@ -1426,7 +1436,7 @@ const server = http.createServer(async (req, res) => {
           { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto" } },
           { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro" } },
           { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro" } },
-          { key: "series", args: { taskKind: "series", qualityTier: "auto" } },
+          { key: "series", args: { taskKind: "generate", qualityTier: "auto" } },
         ];
         const out = {};
         for (const c of cases) {

@@ -68,7 +68,7 @@ enum SeedreamSizeResolver {
     }
 
     private static func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(value)
+        value.rounded() == value && value < Double(Int.max) ? String(Int(value)) : String(value)
     }
 
     private static func snapToEight(_ value: Double) -> Int {

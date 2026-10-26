@@ -36,10 +36,12 @@ test("ROUTE-03 未知模型走保守默认（不给 fast / 组图 / 图层）", 
 });
 
 test("ROUTE-04 fast 参数只在能力允许时下发", () => {
-  assert.match(IMAGE, /if \(caps\.fastPromptMode && String\(RT\.IMAGE_FAST_MODE\) !== "0"\)/,
+  assert.match(IMAGE, /if \(caps\.fastPromptMode\)/,
     "optimize_prompt_options 未受能力表约束");
   assert.doesNotMatch(IMAGE, /const mode = String\(RT\.IMAGE_FAST_MODE\) === "0" \? "standard" : "fast";/,
     "仍是旧的全局 fast 开关");
+  assert.match(IMAGE, /mode: promptOptimizationMode\(RT\.IMAGE_ROUTING_MODE, RT\.IMAGE_FAST_MODE\)/,
+    "Pro 调试模式未使用统一的标准质量策略");
 });
 
 test("ROUTE-05 路由按任务与质量档分支，且能力优先", () => {
