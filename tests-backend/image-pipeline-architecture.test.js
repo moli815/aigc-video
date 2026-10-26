@@ -127,8 +127,9 @@ test("client sends text_mode=overlay so the server can strip copy", () => {
   const compiler = read("BossAI/Services/ImageProviderRequestCompiler.swift");
   assert.match(compiler, /body\["text_mode"\] = textMode/, "hosted envelope 没有透出 text_mode");
   assert.match(imageService, /textMode: textMode/, "ImageService 没有把 textMode 传给编译器");
-  assert.match(chatViewModel, /textMode: context\.needsTextOverlay \? "overlay" : nil/,
-    "调用链没有在 overlay 时置 text_mode");
+  // overlay 由"底图 + 程序排版"这条路显式声明，不挂在请求上下文上
+  assert.match(stream, /generateImageWithRetry\(context: baseCtx, service: imageService, textMode: "overlay"\)/,
+    "底图生成没有声明 overlay（服务端会把文案塞回底图）");
 });
 
 test("reference redesign uses the high quality tier", () => {

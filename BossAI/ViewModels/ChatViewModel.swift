@@ -352,8 +352,11 @@ final class ChatViewModel: ObservableObject {
     
     /// 图片请求的**唯一入口**（10-25 收口）：所有生成/重试都从不可变 context 取参数。
     /// 旧的九参数版本已收为 private 实现 `performImageGeneration`，业务代码无法再绕过 context。
+    /// textMode 由**调用点**决定（目前只有"底图 + 程序排版"这条路会传 "overlay"），
+    /// 不塞进 ImageRequestContext：上下文承载的是"画什么"，文字由谁绘制是任务边界。
     nonisolated static func generateImageWithRetry(context: ImageRequestContext,
-                                                   service: ImageService) async throws -> Data {
+                                                   service: ImageService,
+                                                   textMode: String? = nil) async throws -> Data {
         try await performImageGeneration(prompt: context.prompt,
                                          references: context.references,
                                          service: service,
@@ -365,7 +368,7 @@ final class ChatViewModel: ObservableObject {
                                          qualityTier: context.qualityTier,
                                          requestedCount: context.requestedCount,
                                          targetSize: context.targetSize,
-                                         textMode: context.needsTextOverlay ? "overlay" : nil)
+                                         textMode: textMode)
     }
 
     /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。
@@ -377,7 +380,7 @@ final class ChatViewModel: ObservableObject {
         return CGFloat(width / height)
     }
 
-private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil) async throws -> Data {
+private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil) async throws -> Data {
         // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
         let idemKey = UUID().uuidString
         // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
@@ -385,7 +388,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
         var attempt = 0
         while true {
             do {
-                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: taskKind, qualityTier: qualityTier, requestedCount: requestedCount, targetSize: targetSize)
+                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: taskKind, qualityTier: qualityTier, requestedCount: requestedCount, targetSize: targetSize, textMode: textMode)
             } catch {
                 let retryable = (error as? URLError) != nil
                     || ((error as? ImageService.ImageError)?.isRetryable ?? false)

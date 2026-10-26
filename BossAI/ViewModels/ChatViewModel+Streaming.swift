@@ -641,7 +641,8 @@ extension ChatViewModel {
                                     PerformanceTrace.event("text_overlay_cache_hit")
                                 } else {
                                     do {
-                                        let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService)
+                                        // 底图必须无字：文案由 TextOverlayRenderer 画一次，服务端据此不再把 structured.text 追加回 prompt
+                                        let base = try await Self.generateImageWithRetry(context: baseCtx, service: imageService, textMode: "overlay")
                                         guard let decoded = UIImage(data: base) else {
                                             imageTurnNote = ImageTaskStatus.Failure.generateFailed.message
                                             apiMessages.append(["role": "tool", "tool_call_id": call.id,
