@@ -3081,13 +3081,23 @@ async function callImageUpstream(payload) {
   // P0-54 性能修复：强制 response_format=url（App 传 b64_json 导致几 MB base64 回传，慢）
   // 标准质量为默认；pro_only 不受历史 fast 配置影响。
   const arkPayload = Object.assign({}, payload, { response_format: "url" });
-  // 10-19 豆包官方意见：编辑场景不启用 optimize_prompt_options（它会改写 prompt，稀释【保持】【阴影】等
-  // 五段式约束 → 低质重绘）；仅文生图用 fast 加速。
+  // ── 提示词优化开关（10-27 修正）────────────────────────────────────────────
+  // 官方文档：`optimize_prompt_options` = 服务端提示词优化，平台会用自家模型把我们的 prompt
+  // **改写一遍**再送进生图；mode 只决定改写力度（standard 更重更慢 / fast 更轻）。
+  // 也就是说：开了它，【保持人物位置】【不要复刻版式】【画面内不得出现文字】这些硬约束
+  // 有概率被改写掉——实测正是编辑构图漂移、重设计自己编文案的主要来源之一。
+  //
+  // 规则（与 10-19 豆包官方建议一致，当时只写在 fast 分支里，被 pro_only 分支绕过了）：
+  //   · 不带参考图（纯文生图）→ 允许优化，标准模式质量更好；
+  //   · 带参考图（edit / reference）→ **一律不开**，我们的约束必须原样到达模型。
   const hasRefImg = Array.isArray(payload.image) ? payload.image.length > 0 : !!payload.image;
-  if (RUNTIME.IMAGE_ROUTING_MODE === "pro_only") {
+  const wantsPromptOpt = !hasRefImg && !payload.optimize_prompt_options;
+  if (wantsPromptOpt && RUNTIME.IMAGE_ROUTING_MODE === "pro_only") {
     arkPayload.optimize_prompt_options = { mode: "standard" };
-  } else if (String(RUNTIME.IMAGE_FAST_MODE || "0") === "1" && !payload.optimize_prompt_options && !hasRefImg) {
+  } else if (wantsPromptOpt && String(RUNTIME.IMAGE_FAST_MODE || "0") === "1") {
     arkPayload.optimize_prompt_options = { mode: "fast" };
+  } else {
+    delete arkPayload.optimize_prompt_options;
   }
   // P0-78 透明通道（官方能力补齐）：用户要求透明背景/抠图时自动设置 background=transparent（需 png）
   if (/透明背景|透明底|抠图|去背景/.test(String(payload.prompt || ""))) {
