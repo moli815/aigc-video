@@ -12,7 +12,8 @@ final class ImageTaskStatusTests: XCTestCase {
 
     private static let allowed = [
         "正在生成图片", "正在处理图片", "正在整理图片",
-        "图片已生成", "图片生成失败，请重试", "原图无法完整保留，请重新选择比例",
+        "图片已生成", "这次图片没有生成成功，已有内容已保留，可以稍后重试。",
+        "生成结果的画布比例与要求不同，这次没有采用它。可以保留原比例再试一次。",
     ]
 
     func testWaitTextPerKind() {
@@ -24,8 +25,8 @@ final class ImageTaskStatusTests: XCTestCase {
 
     func testDoneAndFailureTextAreInAllowedSet() {
         XCTAssertEqual(ImageTaskStatus.doneText, "图片已生成")
-        XCTAssertEqual(ImageTaskStatus.Failure.generateFailed.message, "图片生成失败，请重试")
-        XCTAssertEqual(ImageTaskStatus.Failure.aspectMismatch.message, "原图无法完整保留，请重新选择比例")
+        XCTAssertEqual(ImageTaskStatus.Failure.generateFailed.message, "这次图片没有生成成功，已有内容已保留，可以稍后重试。")
+        XCTAssertEqual(ImageTaskStatus.Failure.aspectMismatch.message, "生成结果的画布比例与要求不同，这次没有采用它。可以保留原比例再试一次。")
         for text in [ImageTaskStatus.doneText,
                      ImageTaskStatus.Failure.generateFailed.message,
                      ImageTaskStatus.Failure.aspectMismatch.message] {

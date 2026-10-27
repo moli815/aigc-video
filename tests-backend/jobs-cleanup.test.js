@@ -30,7 +30,7 @@ function makeDb(seed) {
     store.set(name, docs.map((d, i) => Object.assign({ _id: d._id || name + "_" + i }, d)));
   }
   const op = (name) => (v) => ({ __op: name, v });
-  const command = { lt: op("lt"), lte: op("lte"), gt: op("gt"), gte: op("gte"), eq: op("eq"), in: op("in"), nin: op("nin") };
+  const command = { lt: op("lt"), lte: op("lte"), gt: op("gt"), gte: op("gte"), eq: op("eq"), neq: op("neq"), in: op("in"), nin: op("nin") };
 
   function testCond(doc, cond) {
     return Object.entries(cond).every(([k, expect]) => {
@@ -42,6 +42,7 @@ function makeDb(seed) {
           case "gt": return Number(actual) > Number(expect.v);
           case "gte": return Number(actual) >= Number(expect.v);
           case "eq": return actual === expect.v;
+          case "neq": return actual !== expect.v;
           case "in": return (expect.v || []).indexOf(actual) >= 0;
           case "nin": return (expect.v || []).indexOf(actual) < 0;
           default: return false;
@@ -184,6 +185,20 @@ test("JOBS-04 预留/幂等/限流/缓存按各自 TTL 命中", async () => {
   assert.deepEqual(store.get("bf_image_jobs").map((d) => d._id), ["idem_new"]);
   assert.deepEqual(store.get("bf_rate").map((d) => d._id), ["rate_new"]);
   assert.deepEqual(store.get("bf_cache").map((d) => d._id), ["cache_new"]);
+});
+
+test("paid results awaiting archive or billing are never removed by age cleanup", async () => {
+  const ts = Date.now() - 10 * DAY;
+  const { mod, store } = loadJobs({ bf_image_jobs: [
+    { _id: "archive_pending", ts, archiveState: "pending", costCommitted: true },
+    { _id: "archive_attention", ts, archiveState: "needs_attention", costCommitted: true },
+    { _id: "billing_pending", ts, archiveState: "ready", costCommitted: false },
+    { _id: "finished", ts, archiveState: "ready", costCommitted: true },
+  ] });
+  const result = await mod.main({ Type: "Timer", only: ["idem_jobs"] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(store.get("bf_image_jobs").map(row => row._id).sort(),
+    ["archive_attention", "archive_pending", "billing_pending"]);
 });
 
 test("JOBS-05 租约锁生效时直接跳过（不重复删、不重复写统计）", async () => {
