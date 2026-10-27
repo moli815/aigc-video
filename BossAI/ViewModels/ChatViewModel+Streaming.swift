@@ -641,8 +641,15 @@ extension ChatViewModel {
                             // 大模型把要显示的文字放进 structured；这里只做「有没有大量精确文字」的判断，
                             // 命中则：Pro 出无字底图 → TextOverlayRenderer 程序叠字（只叠一次）。
                             // 仅 structured.text 是可见文案，且必须按语义分项；视觉 prompt 不参与绘制。
-                            let overlayItems = try await ExactTextWorkflow.resolve(
-                                proposed: TextItem.parse(structuredArgs?["text"]), source: refs.first, request: userText)
+                            let overlayItems: [TextItem]
+                            if PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs) {
+                                // “只换Logo，文字不变” retains the original pixels. OCR and
+                                // full-page retypesetting would duplicate already present copy.
+                                overlayItems = []
+                            } else {
+                                overlayItems = try await ExactTextWorkflow.resolve(
+                                    proposed: TextItem.parse(structuredArgs?["text"]), source: refs.first, request: userText)
+                            }
                             let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
                             // 用户明确要求精确可读时走后处理；视觉 prompt/布局状态不混进请求上下文。
                             let accuracyByText = ExactTextWorkflow.requiresAccuracy(userText)

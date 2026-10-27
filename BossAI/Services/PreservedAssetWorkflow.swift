@@ -16,17 +16,23 @@ enum PreservedAssetWorkflow {
         let background: ImageRequestContext
     }
     enum Failure: LocalizedError {
-        case invalidPlacement, missingOriginal, compositionFailed
+        case invalidPlacement, missingOriginal, compositionFailed, conflictingTextComposition
         var errorDescription: String? {
             switch self {
             case .invalidPlacement: return "标识的替换位置还不够明确，请指定要替换的区域后再试。"
             case .missingOriginal: return "找不到原始标识素材或海报，请重新选择这两张图片。"
             case .compositionFailed: return "底图已保留，标识暂未合成完成，请重试保存。"
+            case .conflictingTextComposition: return "当前同时要求保留原排版和重新叠加文字，请先明确是否需要改变原来的文字排版。"
             }
         }
     }
+    static func keepsExistingCanvas(_ structured:[String:Any]?) -> Bool {
+        guard let assets=structured?["preserve_assets"] as? [[String:Any]], !assets.isEmpty else { return false }
+        return structured?["preserve_outside"] as? Bool != false
+    }
     static func plan(_ context: ImageRequestContext) throws -> Plan? {
         guard let value = context.structured?["preserve_assets"] else { return nil }
+        if keepsExistingCanvas(context.structured), context.textMode == .overlay { throw Failure.conflictingTextComposition }
         guard let entries = value as? [[String: Any]], !entries.isEmpty, entries.count <= 4,
               context.taskKind == "edit", let baseData = context.references.first,
               let original = orientedImage(baseData) else { throw Failure.missingOriginal }
@@ -64,7 +70,7 @@ enum PreservedAssetWorkflow {
             structured:fields,layerDecomposition:context.layerDecomposition,targetSize:context.targetSize,
             textMode:context.textMode,requestId:context.requestId)
         return Plan(original:original,placements:placements,
-                    preserveOutside:context.structured?["preserve_outside"] as? Bool ?? true,background:background)
+                    preserveOutside:keepsExistingCanvas(context.structured),background:background)
     }
     private static func orientedImage(_ data: Data) -> UIImage? {
         // Source photos can exceed the provider's *output* pixel budget. Inspect

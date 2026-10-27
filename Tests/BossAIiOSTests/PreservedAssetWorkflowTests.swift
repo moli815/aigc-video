@@ -55,6 +55,17 @@ final class PreservedAssetWorkflowTests: XCTestCase {
         let plan=try XCTUnwrap(PreservedAssetWorkflow.plan(context()))
         XCTAssertThrowsError(try PreservedAssetWorkflow.compose(plan:plan,cleaned:image(.blue,size:CGSize(width:80,height:100))))
     }
+    func testKeepingOriginalCopyCannotAlsoRunFullPageTextOverlay() throws {
+        let original=context()
+        XCTAssertTrue(PreservedAssetWorkflow.keepsExistingCanvas(original.structured))
+        let overlay=ImageRequestContext(prompt:original.prompt,references:original.references,taskKind:"edit",
+            qualityTier:"high",requestedCount:nil,aspectRatio:original.aspectRatio,renderIntent:original.renderIntent,
+            structured:original.structured,layerDecomposition:false,textMode:.overlay)
+        XCTAssertThrowsError(try PreservedAssetWorkflow.plan(overlay)) { error in
+            guard case PreservedAssetWorkflow.Failure.conflictingTextComposition=error else { return XCTFail("unexpected error") }
+        }
+        XCTAssertFalse(PreservedAssetWorkflow.keepsExistingCanvas(context(preserveOutside:false).structured))
+    }
     func testACompositionFailureReusesThePaidBackground() async throws {
         let plan=try XCTUnwrap(PreservedAssetWorkflow.plan(context(prompt:UUID().uuidString)))
         var calls=0
