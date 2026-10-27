@@ -32,6 +32,12 @@ on:
       - 'scripts/**'
       - '.github/workflows/build-ipa.yml'
   workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: 'Standard hosted runner; Intel is a fallback during ARM capacity incidents'
+        type: choice
+        options: [macos-15, macos-15-intel]
+        default: macos-15
 
 # 同一分支只保留最新一次编译：新 run 触发时自动取消排队中的旧 run
 concurrency:
@@ -59,7 +65,7 @@ jobs:
 
   # 第一道：SPM 单测（检索质量 + ExpertCore 回归），不过则不出包
   swift-core:
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     timeout-minutes: 25
     steps:
       - name: Checkout
@@ -78,9 +84,9 @@ jobs:
             .build
             ~/Library/org.swift.swiftpm/repositories
             ~/Library/Caches/org.swift.swiftpm
-          key: macos-15-xcode-26.3-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
+          key: macos-15-${{ runner.arch }}-xcode-26.3-spm-${{ hashFiles('Package.swift', 'Package.resolved') }}
           restore-keys: |
-            macos-15-xcode-26.3-spm-
+            macos-15-${{ runner.arch }}-xcode-26.3-spm-
 
       # 依赖可重复性：只允许精确版本。出现 from/branch/revision 会让全新 runner 解析到
       # 不同版本，构建结果不可比（ExyteChat 已从主 target 移除，目前仅 SwiftSoup 2.13.9）。
@@ -119,7 +125,7 @@ jobs:
   # 第二道：iOS 单测（BossAITests）
   ios-tests:
     needs: swift-core
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     timeout-minutes: 40
     steps:
       - name: Checkout
@@ -193,7 +199,7 @@ jobs:
   # 第三道：候选 IPA。与 ios-tests 并行，缩短总等待；此时还不算正式产物。
   build:
     needs: [swift-core]
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     timeout-minutes: 40
     steps:
       - name: Checkout

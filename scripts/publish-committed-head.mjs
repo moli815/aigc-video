@@ -7,6 +7,8 @@ const git = (...args) => execFileSync("git", args, { maxBuffer: 40 * 1024 * 1024
 const line = (...args) => git(...args).toString("utf8").trim();
 const repo = "moli815/aigc-video";
 const branch = process.argv[2];
+const runner = process.argv[3] || "macos-15";
+if (!["macos-15", "macos-15-intel"].includes(runner)) throw new Error("Unsupported hosted runner");
 if (!branch?.startsWith("codex/")) throw new Error("Only explicit codex/ branches are accepted");
 if (line("status", "--porcelain")) throw new Error("Commit all intended changes first");
 if (!line("remote", "get-url", "origin").includes(repo)) throw new Error("Unexpected repository");
@@ -53,5 +55,5 @@ if (existing) {
   if (existing.object.sha !== head) await api(`git/refs/heads/${branch}`, { sha: head, force: false }, "PATCH");
 } else { await api("git/refs", { ref: `refs/heads/${branch}`, sha: head }); }
 git("update-ref", `refs/remotes/origin/${branch}`, head);
-await api("actions/workflows/build-ipa.yml/dispatches", { ref: branch });
-process.stdout.write(JSON.stringify({ branch, head, tree: remoteTree.sha, dispatched: true }) + "\n");
+await api("actions/workflows/build-ipa.yml/dispatches", { ref: branch, inputs: { macos_runner: runner } });
+process.stdout.write(JSON.stringify({ branch, head, tree: remoteTree.sha, runner, dispatched: true }) + "\n");
