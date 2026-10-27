@@ -47,4 +47,11 @@ final class ImageQualityPolicyTests: XCTestCase {
         XCTAssertNoThrow(try ImageToolArguments.decode("{\"prompt\":\"设计海报\",\"source\":\"none\"}",
             toolName:"image_generate",userText:"设计一张新海报，不要Logo"))
     }
+    func testOptionalFreeTextRouteReasonDoesNotBlockExecutionOrSelectFlash() throws {
+        let args=try ImageToolArguments.decode("{\"prompt\":\"测试背景改色\",\"source\":\"attached\",\"quality_tier\":\"fast\",\"quality_reason\":\"中文描述\"}",
+            toolName:"image_edit",userText:"调整这张图片")
+        XCTAssertNil(args["quality_reason"])
+        XCTAssertEqual(ImageQualityPolicy.decide(userText:"调整这张图片",tool:"image_edit",referenceCount:1,
+            modelTier:args["quality_tier"] as? String,modelReason:args["quality_reason"] as? String,structured:nil).tier,"high")
+    }
 }

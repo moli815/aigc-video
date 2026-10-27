@@ -29,7 +29,11 @@ enum ImageToolArguments {
             }
         }
         if let reason = args["quality_reason"] {
-            guard let reason = reason as? String, ImageQualityPolicy.reasons.contains(reason) else { throw InputError.invalid("quality_reason") }
+            // Optional routing metadata must not invalidate an otherwise executable
+            // task. Unknown recommendations fall through to conservative policy.
+            if !(reason is String) || !ImageQualityPolicy.reasons.contains(reason as? String ?? "") {
+                args.removeValue(forKey:"quality_reason")
+            }
         }
         if toolName == "image_decompose" || !modern {
             if args["prompt"] == nil { args["prompt"] = userText }
