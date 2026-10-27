@@ -11,7 +11,7 @@ const stream = read("BossAI/ViewModels/ChatViewModel+Streaming.swift");
 const chatViewModel = read("BossAI/ViewModels/ChatViewModel.swift");
 const planner = read("BossAI/Services/ImageTaskPlanner.swift");
 const resolver = read("BossAI/Services/ImageReferenceResolver.swift");
-const chatService = read("BossAI/Services/ChatService.swift");
+const chatService = read("BossAI/Services/ToolManifest+Schema.swift");
 const imageService = read("BossAI/Services/ImageService.swift");
 const baseImageCache = read("BossAI/Services/BaseImageCache.swift");
 const mediaGuards = read("cloudfunctions/bf-image/media-guards.js");
@@ -43,7 +43,7 @@ test("reference-based generation tool can explicitly select an attached image", 
   assert.match(stream, /resolvedToolSource/);
   assert.match(referenceCandidates, /currentFiles\.map \{ file in[\s\S]{0,260}\?\? Data\(\)/);
   assert.doesNotMatch(referenceCandidates, /compactMap/);
-  assert.match(chatService, /"required": \["prompt", "structured", "aspect_ratio"\]/);
+  assert.match(chatService, /"required": \["prompt"\]/);
 });
 
 test("text overlay background excludes visible copy while retaining visual structure", () => {
@@ -128,7 +128,7 @@ test("client sends text_mode=overlay so the server can strip copy", () => {
   assert.match(compiler, /body\["text_mode"\] = textMode/, "hosted envelope 没有透出 text_mode");
   assert.match(imageService, /textMode: textMode/, "ImageService 没有把 textMode 传给编译器");
   assert.match(imageService, /textMode: \.overlay/, "无字底图没有声明 overlay");
-  assert.match(chatViewModel, /textMode: context\.textMode == \.overlay \? "overlay" : nil/,
+  assert.match(read("BossAI/Services/ImageUseCase.swift"), /textMode: context\.textMode == \.overlay \? "overlay" : nil/,
     "重试入口必须从同一上下文读取文字模式");
 });
 

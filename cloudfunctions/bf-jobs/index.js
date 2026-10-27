@@ -25,12 +25,15 @@
  */
 const tcb = require("@cloudbase/node-sdk");
 const { logSafe } = require("./log-safe");
+const { createImageArchiver } = require("./shared/image-archive");
 
 let __db = null;
+let __app = null;
 function getDb() {
   if (!__db) {
     const env = process.env.TCB_ENV || process.env.SCF_NAMESPACE || "";
-    __db = tcb.init(env ? { env } : {}).database();
+    __app = tcb.init(env ? { env } : {});
+    __db = __app.database();
   }
   return __db;
 }
@@ -71,7 +74,9 @@ function specsOf(_, now) {
     {
       id: "idem_jobs", collection: "bf_image_jobs", label: "幂等台账",
       rules: [
-        { name: "aged", desc: `创建超过 ${CFG.idemDays} 天`, where: () => ({ ts: _.lt(now - CFG.idemDays * DAY) }) },
+        { name: "aged", desc: `创建超过 ${CFG.idemDays} 天，且没有待恢复归档`, where: () => ({
+          ts: _.lt(now - CFG.idemDays * DAY), archiveState: _.nin(["pending", "needs_attention"]), costCommitted: _.neq(false),
+        }) },
       ],
     },
     {
@@ -170,6 +175,12 @@ exports.main = async function main(event, context) {
   const startedAt = Date.now();
   const ev = event || {};
   const isTimer = String(ev.Type || ev.type || "") === "Timer";
+  if (isTimer && String(ev.TriggerName || ev.triggerName || "") === "asset_archive_retry") {
+    const database = getDb();
+    const result = await createImageArchiver({ db: database, app: __app }).retryBatch(3);
+    logSafe({ tag: "asset_archive_retry", ...result });
+    return { ok: true, ...result };
+  }
   const dryRun = ev.dryRun === undefined ? !isTimer : !!ev.dryRun;
   if (Number(ev.batch) > 0) CFG.batch = Math.min(200, Math.max(10, Number(ev.batch)));
   if (Number(ev.maxPerJob) > 0) CFG.maxPerJob = Math.min(20000, Math.max(100, Number(ev.maxPerJob)));

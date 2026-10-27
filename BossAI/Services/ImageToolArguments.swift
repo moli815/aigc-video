@@ -54,8 +54,8 @@ enum ImageToolArguments {
                               keys.insert(key).inserted else { throw InputError.invalid("structured.text") }
                     }
                 } else if modern || !(value is String) { throw InputError.invalid("structured.text") }
-            } else if toolName == "image_generate" { throw InputError.invalid("structured.text") }
-        } else if toolName == "image_generate" { throw InputError.invalid("structured") }
+            }
+        }
         return args
     }
 }

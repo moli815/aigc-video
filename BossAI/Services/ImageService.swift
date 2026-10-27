@@ -28,6 +28,8 @@ import Foundation
 enum ImageTextMode: String { case native, overlay }
 
 struct ImageRequestContext {
+    /// Stable for transport retries. A changed generation intent creates a new instance/ID.
+    let requestId: String
     let prompt: String
     let references: [Data]
     let taskKind: String
@@ -48,7 +50,8 @@ struct ImageRequestContext {
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
-         targetSize: String? = nil, textMode: ImageTextMode = .native) {
+         targetSize: String? = nil, textMode: ImageTextMode = .native, requestId: String = UUID().uuidString) {
+        self.requestId = requestId
         self.prompt = prompt
         self.references = references
         self.taskKind = taskKind
@@ -141,6 +144,7 @@ struct ImageRequestContext {
 }
 
 final class ImageService {
+    var usesHostedIdempotency: Bool { profile.id == "hosted" }
     /// 生图相关错误的统一封装（errorDescription 均为用户可读中文）。
     enum ImageError: LocalizedError, APIErrorCarrying {
         case missingKey
@@ -290,10 +294,11 @@ final class ImageService {
                              requestedCount: Int?,
                              targetSize: String? = nil,
                              textMode: String? = nil) async throws -> URLRequest {
+        let session = profile.id == "hosted" ? await MainActor.run { CloudSession.capture() } : nil
         let apiKey: String
         if profile.id == "hosted" {
-            guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
-            apiKey = t
+            guard let session else { throw ImageError.missingKey }
+            apiKey = session.token
         } else {
             guard let k = apiKeyProvider(), !k.isEmpty else { throw ImageError.missingKey }
             apiKey = k
@@ -360,8 +365,13 @@ final class ImageService {
             if !references.isEmpty {
                 var uris: [String] = []
                 for ref in references {
-                    if profile.id == "hosted", let u = await Self.uploadForHosted(ref) {
-                        uris.append(u)
+                    if let session {
+                        let asset = try await CloudAssetStore.upload(ref, mime: CloudAssetStore.contentType(ref), session: session)
+                        let signed = try await session.request("/assets/urls", method: "POST", body: ["ids": [asset.id]])
+                        guard let rows = signed["items"] as? [[String: Any]],
+                              let url = rows.first?["url"] as? String,
+                              let parsed = URL(string: url), CloudAssetStore.allowed(parsed) else { throw ImageError.noImage }
+                        uris.append(url)
                     } else {
                         let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
                         uris.append("data:\(mime);base64,\(ref.base64EncodedString())")
@@ -373,12 +383,21 @@ final class ImageService {
             break
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let session { try await session.validate() }
         return request
+    }
+
+    private func validateSession(for request: URLRequest) async throws {
+        try Task.checkCancellation()
+        guard profile.id == "hosted" else { return }
+        let token = await MainActor.run { HostedAccount.shared.token }
+        guard let token, request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)" else {
+            throw CancellationError()
+        }
     }
 
     /// 非 200 响应 → 结构化错误（hosted 模式解析信封；BYOK 脱敏展示）
     private func error(from data: Data, response: HTTPURLResponse) -> ImageError {
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
         if profile.id == "hosted",
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             // 409 + IN_PROGRESS：不是错误，是"还在生成"。必须在信封解析前拦下，
@@ -398,7 +417,7 @@ final class ImageService {
         }
         return .badResponse(
             response.statusCode,
-            "服务商响应异常（\(response.statusCode)），请稍后重试。\(String(bodyText.suffix(200)))"
+            "作图服务暂时没有完成这次请求（\(response.statusCode)），请稍后重试。"
         )
     }
 
@@ -423,6 +442,7 @@ final class ImageService {
                                             requestedCount: requestedCount, targetSize: targetSize,
                                             textMode: textMode)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -434,7 +454,9 @@ final class ImageService {
             throw ImageError.noImage
         }
         if let urlString = json["url"] as? String {
-            return try await Self.downloadImage(urlString)
+            let image = try await Self.downloadImage(urlString)
+            try await validateSession(for: request)
+            return image
         }
         if let b64 = json["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
             return img
@@ -446,7 +468,9 @@ final class ImageService {
             return img
         }
         if let urlString = first["url"] as? String {
-            return try await Self.downloadImage(urlString)
+            let image = try await Self.downloadImage(urlString)
+            try await validateSession(for: request)
+            return image
         }
         throw ImageError.noImage
     }
@@ -537,6 +561,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -714,6 +739,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -739,6 +765,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -765,6 +792,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             throw error(from: data, response: response)
         }
@@ -783,6 +811,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 { throw error(from: data, response: response) }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ImageError.noImage
@@ -839,6 +868,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {

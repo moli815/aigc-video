@@ -33,6 +33,7 @@ const {
 } = require("./media-guards");
 const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
+const { providerPromptOptions } = require("./shared/image-policy");
 const { AsyncLocalStorage } = require("async_hooks");
 const reqStore = new AsyncLocalStorage();
 function currentRequestId() {
@@ -935,6 +936,11 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
     ts: Date.now(), costCommitted: false,
   };
   const ex = extra || {};
+  // A durable recovery marker; retries archive this URL and never invoke the model.
+  if (url && model !== "series") {
+    patch.archiveState = "pending";
+    patch.archiveAttempts = 0;
+  }
   if (ex.kind) patch.kind = String(ex.kind).slice(0, 24);
   if (ex.result) patch.result = ex.result;
   if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
@@ -1297,7 +1303,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
   if (caps.fastPromptMode) {
-    payload.optimize_prompt_options = { mode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE) };
+    payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
   }
   if (image) payload.image = image;
   // 10-23 图层拆分（Seedream 5.0 pro 原生能力）：仅支持 1 张图，返回底图 + 最多 16 个透明 PNG 图层

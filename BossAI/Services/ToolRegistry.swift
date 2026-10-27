@@ -69,7 +69,7 @@ struct CapabilityPlugin {
     }
 }
 
-enum ToolRegistry {
+enum ToolManifest {
 
     /// 共享核心能力（对照 Hermes `_HERMES_CORE_TOOLS`）：所有场景默认启用
     static let coreToolIDs: [String] = ["web_search", "render_chart"]
@@ -269,3 +269,6 @@ enum ToolRegistry {
         return lines.joined(separator: "\n")
     }
 }
+
+// Old call sites share the same manifest, not a second registry.
+typealias ToolRegistry = ToolManifest

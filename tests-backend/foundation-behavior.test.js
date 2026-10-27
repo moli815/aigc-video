@@ -4,6 +4,7 @@ const { memoryDatabase } = require("./foundation-fixture");
 const { createSyncService, normalizeRecord } = require("../cloudfunctions/bf-api/domains/sync-v2");
 const { normalizeEvent, createEventService } = require("../cloudfunctions/bf-api/domains/events");
 const { createAssetStore, assetSpec, assetKey, boundedBytes } = require("../cloudfunctions/shared/asset-store");
+const { createImageArchiver } = require("../cloudfunctions/shared/image-archive");
 const id = "B665E22F-B174-4C75-931A-962EC43FE3E1";
 const mid = "B665E22F-B174-4C75-931A-962EC43FE3E2";
 const record = (kind, refId, payload, baseVersion = 0) => ({ kind, refId, payload: { id: refId, ...payload }, baseVersion });
@@ -50,6 +51,33 @@ test("large snapshots and broken JSON are rejected rather than sliced", () => {
   assert.throws(() => normalizeRecord({ kind: "message", refId: mid, payload: "{broken" }));
   assert.throws(() => normalizeRecord(record("conversation", id, { messages: [] })), /SEPARATE/);
   assert.throws(() => normalizeRecord(record("message", mid, { conversationId: id, text: "字".repeat(100000) })), /TOO_LARGE/);
+});
+
+test("UUID casing cannot create duplicate sync identities", async () => {
+  const service = createSyncService({ db: memoryDatabase() });
+  await service.push("A", [record("conversation", id.toLowerCase(), { title: "same" })]);
+  const replay = await service.push("A", [record("conversation", id, { title: "same" })]);
+  assert.equal(replay.revision, 1);
+  assert.equal((await service.pull("A", 0, null, 0, 50)).items.length, 1);
+});
+
+test("children require an owned parent; parent and child can arrive in either batch order", async () => {
+  const service = createSyncService({ db: memoryDatabase() });
+  await assert.rejects(service.push("A", [record("message", mid, {conversationId:id, text:"orphan"})]), /INVALID_PARENT/);
+  const result = await service.push("A", [record("message", mid, {conversationId:id, text:"child"}), record("conversation", id, {title:"parent"})]);
+  assert.equal(result.acknowledged.length, 2);
+  await assert.rejects(service.push("B", [record("message", mid, {conversationId:id, text:"foreign"})]), /INVALID_PARENT/);
+});
+
+test("sync validates variant ownership and rejects repeated record IDs before committing", async () => {
+  let seen = [];
+  const service = createSyncService({ db: memoryDatabase(), assetStore: { async verifyReferences(owner, refs) { seen = refs; throw Error("ASSET_NOT_FOUND"); } } });
+  const asset = {id:"a".repeat(40),variants:{thumbnail:{id:"b".repeat(40)}}};
+  await assert.rejects(service.push("A", [record("message", mid, {conversationId:id,assets:[asset]})]), /NOT_FOUND/);
+  assert.deepEqual(seen.map(x=>x.id), ["a".repeat(40),"b".repeat(40)]);
+  const same = record("conversation", id, {title:"x"});
+  await assert.rejects(service.push("A", [same,same]), /DUPLICATE_RECORD/);
+  assert.equal((await service.pull("A",0,null,0,50)).watermark,0);
 });
 test("failed asset verification does not advance sync cursor or publish reference", async () => {
   const service = createSyncService({ db: memoryDatabase(), assetStore: { async verifyReferences() { throw new Error("ASSET_NOT_FOUND"); } } });
@@ -98,4 +126,31 @@ test("bounded asset fetch rejects oversized stream even without a content-length
   const fetcher = async () => new Response(new Uint8Array(20));
   await assert.rejects(boundedBytes("https://bucket.myqcloud.com/image", 10, fetcher), /SIZE_LIMIT/);
   await assert.rejects(boundedBytes("http://localhost/private", 100, fetcher), /REJECTED/);
+});
+
+test("paid-image archive uses a lease; concurrent retries never call a model or duplicate the upload", async () => {
+  const db = memoryDatabase(); let uploads = 0;
+  const row = {_id:"paid", state:"done", accountId:"A", url:"https://image.volces.com/result", archiveState:"pending", ts:1};
+  await db.collection("bf_image_jobs").doc(row._id).set(row);
+  const archiver = createImageArchiver({db, app:{async uploadFile() { uploads++; return {fileID:"cloud://bucket/archived"}; }},
+    fetcher:async()=>new Response(Buffer.from([255,216,1,2,3]))});
+  await Promise.all([archiver.archive(row),archiver.archive(row)]);
+  const stored = (await db.collection("bf_image_jobs").doc("paid").get()).data[0];
+  assert.equal(stored.archiveState,"ready");
+  assert.equal(uploads,1);
+  assert.equal((await archiver.archive(row)).asset.id,stored.asset.id);
+  assert.equal(uploads,1);
+});
+
+test("archive failure preserves paid success and releases its lease for retry", async () => {
+  const db = memoryDatabase();
+  const row = {_id:"paid-fail",state:"done",accountId:"A",url:"https://image.volces.com/result",archiveState:"pending",ts:1};
+  await db.collection("bf_image_jobs").doc(row._id).set(row);
+  const archiver = createImageArchiver({db,app:{},fetcher:async()=>{throw Error("storage unavailable");}});
+  await archiver.archive(row);
+  const stored = (await db.collection("bf_image_jobs").doc(row._id).get()).data[0];
+  assert.equal(stored.state,"done");
+  assert.equal(stored.archiveState,"pending");
+  assert.equal(stored.archiveAttempts,1);
+  assert.equal(stored.archiveLeaseUntil,0);
 });

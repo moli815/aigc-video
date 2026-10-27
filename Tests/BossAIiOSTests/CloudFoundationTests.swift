@@ -4,7 +4,7 @@ import SwiftData
 
 @MainActor
 final class CloudFoundationTests: XCTestCase {
-    private func context() throws -> ModelContext {
+    private func makeContext() throws -> ModelContext {
         let schema = Schema([Conversation.self, Message.self, MemoryItem.self, StoredFile.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
         return container.mainContext
@@ -20,7 +20,7 @@ final class CloudFoundationTests: XCTestCase {
         XCTAssertFalse(CloudAssetStore.encode([original]).contains("https://"))
     }
     func testMessagesSyncSeparatelyAndNeverSerializeBinaryImages() throws {
-        let context = try context(), conv = Conversation(expertId: "general", title: "sample")
+        let context = try makeContext(), conv = Conversation(expertId: "general", title: "sample")
         conv.ownerKey = "test-owner"; context.insert(conv)
         let message = Message(role: "assistant", text: "hello", imageData: Data([1,2,3]))
         message.conversation = conv; message.conversationID = conv.id; context.insert(message)
@@ -35,7 +35,7 @@ final class CloudFoundationTests: XCTestCase {
         XCTAssertTrue(try SyncV2Engine.records(context: context, owner: "other-owner").isEmpty)
     }
     func testExistingMessageReceivesRevisionsAndCloudImageReferences() throws {
-        let context = try context(), conv = Conversation(expertId: "general", title: "existing")
+        let context = try makeContext(), conv = Conversation(expertId: "general", title: "existing")
         conv.ownerKey = "test-owner"; context.insert(conv)
         let message = Message(role: "assistant", text: "old"); message.conversation = conv
         message.conversationID = conv.id; context.insert(message); try context.save()
@@ -48,7 +48,7 @@ final class CloudFoundationTests: XCTestCase {
         XCTAssertEqual(conv.messages.count, 1)
     }
     func testASecondOwnersSameUUIDIsNeverOverwritten() throws {
-        let context = try context(), conv = Conversation(expertId: "general", title: "owner A")
+        let context = try makeContext(), conv = Conversation(expertId: "general", title: "owner A")
         conv.ownerKey = "A"; context.insert(conv); try context.save()
         try SyncV2Engine.apply(try row(kind: "conversation", ["id": conv.id.uuidString,
             "title": "owner B", "createdAt": 1000, "updatedAt": 1000]), context: context, owner: "B")
@@ -56,7 +56,7 @@ final class CloudFoundationTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<Conversation>()).count, 2)
     }
     func testCloudFileRestoresWithSafeLocalNameAndStableAssetReference() throws {
-        let context = try context(), id = UUID()
+        let context = try makeContext(), id = UUID()
         let asset = CloudAssetRef(id: String(repeating: "a", count: 40), sha256: String(repeating: "d", count: 64), mime: "application/pdf", byteCount: 20)
         let rawAsset = try JSONSerialization.jsonObject(with: JSONEncoder().encode(asset))
         try SyncV2Engine.apply(try row(kind: "file", ["id": id.uuidString, "name": "report.pdf",
@@ -82,5 +82,27 @@ final class CloudFoundationTests: XCTestCase {
         XCTAssertFalse(CloudAssetStore.allowed(URL(string: "https://evilmyqcloud.com/file")!))
         XCTAssertFalse(CloudAssetStore.allowed(URL(string: "https://user:password@bucket.myqcloud.com/file")!))
         XCTAssertFalse(CloudAssetStore.allowed(URL(string: "http://bucket.myqcloud.com/file")!))
+    }
+    func testConflictingLocalMessageIsPreservedOnceAcrossRepeatedRecovery() throws {
+        let context = try makeContext(), conv = Conversation(expertId: "general", title: "conflict")
+        conv.ownerKey = "conflict-owner"; context.insert(conv)
+        let message = Message(role: "user", text: "本地版本")
+        message.conversation = conv; message.conversationID = conv.id; context.insert(message)
+        try context.save()
+        try SyncV2Engine.preserveLocalMessage(id: message.id.uuidString, context: context, owner: "conflict-owner")
+        try context.save()
+        try SyncV2Engine.preserveLocalMessage(id: message.id.uuidString, context: context, owner: "conflict-owner")
+        try context.save()
+        XCTAssertEqual(conv.messages.count, 2)
+        XCTAssertTrue(conv.messages.allSatisfy { $0.text == "本地版本" })
+    }
+    func testRemoteDeletedParentCannotBeResurrectedByAnOlderChildPage() throws {
+        let context = try makeContext(), parent = UUID(), message = UUID()
+        let owner = "deleted-parent-" + UUID().uuidString
+        try SyncV2Engine.apply(try row(kind: "conversation", ["id": parent.uuidString, "isDeleted": true], deleted: true), context: context, owner: owner)
+        try SyncV2Engine.apply(try row(kind: "message", ["id": message.uuidString, "conversationId": parent.uuidString, "text": "旧消息"]), context: context, owner: owner)
+        try context.save()
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Conversation>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Message>()).isEmpty)
     }
 }

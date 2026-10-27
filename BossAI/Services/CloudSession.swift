@@ -12,6 +12,7 @@ struct CloudSession: Sendable {
     }
 
     @MainActor func validate() throws {
+        try Task.checkCancellation()
         guard HostedAccount.scopeKey == owner, HostedAccount.shared.token == token else {
             throw CancellationError()
         }

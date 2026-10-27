@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import BackgroundTasks
+import Combine
 
 // ============================================================================
 // 文件职责：P0-18 云端同步引擎。
@@ -32,7 +33,7 @@ enum SyncError: LocalizedError {
 ///    若设备当天没用过 App，系统可能延后——这是 iOS 的既有约束，不是实现缺陷）；
 /// 5. 失败一律静默 + 保留本地数据，绝不因同步失败影响使用（安全冗余）。
 @MainActor
-final class SyncService {
+final class SyncService: ObservableObject {
     static let shared = SyncService()
     static let bgTaskIdentifier = "com.bossai.sync.daily"
 
@@ -105,6 +106,10 @@ final class SyncService {
             try? UserDefaults.standard.removeObject(forKey: "bossai.sync.lastError")
             return true
         } catch {
+            guard HostedAccount.scopeKey == ownerAtStart else {
+                rerunRequested = true
+                return false
+            }
             // P0-46 错误可见性：不再纯静默——记录最近错误与连续失败次数（供诊断与 UI 提示）。
             // 本地数据完整，下次仍会重试；连续失败是"信息可能未同步"的可观测信号。
             consecutiveFailures += 1
@@ -135,65 +140,7 @@ final class SyncService {
         return ok
     }
 
-    // MARK: - 推送
-
-    /// 推送：把本账号的对话与记忆序列化后分批上云。
-    /// 只推 ownerKey == scopeKey 的条目（多账号数据隔离）；
-    /// updatedAt 取 createdAt/updatedAt 的较大者（记忆条目 updatedAt 可能晚于创建）。
-    private func push(context: ModelContext) async throws {
-        let key = HostedAccount.scopeKey
-        var items: [[String: Any]] = []
-
-        // 10-22 P1：fetch 失败不能当成「没有数据」继续同步（会把空推送上去并推进游标）
-        let convsToPush = try context.fetch(FetchDescriptor<Conversation>(
-            predicate: #Predicate { $0.ownerKey == key }
-        ))
-        if !convsToPush.isEmpty {
-            for c in convsToPush {
-                items.append([
-                    "kind": "conversation",
-                    "refId": c.id.uuidString,
-                    "updatedAt": Int(c.updatedAt.timeIntervalSince1970 * 1000),
-                    "payload": Self.encodeConversation(c),
-                ])
-            }
-        }
-        // 墓碑也必须推送：否则「A 设备删除 → B 设备 pull 到旧记录 → 记忆复活」
-        let memoriesToPush = try context.fetch(FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { $0.ownerKey == key }
-        ))
-        if !memoriesToPush.isEmpty {
-            for m in memoriesToPush {
-                items.append([
-                    "kind": "memory",
-                    "refId": m.id.uuidString,
-                    "updatedAt": Int(max(m.createdAt, m.updatedAt).timeIntervalSince1970 * 1000),
-                    "payload": Self.encodeMemory(m),
-                ])
-            }
-        }
-        // 分批发（服务端单次上限 200 条）：按 100 条切片，既留余量又减少请求次数
-        var index = 0
-        while index < items.count {
-            let slice = Array(items[index..<min(index + 100, items.count)])
-            let body: [String: Any] = ["items": slice]
-            let resp = try await HostedAccount.shared.syncPush(items: body)
-            // 10-24 P1：服务端已改为逐条回执。旧实现只看 HTTP 2xx，
-            // 部分条目写库失败也当成功 → 直接推进游标 → 那几条永远不再推。
-            // 兼容旧服务端：没有 acceptedIds 字段时退回「saved 必须等于本批条数」。
-            if let failed = resp["failedItems"] as? [[String: Any]], !failed.isEmpty {
-                let ids = failed.compactMap { $0["refId"] as? String }.prefix(5).joined(separator: ",")
-                throw SyncError.invalidResponse("本轮有 \(failed.count) 条未写入云端（\(ids)…），稍后重试")
-            }
-            if resp["acceptedIds"] == nil {
-                let saved = (resp["saved"] as? NSNumber)?.intValue ?? (resp["saved"] as? Int) ?? -1
-                if saved >= 0 && saved < slice.count {
-                    throw SyncError.invalidResponse("云端仅接收 \(saved)/\(slice.count) 条，稍后重试")
-                }
-            }
-            index += 100
-        }
-    }
+    // V1 is migration-read-only. All new writes use SyncV2Engine.
 
     // MARK: - 拉取与合并
 

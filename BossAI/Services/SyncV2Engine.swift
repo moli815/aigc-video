@@ -20,6 +20,7 @@ enum SyncV2Engine {
         var versions: [String: Int] = [:]
         var acknowledged: [String: String] = [:]
         var pending: [String: Record] = [:]
+        var deletedConversationIDs: Set<String>?
     }
     private static var checkpoints: [String: Checkpoint] = [:]
     static func location(_ owner: String) -> URL {
@@ -55,6 +56,23 @@ enum SyncV2Engine {
         state.pending.removeValue(forKey: kind + ":" + id.uuidString)
         try? save(state, owner: owner)
     }
+    static func isDeletedConversation(_ id: UUID, owner: String) -> Bool {
+        guard let state = try? load(owner) else { return false }
+        return state.deletedConversationIDs?.contains(id.uuidString) == true || hasPendingDeletion(kind: "conversation", id: id, owner: owner)
+    }
+    static func hasPendingDeletion(kind: String, id: UUID, owner: String) -> Bool {
+        guard let state = try? load(owner), let pending = state.pending[kind + ":" + id.uuidString],
+              let raw = pending.payload.data(using: .utf8),
+              let payload = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any] else { return false }
+        return payload["isDeleted"] as? Bool == true
+    }
+    static func noteDeletedConversation(_ id: UUID, owner: String) throws {
+        let state = try load(owner)
+        var ids = state.deletedConversationIDs ?? []
+        ids.insert(id.uuidString)
+        state.deletedConversationIDs = ids
+        try save(state, owner: owner)
+    }
 
     static func synchronize(context: ModelContext, session: CloudSession) async throws {
         var state = try load(session.owner)
@@ -62,7 +80,7 @@ enum SyncV2Engine {
         if !state.legacyImported {
             try await bootstrapRemote(context: context, session: session, state: &state)
         }
-        try await uploadLocalAssets(context: context, session: session)
+        let assetsPending = try await uploadLocalAssets(context: context, session: session)
         let snapshots = try records(context: context, owner: session.owner)
         for record in snapshots where state.acknowledged[record.key] != record.fingerprint {
             var pending = record
@@ -72,7 +90,7 @@ enum SyncV2Engine {
         state.legacyImported = true
         try save(state, owner: session.owner) // Outbox precedes every network write.
 
-        var hadConflicts = false
+        var conflictPasses = 0
         while !state.pending.isEmpty {
             try session.validate()
             let ordered = state.pending.values.sorted {
@@ -96,9 +114,42 @@ enum SyncV2Engine {
                 if state.pending[key]?.fingerprint == sent.fingerprint { state.pending.removeValue(forKey: key) }
             }
             let conflicts = result["conflicts"] as? [[String: Any]] ?? []
-            if !conflicts.isEmpty { hadConflicts = true }
+            for remote in conflicts {
+                let key = (remote["kind"] as? String ?? "") + ":" + (remote["refId"] as? String ?? "")
+                guard var pending = state.pending[key] else { continue }
+                let version = (remote["version"] as? NSNumber)?.intValue ?? 0
+                if remote["deleted"] as? Bool == true {
+                    try apply(remote, context: context, owner: session.owner)
+                    state.pending.removeValue(forKey: key)
+                    state.acknowledged.removeValue(forKey: key)
+                } else if pending.kind == "message" {
+                    // Keep both concurrent message revisions. Save the local copy before
+                    // accepting the server version, rather than stalling the entire outbox.
+                    try preserveLocalMessage(id: pending.refId, context: context, owner: session.owner)
+                    try apply(remote, context: context, owner: session.owner)
+                    state.pending.removeValue(forKey: key)
+                    if let local = try records(context: context, owner: session.owner).first(where: { $0.key == key }) {
+                        state.acknowledged[key] = local.fingerprint
+                    }
+                } else {
+                    // Metadata edits can be rebased; the server version is now known.
+                    pending.baseVersion = version
+                    state.pending[key] = pending
+                }
+                state.versions[key] = version
+            }
+            if !conflicts.isEmpty {
+                try context.save()
+                for var local in try records(context: context, owner: session.owner)
+                    where state.pending[local.key] == nil && state.acknowledged[local.key] != local.fingerprint {
+                    local.baseVersion = state.versions[local.key] ?? 0
+                    state.pending[local.key] = local
+                }
+                conflictPasses += 1
+            }
             try save(state, owner: session.owner)
-            if hadConflicts || acks.isEmpty { break } // Never drop an unacknowledged local edit.
+            guard conflictPasses < 4 else { throw SyncError.invalidPayload("多台设备正在修改，本机内容已保留，稍后再同步") }
+            if acks.isEmpty && conflicts.isEmpty { throw SyncError.invalidResponse("同步未确认任何记录") }
         }
 
         var after = state.cursor, watermark: Int?
@@ -140,7 +191,26 @@ enum SyncV2Engine {
             guard next > after, page < 999 else { throw SyncError.invalidResponse("同步游标未前进") }
             after = next
         }
-        if hadConflicts { throw SyncError.invalidPayload("这段内容在其他设备有更新，本机修改已保留，暂未覆盖云端") }
+        if assetsPending { throw SyncError.invalidResponse("对话已同步，部分图片或文件仍在等待上传，本机副本已保留") }
+    }
+
+    static func preserveLocalMessage(id rawID: String, context: ModelContext, owner: String) throws {
+        guard let id = UUID(uuidString: rawID) else { throw SyncError.invalidPayload("无效消息编号") }
+        let candidates = try context.fetch(FetchDescriptor<Message>(predicate: #Predicate { $0.id == id }))
+        guard let local = candidates.first(where: { $0.conversation?.ownerKey == owner }), let conv = local.conversation else { return }
+        let fingerprint = try records(context: context, owner: owner).first { $0.key == "message:" + rawID }?.fingerprint ?? local.text
+        let digest = CloudAssetStore.sha256(Data((owner + rawID + fingerprint).utf8))
+        let hex = Array(digest.prefix(32))
+        let stable = [String(hex[0..<8]), String(hex[8..<12]), String(hex[12..<16]), String(hex[16..<20]), String(hex[20..<32])].joined(separator: "-")
+        guard let copyID = UUID(uuidString: stable) else { throw SyncError.invalidPayload("无法保存冲突副本") }
+        if conv.messages.contains(where: { $0.id == copyID }) { return }
+        let copy = Message(role: local.role, text: local.text, imageData: local.imageData)
+        copy.id = copyID
+        copy.conversation = conv; copy.conversationID = conv.id
+        copy.sourcesJSON = local.sourcesJSON; copy.attachmentIds = local.attachmentIds
+        copy.extraImagesJSON = local.extraImagesJSON; copy.imageAssetsJSON = local.imageAssetsJSON
+        copy.seriesMetaJSON = local.seriesMetaJSON; copy.createdAt = local.createdAt.addingTimeInterval(0.001)
+        context.insert(copy)
     }
 
     static func records(context: ModelContext, owner: String) throws -> [Record] {
@@ -182,11 +252,13 @@ enum SyncV2Engine {
         return output
     }
 
-    private static func uploadLocalAssets(context: ModelContext, session: CloudSession) async throws {
+    private static func uploadLocalAssets(context: ModelContext, session: CloudSession) async throws -> Bool {
         let owner = session.owner
+        var assetsPending = false
         let convs = try context.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.ownerKey == owner && !$0.isDeleted }))
         for conv in convs {
             for message in conv.messages {
+                do {
                 let images = message.allImages
                 guard !images.isEmpty else { continue }
                 let existing = CloudAssetStore.references(message.imageAssetsJSON)
@@ -200,9 +272,16 @@ enum SyncV2Engine {
                 guard message.modelContext != nil, conv.modelContext != nil, !conv.isDeleted else { throw CancellationError() }
                 message.imageAssetsJSON = CloudAssetStore.encode(refs)
                 try context.save()
+                } catch {
+                    try session.validate()
+                    if error is CancellationError { throw error }
+                    assetsPending = true
+                    DiagnosticQueue.shared.record(domain: "asset", stage: "message_upload", code: "ASSET_UPLOAD_PENDING")
+                }
             }
         }
         for file in try context.fetch(FetchDescriptor<StoredFile>(predicate: #Predicate { $0.ownerKey == owner })) {
+            do {
             if !file.cloudAssetJSON.isEmpty { continue }
             let url = FileStore.url(for: file)
             guard FileManager.default.fileExists(atPath: url.path) else { continue } // Legacy lost bytes cannot be recreated.
@@ -212,7 +291,14 @@ enum SyncV2Engine {
             try session.validate()
             guard file.modelContext != nil else { throw CancellationError() }
             file.cloudAssetJSON = CloudAssetStore.encode([asset]); file.contentHash = asset.sha256; try context.save()
+            } catch {
+                try session.validate()
+                if error is CancellationError { throw error }
+                assetsPending = true
+                DiagnosticQueue.shared.record(domain: "asset", stage: "file_upload", code: "ASSET_UPLOAD_PENDING")
+            }
         }
+        return assetsPending
     }
 
     private static func bootstrapRemote(context: ModelContext, session: CloudSession, state: inout Checkpoint) async throws {
@@ -266,7 +352,13 @@ enum SyncV2Engine {
         switch kind {
         case "conversation":
             let found = try context.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == id && $0.ownerKey == owner })).first
-            if deleted { if let found { context.delete(found) }; ConversationDeletion.confirmRemoteDeleted(id); return }
+            if deleted {
+                try noteDeletedConversation(id, owner: owner)
+                if let found { context.delete(found) }
+                ConversationDeletion.confirmRemoteDeleted(id)
+                return
+            }
+            if isDeletedConversation(id, owner: owner) { return }
             if ConversationDeletion.isPendingDelete(id) { return }
             let conv = found ?? Conversation(expertId: payload["expertId"] as? String ?? "general", title: "")
             if found == nil { conv.id = id; conv.ownerKey = owner; context.insert(conv) }
@@ -275,7 +367,7 @@ enum SyncV2Engine {
             conv.createdAt = date(payload["createdAt"]); conv.updatedAt = date(payload["updatedAt"])
         case "message":
             guard let parent = UUID(uuidString: payload["conversationId"] as? String ?? "") else { throw SyncError.invalidPayload("消息缺少会话") }
-            if ConversationDeletion.isPendingDelete(parent) { return }
+            if ConversationDeletion.isPendingDelete(parent) || isDeletedConversation(parent, owner: owner) { return }
             var conv = try context.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == parent && $0.ownerKey == owner })).first
             if conv == nil { let stub = Conversation(expertId: "general", title: "对话"); stub.id = parent; stub.ownerKey = owner; context.insert(stub); conv = stub }
             guard let conv else { return }
@@ -311,7 +403,10 @@ enum SyncV2Engine {
             file.byteCount = payload["byteCount"] as? Int ?? 0; file.createdAt = date(payload["createdAt"])
             file.sourceConversationId = payload["sourceConversationId"] as? String ?? ""; file.textContent = payload["textContent"] as? String ?? ""
             file.isFavorite = payload["isFavorite"] as? Bool ?? false
-            if let rawAsset = payload["asset"] as? [String: Any] { file.cloudAssetJSON = CloudAssetStore.encode([try CloudAssetStore.decode(rawAsset)]) }
+            if let rawAsset = payload["asset"] as? [String: Any] {
+                let asset = try CloudAssetStore.decode(rawAsset)
+                file.cloudAssetJSON = CloudAssetStore.encode([asset]); file.contentHash = asset.sha256
+            }
         default: throw SyncError.invalidPayload("需要更新客户端以读取此类型")
         }
     }

@@ -290,11 +290,7 @@ final class ChatViewModel: ObservableObject {
     ///
     /// Network and DOM parsing do not execute on MainActor; priority order survives concurrency.
     /// P0-50 当前年月（中文格式，搜索时效增强用）
-    nonisolated static func currentYearMonth() -> String {
-        let f = DateFormatter(); f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "yyyy年M月"
-        return f.string(from: Date())
-    }
+    nonisolated static func currentYearMonth() -> String { ResearchUseCase.currentYearMonth() }
 
     /// 图片模型可见的参考图候选：优先使用本轮附件（保持上传顺序），
     /// 只有本轮无图时才取与多模态上下文相同的那一张历史承接图。
@@ -322,183 +318,28 @@ final class ChatViewModel: ObservableObject {
         return try? Data(contentsOf: FileStore.url(for: file))
     }
 
-    /// P0-74 视觉审核（调服务端 qwen3-vl-plus）：判断生成图是否满足"用户要求"。
-    /// 返回 nil = 无法验证（未登录/未配置/网络失败）——调用方不阻断出图（验证是增强，不是依赖）。
+
     nonisolated static func visionCheck(imageData: Data, requirement: String) async -> (ok: Bool, note: String)? {
-        let token: String? = await MainActor.run { HostedAccount.isHostedActive ? HostedAccount.shared.token : nil }
-        guard let token, !token.isEmpty,
-              let url = URL(string: AppConfig.hostedAPIBase + "/vision-check") else { return nil }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: [
-            "image": "data:image/jpeg;base64," + imageData.base64EncodedString(),
-            "question": "用户要求：\(String(requirement.prefix(200)))。生成的图片是否满足该要求？",
-        ])
-        // 10-23 P3：视觉校验请求体可能较大，响应为 small JSON；用 chatSession 给足 180s 并限制响应体 1MB
-        guard let (data, resp) = try? await BoundedHTTPClient.data(for: req,
-                                                                   session: BoundedHTTPClient.chatSession,
-                                                                   limit: 1 * 1024 * 1024),
-              resp.statusCode == 200,
-              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return (ok: (j["ok"] as? Bool) ?? true, note: (j["note"] as? String) ?? "")
+        await ImageUseCase.visionCheck(imageData: imageData, requirement: requirement)
     }
-
-    /// P0-52 Hermes 式失败重试：上游网关/超时类失败自动重试一次（网络抖动救回；参数/额度不重试）。
-    /// 借鉴 Hermes Agent 的健壮工具调用设计——"偶发失败自动恢复"是工具调用可靠性的重要一环。
-    /// P0-53 修正：网络错误（URLError）是 URLSession 直接抛出的，不经过 ImageError——
-    /// 此前只匹配 ImageError，导致"最该重试的网络超时"反而没被重试。
-    
-    /// 图片请求的**唯一入口**（10-25 收口）：所有生成/重试都从不可变 context 取参数。
-    /// 旧的九参数版本已收为 private 实现 `performImageGeneration`，业务代码无法再绕过 context。
-    /// 文字模式属于上游请求语义，必须随不可变上下文和重试一起继承。
-    nonisolated static func generateImageWithRetry(context: ImageRequestContext,
-                                                   service: ImageService) async throws -> Data {
-        try await performImageGeneration(prompt: context.prompt,
-                                         references: context.references,
-                                         service: service,
-                                         structured: context.structured,
-                                         layerDecomposition: context.layerDecomposition,
-                                         renderIntent: context.renderIntent,
-                                         aspectRatio: context.aspectRatio,
-                                         taskKind: context.taskKind,
-                                         qualityTier: context.qualityTier,
-                                         requestedCount: context.requestedCount,
-                                         targetSize: context.targetSize,
-                                         textMode: context.textMode == .overlay ? "overlay" : nil)
+    nonisolated static func generateImageWithRetry(context: ImageRequestContext, service: ImageService) async throws -> Data {
+        try await ImageUseCase.generate(context: context, service: service)
     }
-
-    /// 把规划结果里的比例字符串（如 "16:9"）解析成宽高比数值。
-    /// 解析失败返回 nil —— 表示「不校验比例」，绝不能拿一个瞎猜的默认值去卡死出图。
-    nonisolated static func aspectRatioValue(_ raw: String) -> CGFloat? {
-        let parts = raw.split(separator: ":")
-        guard parts.count == 2,
-              let width = Double(parts[0]), let height = Double(parts[1]),
-              width.isFinite, height.isFinite, width > 0, height > 0, (width / height).isFinite else { return nil }
-        return CGFloat(width / height)
+    nonisolated static func aspectRatioValue(_ raw: String) -> CGFloat? { ImageUseCase.aspectRatioValue(raw) }
+    nonisolated static func generateSeriesWithRetry(prompt: String, references: [Data], service: ImageService,
+        requestedCount: Int, structured: [String: Any]? = nil, renderIntent: String? = nil,
+        aspectRatio: String? = nil, qualityTier: String? = nil) async throws -> ImageService.SeriesOutcome {
+        try await ImageUseCase.generateSeriesWithRetry(prompt: prompt, references: references, service: service,
+            requestedCount: requestedCount, structured: structured, renderIntent: renderIntent,
+            aspectRatio: aspectRatio, qualityTier: qualityTier)
     }
-
-private nonisolated static func performImageGeneration(prompt: String, references: [Data], service: ImageService, structured: [String: Any]? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil) async throws -> Data {
-        // 同一次生成（含重试）复用同一 requestId，服务端据此幂等去重
-        let idemKey = UUID().uuidString
-        // P0-64 重试次数云端可调（在线可修复）：管理台改 APP_IMAGE_RETRY 即生效
-        let limit = HostedAccount.isHostedActive ? HostedAccount.cachedImageRetry : 1
-        var attempt = 0
-        while true {
-            do {
-                return try await service.generate(prompt: prompt, references: references, structured: structured, requestId: idemKey, layerDecomposition: layerDecomposition, renderIntent: renderIntent, aspectRatio: aspectRatio, taskKind: taskKind, qualityTier: qualityTier, requestedCount: requestedCount, targetSize: targetSize, textMode: textMode)
-            } catch {
-                let retryable = (error as? URLError) != nil
-                    || ((error as? ImageService.ImageError)?.isRetryable ?? false)
-                guard retryable, attempt < limit else { throw error }
-                attempt += 1
-                try await Task.sleep(nanoseconds: 1_200_000_000)
-            }
-        }
-    }
-
-    /// 10-24 组图：与单图同构的重试策略（同一 requestId、可重试错误退避一次）。
-    /// 关键差异：组图**不按"整组重试"**，失败项由服务端在 /series/retry 里单独补画。
-    nonisolated static func generateSeriesWithRetry(prompt: String,
-                                                    references: [Data],
-                                                    service: ImageService,
-                                                    requestedCount: Int,
-                                                    structured: [String: Any]? = nil,
-                                                    renderIntent: String? = nil,
-                                                    aspectRatio: String? = nil,
-                                                    qualityTier: String? = nil) async throws -> ImageService.SeriesOutcome {
-        let idemKey = UUID().uuidString
-        let limit = HostedAccount.isHostedActive ? HostedAccount.cachedImageRetry : 1
-        var attempt = 0
-        while true {
-            do {
-                return try await service.generateSeries(prompt: prompt, requestId: idemKey,
-                                                        requestedCount: requestedCount,
-                                                        qualityTier: qualityTier,
-                                                        aspectRatio: aspectRatio,
-                                                        renderIntent: renderIntent,
-                                                        structured: structured,
-                                                        references: references)
-            } catch {
-                // 429/409（额度/进行中）不自动重试：重试只会再撞一次，交给用户决定
-                let retryable = (error as? URLError) != nil
-                    || ((error as? ImageService.ImageError)?.isRetryable ?? false)
-                guard retryable, attempt < limit else { throw error }
-                attempt += 1
-                try await Task.sleep(nanoseconds: 1_500_000_000)
-            }
-        }
-    }
-
-    nonisolated static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
-        let query = (args?["query"] as? String) ?? fallback
-        return (query, (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query))
+    nonisolated static func searchQuery(_ call: ChatService.ToolCall, fallback: String) -> (String, SearchRecency) {
+        ResearchUseCase.searchQuery(call, fallback: fallback)
     }
     nonisolated static func runWebSearch(call: ChatService.ToolCall, order: Int, fallback: String, provider: any ResearchSearching) async -> SearchOutcome {
-        let span = PerformanceTrace.begin("WebSearch")
-        defer { PerformanceTrace.end("WebSearch", span) }
-        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
-        let rawQuery = (args?["query"] as? String) ?? fallback
-        // P0-50 搜索时效性增强：行情/价格/新闻类查询且未含年份时，自动附加当前年月——
-        // 实测搜索引擎对无时间词的查询倾向返回旧页面快照（用户实机曾搜到一年前的金价数据）。
-        let timewords = ["行情", "价格", "多少钱", "最新", "今天", "今日", "新闻", "汇率", "金价", "股价", "报价", "走势", "天气"]
-        let hasYear = rawQuery.range(of: #"20\d{2}"#, options: .regularExpression) != nil
-        let needsFresh = timewords.contains { rawQuery.contains($0) }
-        let query = (needsFresh && !hasYear) ? rawQuery + " " + Self.currentYearMonth() : rawQuery
-        let recency = (args?["recency"] as? String).flatMap(SearchRecency.init(rawValue:)) ?? SearchRecency.inferred(from: query)
-        let hits = await provider.search(query: query, count: 6, recency: recency)
-
-        if hits.isEmpty {
-            return SearchOutcome(
-                order: order,
-                callId: call.id,
-                hits: [], pages: [], emptyMessage: """
-                搜索「\(query)」无结果或网络不可用。
-                请在最终答案里把对应字段明确标注为「未核实」，\
-                不要用记忆中的数字、其他型号的数字或拼凑的数字填空 —— 留空不算错，填错才算错。
-                """
-            )
-        }
-
-        // 并行抓取正文，多给 3 个候选。
-        // 部分站点会反爬返回空，只抓前 N 个会因为个别失败而白白少拿一份资料 —— 这里凑够为止。
-        let fetchCount = min(AppConfig.searchPageFetchCount, hits.count)
-        guard fetchCount > 0 else {
-            return SearchOutcome(order: order, callId: call.id,
-                                 hits: hits, pages: [], emptyMessage: nil)
-        }
-        let candidates = Array(hits.prefix(fetchCount + 3))
-        var pages: [(title: String, url: String, text: String)] = []
-        // Priority batches retain slow authoritative pages; nonempty text alone is insufficient.
-        for start in stride(from: 0, to: candidates.count, by: 3) {
-            if Task.isCancelled || pages.count >= fetchCount { break }
-            let batch = Array(candidates[start..<min(start + 3, candidates.count)])
-            let raw = await withTaskGroup(of: (Int, String, String, String).self) { group in
-                for (i, hit) in batch.enumerated() {
-                    group.addTask { (i, hit.title, hit.url, await provider.page(url: hit.url, limit: 3500)) }
-                }
-                var collected: [(Int, String, String, String)] = []
-                for await item in group { collected.append(item) }
-                return collected.sorted { $0.0 < $1.0 }
-            }
-            for item in raw where item.3.count > 80 && ResearchIntent.relevance(query: query, text: item.3) > 0 {
-                if pages.count < fetchCount { pages.append((item.1, item.2, item.3)) }
-            }
-        }
-
-        return SearchOutcome(order: order,
-                             callId: call.id,
-                             hits: hits, pages: pages, emptyMessage: nil)
+        await ResearchUseCase.runWebSearch(call: call, order: order, fallback: fallback, provider: provider)
     }
 
-    // MARK: - 上下文组装：专家 prompt + 身份 + 记忆 + 附件正文
-
-    /// 组装发送给模型的完整消息数组：
-    /// 两条 system（稳定块+易变块，P0-2 缓存稳定化）→ 最近 40 条消息（含附件
-    /// 注入与多模态图片）→ 尾部按 48K 字符预算裁剪。稳定块永不变化保证前缀缓存命中。
-    /// 统一的关键保存入口：失败不静默，写入 persistenceWarning 供 UI 展示。
-    /// 说明：这里不抛错（调用点多为收尾路径，抛错会打断流式收尾）；但失败一定可观测。
     func saveOrWarn() {
         do {
             try modelContext.save()
@@ -522,6 +363,10 @@ private nonisolated static func performImageGeneration(prompt: String, reference
             + ResponsePolicy.prompt(reply: identity.replyStyle, answer: answerStyle)
             + Self.capabilityPrompt()
         var volatileSystem = ""
+        let latestRequest = conv.messages.filter { $0.role == "user" }.max { $0.createdAt < $1.createdAt }?.text ?? ""
+        if Self.mentionsImageGenerationOrEdit(latestRequest) {
+            volatileSystem += ImageDesignGuidance.instructions + "\n"
+        }
         if !conv.rollingSummary.isEmpty {
             volatileSystem += "【前情摘要】本会话较早部分的要点：\n" + conv.rollingSummary + "\n\n"
         }
@@ -556,7 +401,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
         }
 
         for m in sortedMessages.suffix(40) {
-            if m.imageData != nil {
+            if m.imageData != nil || !CloudAssetStore.references(m.imageAssetsJSON).isEmpty {
                 messages.append(["role": "assistant", "content": "[已向用户展示生成的图片]"])
                 continue
             }
@@ -694,7 +539,7 @@ private nonisolated static func performImageGeneration(prompt: String, reference
     /// 当最新消息是纯文本、但近轮存在用户上传的图片时，用这些关键词决定是否把
     /// 最近一张用户图重新作为 image_url 加入当前请求，避免"先识别再做新海报"时
     /// 模型看不到原图而卡住或选错工具。
-    private static func mentionsImageGenerationOrEdit(_ text: String) -> Bool {
+    static func mentionsImageGenerationOrEdit(_ text: String) -> Bool {
         let lowered = text.lowercased()
         let keywords = [
             "海报", "名片", "封面", "配图", "插图", "插画", "生成", "做一张", "做一个",
@@ -801,7 +646,6 @@ private nonisolated static func performImageGeneration(prompt: String, reference
         }
         // 10-23 关键修复：此前清单里完全没有"作图"，模型面对"设计名片/做海报"会退化成给文字方案或 Word。
         caps.append("图片生成：用户说「做一张图 / 设计海报 / 出封面 / 配图 / 画个示意图」时，**必须直接调用图片工具出图**；根据上传图重新设计新作品用 image_generate + source=attached，只有用户明确要求保留画面并局部修改时才用 image_edit。不要用文字方案或文档代替用户要的图片。准确可见文案仅放 structured.text，视觉指令不得混入其中。")
-        caps.append(ImageDesignGuidance.instructions)
         if HostedAccount.cachedExportDocEnabled {
             caps.append("文档导出：回答完成后，用户可点击右上角导出按钮把整段对话生成 Word/PPT/Excel/PDF 文件——当用户要'文件/表格/文档'时，请直接给出完整内容并提醒用户使用导出功能，严禁说'我无法生成文件'")
         }
@@ -834,15 +678,16 @@ actor ImageDataURLCache {
         var lastAccess: Date
     }
     static let shared = ImageDataURLCache()
-    private var entries: [UUID: Entry] = [:]
+    private var entries: [String: Entry] = [:]
     private var totalCost = 0
     private let maxCost = 60 * 1024 * 1024
     private let maxEntries = 100
 
     func dataURL(for file: StoredFile) async -> String? {
-        if var entry = entries[file.id] {
+        let key = file.ownerKey + ":" + file.id.uuidString + ":" + file.cloudAssetJSON
+        if var entry = entries[key] {
             entry.lastAccess = Date()
-            entries[file.id] = entry
+            entries[key] = entry
             return entry.url
         }
         let url = FileStore.url(for: file)
@@ -861,11 +706,11 @@ actor ImageDataURLCache {
         }.value
         guard let payload, !payload.isEmpty else { return nil }
         let dataURL = "data:image/jpeg;base64," + payload.base64EncodedString()
-        insert(id: file.id, url: dataURL, cost: payload.count)
+        insert(id: key, url: dataURL, cost: payload.count)
         return dataURL
     }
 
-    private func insert(id: UUID, url: String, cost: Int) {
+    private func insert(id: String, url: String, cost: Int) {
         while (totalCost + cost > maxCost || entries.count >= maxEntries) && !entries.isEmpty {
             guard let oldest = entries.min(by: { $0.value.lastAccess < $1.value.lastAccess }) else { break }
             totalCost -= oldest.value.cost

@@ -10,13 +10,17 @@ function canonical(value) {
 }
 function normalizeRecord(raw) {
   if (!raw || !KINDS.has(raw.kind) || !UUID.test(raw.refId || "")) throw new Error("SYNC_INVALID_RECORD");
-  const payload = typeof raw.payload === "string" ? JSON.parse(raw.payload) : raw.payload;
-  if (!payload || Array.isArray(payload) || typeof payload !== "object" || payload.id !== raw.refId) throw new Error("SYNC_INVALID_PAYLOAD");
+  let payload;
+  try { payload = typeof raw.payload === "string" ? JSON.parse(raw.payload) : structuredClone(raw.payload); }
+  catch { throw new Error("SYNC_INVALID_PAYLOAD"); }
+  if (!payload || Array.isArray(payload) || typeof payload !== "object" || typeof payload.id !== "string" || payload.id.toUpperCase() !== raw.refId.toUpperCase()) throw new Error("SYNC_INVALID_PAYLOAD");
+  payload.id = raw.refId.toUpperCase();
   if (raw.kind === "conversation" && payload.messages) throw new Error("SYNC_MESSAGES_MUST_BE_SEPARATE");
   if (raw.kind === "message" && !UUID.test(payload.conversationId || "")) throw new Error("SYNC_INVALID_PARENT");
+  if (raw.kind === "message") payload.conversationId = payload.conversationId.toUpperCase();
   const serialized = canonical(payload);
   if (Buffer.byteLength(serialized) > 240 * 1024) throw new Error("SYNC_RECORD_TOO_LARGE");
-  return { kind: raw.kind, refId: raw.refId, payload: serialized, hash: digest(serialized),
+  return { kind: raw.kind, refId: payload.id, payload: serialized, hash: digest(serialized),
     parentId: raw.kind === "message" ? payload.conversationId : "",
     baseVersion: Number.isSafeInteger(raw.baseVersion) && raw.baseVersion >= 0 ? raw.baseVersion : 0,
     deleted: payload.isDeleted === true };
@@ -35,15 +39,26 @@ function createSyncService({ db, collection = "bf_sync_v2", metaCollection = "bf
   return {
     async push(owner, inputs) {
       if (!Array.isArray(inputs) || inputs.length > 25) throw new Error("SYNC_BATCH_TOO_LARGE");
-      const records = inputs.map(normalizeRecord);
+      const records = inputs.map(normalizeRecord).sort((a, b) => Number(b.kind === "conversation") - Number(a.kind === "conversation"));
+      if (new Set(records.map(r => r.kind + ":" + r.refId)).size !== records.length) throw new Error("SYNC_DUPLICATE_RECORD");
       // Never publish references to another account's objects or an unverified upload.
-      const ids = [];
+      const refs = [];
+      function collect(asset, depth = 0) {
+        if (depth > 2 || !asset || typeof asset !== "object" || Array.isArray(asset) || !/^[a-f0-9]{40}$/.test(asset.id || "")) throw new Error("SYNC_INVALID_ASSET");
+        refs.push(asset);
+        if (asset.variants != null) {
+          if (typeof asset.variants !== "object" || Array.isArray(asset.variants) || Object.keys(asset.variants).length > 3) throw new Error("SYNC_INVALID_ASSET");
+          for (const variant of Object.values(asset.variants)) collect(variant, depth + 1);
+        }
+      }
       for (const record of records) {
         const payload = JSON.parse(record.payload);
-        for (const asset of payload.assets || []) ids.push(asset.id);
-        if (payload.asset) ids.push(payload.asset.id);
+        if (payload.assets != null && (!Array.isArray(payload.assets) || payload.assets.length > 16)) throw new Error("SYNC_INVALID_ASSET");
+        for (const asset of payload.assets || []) collect(asset);
+        if (payload.asset) collect(payload.asset);
       }
-      if (ids.length && assetStore) await assetStore.verifyReferences(owner, ids);
+      if (refs.length > 100) throw new Error("SYNC_INVALID_ASSET");
+      if (refs.length && assetStore) await assetStore.verifyReferences(owner, refs);
       return db.runTransaction(async tx => {
         const counter = await head(owner, tx);
         let revision = counter.revision;
@@ -60,6 +75,7 @@ function createSyncService({ db, collection = "bf_sync_v2", metaCollection = "bf
           const id = key(owner, record.kind, record.refId);
           const existing = current.get(id);
           const parent = record.parentId ? current.get(key(owner, "conversation", record.parentId)) : null;
+          if (record.parentId && !parent) throw new Error("SYNC_INVALID_PARENT");
           if (parent && parent.deleted) {
             acknowledged.push({ kind: record.kind, refId: record.refId, version: 0, hash: record.hash, discarded: "parent_deleted" });
             continue;

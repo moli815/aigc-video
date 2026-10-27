@@ -66,6 +66,9 @@ enum ImageProviderRequestCompiler {
         }
 
         var body: [String: Any] = ["model": model, "prompt": prompt, "size": resolvedSize]
+        if model.contains("seedream-5-0-pro") || model.contains("seedream-4-0") {
+            body["optimize_prompt_options"] = ["mode": "standard"]
+        }
         if layerDecomposition { body["layer_decomposition"] = true }
         let visibleCopy = TextItem.values(from: structured?["text"])
             .filter { !$0.isEmpty && !prompt.contains($0) }

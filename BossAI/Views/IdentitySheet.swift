@@ -57,6 +57,7 @@ struct IdentitySheet: View {
     @AppStorage("bossai.sync.autoEnabled") private var autoSync = true
     @State private var syncing = false
     @State private var lastSyncShown: Date?
+    @ObservedObject private var cloudSync = SyncService.shared
     // P0-19 定时任务
     @State private var schedules: [[String: Any]] = []
     @State private var schedulesLimit = 0
@@ -333,9 +334,13 @@ struct IdentitySheet: View {
                                 .accessibilityIdentifier("sync-now")
                             }
                             Toggle(isOn: $autoSync) {
-                                Text("每日自动同步（3 点后首次打开时）").font(.caption)
+                                Text("自动同步对话、图片和文件").font(.caption)
                             }
                             .tint(theme.accent)
+                            if cloudSync.lastSyncError != nil {
+                                Text("部分内容暂未同步，已保留在本机。联网后可点「立即同步」重试。")
+                                    .font(.caption).foregroundStyle(.orange)
+                            }
                         }
                     }
                     if hostedActive {

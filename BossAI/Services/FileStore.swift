@@ -132,12 +132,17 @@ enum FileStore {
     static func storeAsync(data: Data, filename: String, kind: FileKind,
                            category: FileCategory? = nil, sourceConversationId: String = "",
                            textContent: String = "", context: ModelContext) async throws -> StoredFile {
+        let ownerAtStart = HostedAccount.scopeKey
         let ext = (filename as NSString).pathExtension.lowercased()
         // 磁盘名 UUID 化，与同步版 store 保持一致
         let storedName = "\(UUID().uuidString).\(ext.isEmpty ? "dat" : ext)"
         let directory = rootURL
         let destination = directory.appendingPathComponent(storedName)
         try await FileIOWorker.shared.write(data, to: destination, directory: directory)
+        guard !Task.isCancelled, HostedAccount.scopeKey == ownerAtStart else {
+            await FileIOWorker.shared.remove(destination)
+            throw CancellationError()
+        }
         // 防谎报（P0-21）：写盘后立即回读验证——文件不存在或字节数不符视为写盘失败，
         // 绝不写库、绝不向上层返回"已导出"。此前对话中出现过 AI 说"文件已生成"
         // 但实际没有落盘的情况，根因就是写盘成功与否从未被验证。
@@ -150,6 +155,7 @@ enum FileStore {
         let record = StoredFile(name: filename, ext: ext, storedName: storedName, kind: kind,
                                 category: category ?? FileCategory.from(ext: ext), byteCount: data.count,
                                 sourceConversationId: sourceConversationId, textContent: textContent)
+        record.ownerKey = ownerAtStart
         do {
             try Task.checkCancellation()
             context.insert(record)

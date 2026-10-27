@@ -133,10 +133,14 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
         return { id: row._id, url: match.tempFileURL || match.download_url, expiresIn: 900 };
       });
     },
-    async verifyReferences(owner, ids) {
-      for (const id of [...new Set(ids)]) {
-        const row = await owned(owner, id);
+    async verifyReferences(owner, refs) {
+      const checked = new Map();
+      for (const ref of refs) {
+        const id = typeof ref === "string" ? ref : ref.id;
+        const row = checked.get(id) || await owned(owner, id);
+        checked.set(id, row);
         if (row.state !== "ready") throw new Error("ASSET_NOT_READY");
+        if (typeof ref !== "string" && (ref.sha256 !== row.sha256 || ref.mime !== row.mime || ref.byteCount !== row.byteCount)) throw new Error("ASSET_METADATA_CONFLICT");
       }
     },
   };

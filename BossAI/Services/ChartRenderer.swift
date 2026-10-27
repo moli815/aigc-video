@@ -51,9 +51,13 @@ struct ChartSpec: Sendable {
         let title = (obj["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // 标题是图表的必需品，空白标题直接拒绝
         guard !title.isEmpty else { return nil }
-        let labels = ((obj["labels"] as? [Any]) ?? []).compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespaces) }
+        guard let rawLabels = obj["labels"] as? [String], let rawValues = obj["values"] as? [Any],
+              rawLabels.count == rawValues.count else { return nil }
+        let labels = rawLabels.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard labels.allSatisfy({ !$0.isEmpty }) else { return nil }
         // 数值容错解析：Double/Int/数字字符串三种来源都接受，NaN/Inf 一律丢弃
-        let values = ((obj["values"] as? [Any]) ?? []).compactMap { value -> Double? in
+        let values = rawValues.compactMap { value -> Double? in
+            if let number = value as? NSNumber, String(cString: number.objCType) == "c" { return nil }
             if let d = value as? Double, d.isFinite { return d }
             if let i = value as? Int { return Double(i) }
             if let s = value as? String, let d = Double(s), d.isFinite { return d }
@@ -61,6 +65,7 @@ struct ChartSpec: Sendable {
         }
         // 数量约束：标签数值等长、非空且 ≤12 项（再多图例/布局就放不下了）
         guard labels.count == values.count, !labels.isEmpty, labels.count <= 12 else { return nil }
+        if type == .pie && (!values.allSatisfy({ $0 >= 0 }) || !values.contains(where: { $0 > 0 })) { return nil }
         let unit = (obj["unit"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         let note = (obj["source_note"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
         // 长度截断是最后一道防呆：模型若输出超长文本也不会破坏成图布局

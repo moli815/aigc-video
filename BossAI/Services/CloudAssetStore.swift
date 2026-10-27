@@ -23,6 +23,8 @@ enum CloudAssetStore {
         if data.starts(with: [137, 80, 78, 71]) { return "image/png" }
         if data.starts(with: [255, 216]) { return "image/jpeg" }
         if data.starts(with: [71, 73, 70]) { return "image/gif" }
+        if data.count >= 12, String(data: data.prefix(4), encoding: .ascii) == "RIFF",
+           String(data: data.subdata(in: 8..<12), encoding: .ascii) == "WEBP" { return "image/webp" }
         let types = ["pdf": "application/pdf", "txt": "text/plain", "md": "text/markdown",
             "csv": "text/csv", "json": "application/json", "zip": "application/zip",
             "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

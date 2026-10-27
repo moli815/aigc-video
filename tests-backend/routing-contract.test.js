@@ -40,7 +40,7 @@ test("ROUTE-04 fast 参数只在能力允许时下发", () => {
     "optimize_prompt_options 未受能力表约束");
   assert.doesNotMatch(IMAGE, /const mode = String\(RT\.IMAGE_FAST_MODE\) === "0" \? "standard" : "fast";/,
     "仍是旧的全局 fast 开关");
-  assert.match(IMAGE, /mode: promptOptimizationMode\(RT\.IMAGE_ROUTING_MODE, RT\.IMAGE_FAST_MODE\)/,
+  assert.match(IMAGE, /providerPromptOptions\(selectedModel, RT\.IMAGE_ROUTING_MODE, RT\.IMAGE_FAST_MODE\)/,
     "Pro 调试模式未使用统一的标准质量策略");
 });
 

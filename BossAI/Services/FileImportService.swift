@@ -296,26 +296,6 @@ enum FileImportService {
     /// - Parameter imageData: 图片字节
     /// - Returns: 按行拼接的识别文本；图片无效或识别失败返回空串
     static func ocr(imageData: Data) async -> String {
-        guard let cgImage = UIImage(data: imageData)?.cgImage else { return "" }
-        return await withCheckedContinuation { continuation in
-            // 识别放全局并发队列：Vision 回调线程与调用方解耦，主线程零阻塞
-            DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNRecognizeTextRequest()
-                // 准确级别 + 语言纠偏：宁可慢一点也要识别质量
-                request.recognitionLevel = .accurate
-                request.usesLanguageCorrection = true
-                // 中文优先：中文用户场景下简体/繁体都覆盖，再兜底英文
-                request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
-                do {
-                    try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
-                    let lines = (request.results ?? []).compactMap {
-                        $0.topCandidates(1).first?.string
-                    }
-                    continuation.resume(returning: lines.joined(separator: "\n"))
-                } catch {
-                    continuation.resume(returning: "")
-                }
-            }
-        }
+        await ExactTextWorkflow.recognize(imageData).map(\.text).joined(separator: "\n")
     }
 }

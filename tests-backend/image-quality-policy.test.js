@@ -31,16 +31,12 @@ test('app series orchestration requests one image per child, independent of nati
   assert.doesNotMatch(child.slice(0, child.indexOf('const model =')), /capsOf|sequential_image_generation/);
 });
 
-// 10-27：服务端提示词优化会改写我们的硬约束 —— 带参考图的任务必须关掉它
-test("prompt optimization is disabled whenever a reference image is present", () => {
+test("both routes use the shared provider policy, omission is not treated as a disable switch", () => {
   const src = fs.readFileSync(path.join(__dirname, "../cloudfunctions/bf-api/index.js"), "utf8");
-  const start = src.indexOf("const wantsPromptOpt");
-  assert.ok(start > 0, "缺少提示词优化开关判定");
-  assert.match(src.slice(start, start + 200), /const wantsPromptOpt = !hasRefImg &&/,
-    "开关没有以「无参考图」为前提，编辑/参考图任务仍会被改写 prompt");
-  const block = src.slice(start, start + 520);
-  assert.match(block, /if \(wantsPromptOpt && RUNTIME\.IMAGE_ROUTING_MODE === "pro_only"\)/,
-    "pro_only 分支绕过了 wantsPromptOpt，会把编辑任务的 prompt 也交给平台改写");
-  assert.match(block, /delete arkPayload\.optimize_prompt_options/,
-    "缺少兜底删除，非白名单场景可能带着上一次的优化配置发出");
+  assert.match(src, /arkPayload\.optimize_prompt_options = providerPromptOptions\(/);
+  assert.match(source, /payload\.optimize_prompt_options = providerPromptOptions\(/);
+  const { providerPromptOptions } = require('../cloudfunctions/shared/image-policy');
+  assert.deepEqual(providerPromptOptions('doubao-seedream-5-0-pro-260628', 'pro_only', '1'), {mode:'standard'});
+  assert.deepEqual(providerPromptOptions('doubao-seedream-5-0-pro-260628', 'auto', '1'), {mode:'fast'});
+  assert.deepEqual(providerPromptOptions('unsupported', 'auto', '1'), {mode:'standard'});
 });

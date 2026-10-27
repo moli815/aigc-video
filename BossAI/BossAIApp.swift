@@ -93,10 +93,14 @@ private struct DailySyncTrigger: ViewModifier {
         content
             .task {
                 await DiagnosticQueue.shared.flush()
+                await BriefingService.shared.generateDueBriefings(context: modelContext)
                 SyncService.shared.schedule(context: modelContext)
             }
             .onReceive(NotificationCenter.default.publisher(for: .bossAIKeysChanged)) { _ in
-                Task { await DiagnosticQueue.shared.flush() }
+                Task {
+                    await DiagnosticQueue.shared.flush()
+                    await BriefingService.shared.generateDueBriefings(context: modelContext)
+                }
                 SyncService.shared.schedule(context: modelContext)
             }
             .onReceive(NotificationCenter.default.publisher(for: .bossAIFilesChanged)) { _ in
@@ -110,7 +114,10 @@ private struct DailySyncTrigger: ViewModifier {
                 // 真正退出时整个缓存随进程消失，这里再显式清一次，避免"以为还在其实已失效"。
                 if phase == .background { BaseImageCache.shared.evictExpired() }
                 guard phase == .active else { return }
-                Task { await DiagnosticQueue.shared.flush() }
+                Task {
+                    await DiagnosticQueue.shared.flush()
+                    await BriefingService.shared.generateDueBriefings(context: modelContext)
+                }
                 SyncService.shared.schedule(context: modelContext)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in

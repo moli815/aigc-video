@@ -40,6 +40,23 @@ extension ChatViewModel {
             return
         }
         citations = CitationRegistry()
+        // A restored attachment must be readable before both the multimodal context and
+        // the provider reference are built. Otherwise a cloud-only image became text-to-image.
+        if let session = CloudSession.capture() {
+            let current = Array(attachments.filter(\.isImage).prefix(6))
+            let carried = conv.messages.filter { $0.role == "user" && !$0.attachmentIdList.isEmpty }
+                .sorted { $0.createdAt < $1.createdAt }.suffix(2).flatMap { files(for: $0) }.last(where: \.isImage)
+            let needed = !current.isEmpty ? current :
+                (Self.mentionsImageGenerationOrEdit(userText) ? carried.map { [$0] } ?? [] : [])
+            do {
+                for file in needed { try await CloudAssetHydrator.file(file, session: session) }
+            } catch {
+                assistantMessage.text = "参考图暂时未能下载完整，原记录仍在。请联网后重试。"
+                DiagnosticQueue.shared.record(domain: "image", stage: "reference_download", code: "REFERENCE_DOWNLOAD_FAILED")
+                saveOrWarn()
+                return
+            }
+        }
         var apiMessages = await buildAPIMessages(conv: conv)
         // P0-19 深度研究增强（Pro+ 权益）：搜索主题数与证据预算按档位放大（服务端 features 下发，App 不写死）
         var researchBudget: ResearchBudget = {
@@ -55,10 +72,11 @@ extension ChatViewModel {
         var nativeSearchRejected = false
         var presentedQueries = Set<String>()
         researchSummary = nil
-        var lastGeneratedImage: Data? = conv.messages
-            .filter { $0.imageData != nil }
+        let lastGeneratedMessage = conv.messages
+            .filter { $0.role == "assistant" && ($0.imageData != nil || !CloudAssetStore.references($0.imageAssetsJSON).isEmpty) }
             .sorted { $0.createdAt < $1.createdAt }
-            .last?.imageData
+            .last
+        var lastGeneratedImage: Data? = lastGeneratedMessage?.imageData
 
         // B01：服务端返回的真实 token 数（拿不到就回退估算）
         var requestPromptTokens = 0
@@ -337,7 +355,11 @@ extension ChatViewModel {
                 apiMessages.append(assistantRecord)
 
                 // Independent queries run in bounded batches; duplicates reuse this turn's evidence.
-                let searchOrders = pendingToolCalls.indices.filter { pendingToolCalls[$0].name == "web_search" && capability.allowSearch && researchMode != .local }
+                let schedulingPolicy = try EffectiveToolPolicy.forExpert(expert)
+                let searchOrders = pendingToolCalls.indices.filter {
+                    pendingToolCalls[$0].name == "web_search" && researchMode != .local &&
+                    (try? ToolDispatcher.validate(pendingToolCalls[$0], policy: schedulingPolicy)) != nil
+                }
                 var scheduled: [(Int, ChatService.ToolCall, String)] = []
                 for order in searchOrders {
                     let call = pendingToolCalls[order]
@@ -367,13 +389,11 @@ extension ChatViewModel {
                     if BudgetTracker.chatExceeded { throw ExpertSkillError.denied("本月对话额度已达上限，停止继续请求") }
                     // 10-23：使用 EffectiveToolPolicy 作为单一事实源，与 tools[] 注册保持同一份配置。
                     // 云端显式关闭的工具：即使模型残留调用，执行器也拒绝（隐藏 ≠ 禁止执行）
-                    let policy = (try? EffectiveToolPolicy.forExpert(expert)) ?? EffectiveToolPolicy(
-                        canSearch: capability.allowSearch, canImage: capability.allowImages,
-                        docFormats: capability.documentFormats, disabledToolIDs: [], availableToolIDs: []
-                    )
-                    guard policy.permits(call.name) else {
+                    do {
+                        try ToolDispatcher.validate(call, policy: EffectiveToolPolicy.forExpert(expert))
+                    } catch {
                         apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                            "content": "当前专家禁止该工具：\(call.name)"])
+                                            "content": ToolPipeline.failureNote(pluginID: call.name, reason: error.localizedDescription, errorCode: "TOOL_REJECTED")])
                         continue
                     }
                     switch call.name {
@@ -438,6 +458,11 @@ extension ChatViewModel {
                                 ?? (args?["source_index"] as? NSNumber)?.intValue
                                 ?? 1
                             let requestedSource = args?["source"] as? String
+                            if lastGeneratedImage == nil, let message = lastGeneratedMessage,
+                               requestedSource == "last" || requestedSource == "both" || editLast || (toolName == "image_edit" && attachedCandidates.isEmpty),
+                               let session = CloudSession.capture() {
+                                lastGeneratedImage = try await CloudAssetHydrator.image(message, session: session)
+                            }
                             let sourceOverride = ImageReferenceResolver.sourceOverride(
                                 requested: requestedSource,
                                 userText: userText,
@@ -611,13 +636,12 @@ extension ChatViewModel {
                             // 大模型把要显示的文字放进 structured；这里只做「有没有大量精确文字」的判断，
                             // 命中则：Pro 出无字底图 → TextOverlayRenderer 程序叠字（只叠一次）。
                             // 仅 structured.text 是可见文案，且必须按语义分项；视觉 prompt 不参与绘制。
-                            let overlayItems = TextItem.parse(structuredArgs?["text"])
+                            let overlayItems = try await ExactTextWorkflow.resolve(
+                                proposed: TextItem.parse(structuredArgs?["text"]), source: refs.first, request: userText)
                             let overlayChars = overlayItems.reduce(0) { $0 + $1.text.count }
                             // 用户明确要求精确可读时走后处理；视觉 prompt/布局状态不混进请求上下文。
-                            let accuracyWords = ["准确", "逐字", "一字不差", "印刷", "不能错", "不要错", "必须清楚", "正式"]
-                            let accuracyByText = overlayItems.contains { $0.role == .contact }
-                                || accuracyWords.contains { prompt.contains($0) || userText.contains($0) }
-                            let wantsOverlay = TextIntentDecider.needsOverlay(userText: userText + "\n" + prompt,
+                            let accuracyByText = ExactTextWorkflow.requiresAccuracy(userText)
+                            let wantsOverlay = TextIntentDecider.needsOverlay(userText: userText,
                                                                                extractedFieldCount: overlayItems.count,
                                                                                extractedCharCount: overlayChars,
                                                                                accuracyRequired: accuracyByText)
@@ -802,76 +826,18 @@ extension ChatViewModel {
                         }
 
                     case "create_document":
-                        statusText = "正在生成文件…"
-                        let args = (try? JSONSerialization.jsonObject(with: Data(call.arguments.utf8))) as? [String: Any]
-                        let formatRaw = (args?["format"] as? String ?? "word").lowercased()
-                        guard ["word", "docx", "ppt", "pptx", "powerpoint", "slide", "excel", "xlsx", "sheet", "table", "pdf"].contains(formatRaw) else {
-                            apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": "不支持该文档格式；仅支持Word/PPT/Excel/PDF。"])
-                            continue
-                        }
-                        let filename = args?["filename"] as? String ?? "文档"
-                        let title = (args?["title"] as? String) ?? filename
-                        let content = args?["content"] as? String ?? ""
-                        // P0-64 missingArgsNote 接入：正文为空时明确报错
-                        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                "content": ToolPipeline.missingArgsNote(pluginID: "create_document", missing: ["content"])])
-                            continue
-                        }
-                        let format: DocumentFormat = {
-                            switch formatRaw {
-                            case "ppt", "pptx", "powerpoint", "slide": return .ppt
-                            case "excel", "xlsx", "sheet", "table": return .excel
-                            case "pdf": return .pdf
-                            default: return .word
-                            }
-                        }()
-                        // 文档主题：模型可指定（business/vivid/formal/academic），缺省按专家身份映射
-                        let themeArg = (args?["theme"] as? String) ?? ""
-                        let docTheme = themeArg.isEmpty ? DocTheme.forExpert(expert.id) : DocTheme.named(themeArg)
+                        statusText = "正在生成文档…"
                         do {
-                            let validation = try ExpertSkillRuntime.validateDocument(content, format: format.rawValue, profile: capability)
-                            guard validation.structurePassed else {
-                                throw ExpertSkillError.invalidInput("交付结构未通过；缺少：\(validation.missingSections.joined(separator: "、"))；\(validation.warnings.joined(separator: "；"))")
-                            }
-                            let span = PerformanceTrace.begin("DocumentBuild")
-                            let data: Data
-                            do { data = try await DocumentBuilder.buildAsync(format: format, title: title, content: content, theme: docTheme) }
-                            catch { PerformanceTrace.end("DocumentBuild", span); throw error }
-                            PerformanceTrace.end("DocumentBuild", span)
-                            let safe = DocumentBuilder.safeFilename(filename, fallback: title)
-                            let ext = format.ext
-                            let finalName = safe.hasSuffix(".\(ext)") ? safe : "\(safe).\(ext)"
-                            let record = try await FileStore.storeAsync(data: data,
-                                                            filename: finalName,
-                                                            kind: .generated,
-                                                            sourceConversationId: conv.id.uuidString,
-                                                            textContent: content,
-                                                            context: modelContext)
-                            // P0-59 统一管道落库（含 save）
-                            do {
-                                try ToolPipeline.persistArtifact(conversation: conv, attachmentIDs: record.id.uuidString, context: modelContext)
-                                artifactFlag.set()   // 10-23 P0：文档已落库，同上
-                            } catch {
-                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": ToolPipeline.failureNote(pluginID: "create_document", reason: "文件已生成但存入资料库失败（\(error.localizedDescription)）。请如实告知用户保存失败并建议重试。")])
-                                continue
-                            }
-                            apiMessages.append([
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": ToolPipeline.successNote(pluginID: "create_document", detail: "文件：\(finalName)，已存入资料库。请简短告知用户，不要再重复正文内容。"),
-                            ])
+                            let name = try await DocumentUseCase.create(arguments: call.arguments, expertID: expert.id,
+                                capability: capability, conversation: conv, context: modelContext)
+                            artifactFlag.set()
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.successNote(pluginID: "create_document", detail: "文件：\(name)，已存入资料库。")])
                             invalidateFileCache()
-                            toast = "已生成 \(finalName)"
-                            // Local document packaging has no additional model API fee.
+                            toast = "已生成 \(name)"
                         } catch {
-                            // P0-59 失败统一走管道
-                            apiMessages.append([
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": ToolPipeline.failureNote(pluginID: "create_document", reason: error.localizedDescription),
-                            ])
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.failureNote(pluginID: "create_document", reason: error.localizedDescription)])
                         }
 
                     case "web_search":
@@ -893,26 +859,15 @@ extension ChatViewModel {
                     case "render_chart":
                         imageToolAttempted = true
                         statusText = "正在绘制统计图…"
-                        if let spec = ChartSpec.parse(call.arguments), let image = ChartRenderer.render(spec) {
-                            // P0-59 统一管道落库（含 save）
-                            do {
-                                try ToolPipeline.persistArtifact(conversation: conv, imageData: image.jpegData(compressionQuality: 0.92), context: modelContext)
-                            } catch {
-                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
-                                                    "content": ToolPipeline.failureNote(pluginID: "render_chart", reason: "图表已绘制但保存失败（\(error.localizedDescription)）。请如实告知用户。")])
-                                continue
-                            }
-                            apiMessages.append([
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": ToolPipeline.successNote(pluginID: "render_chart", detail: "请用一句话说明图表结论，不要再重复全部数字。"),
-                            ])
-                        } else {
-                            apiMessages.append([
-                                "role": "tool",
-                                "tool_call_id": call.id,
-                                "content": ToolPipeline.failureNote(pluginID: "render_chart", reason: "图表参数无效（labels 与 values 必须一一对应且不超过 8 项）"),
-                            ])
+                        do {
+                            let data = try ChartUseCase.render(arguments: call.arguments)
+                            try ToolPipeline.persistArtifact(conversation: conv, imageData: data, context: modelContext)
+                            artifactFlag.set()
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.successNote(pluginID: "render_chart", detail: "请用一句话说明图表结论。")])
+                        } catch {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.failureNote(pluginID: "render_chart", reason: error.localizedDescription)])
                         }
 
                     case "$web_search":
