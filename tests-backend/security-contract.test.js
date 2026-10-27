@@ -18,6 +18,7 @@ const ADMIN = read("web/admin.html");
 const STAFF = read("web/staff.html");
 const API = read("cloudfunctions/bf-api/index.js");
 const IMAGE = read("cloudfunctions/bf-image/index.js");
+const JOB_CLAIM = read("cloudfunctions/shared/image-job-claim.js");
 const GUARDS = read("cloudfunctions/bf-image/media-guards.js");
 const TIERS_MOD = read("cloudfunctions/bf-api/tiers.js");
 
@@ -121,7 +122,7 @@ test("AUTH-02 额度服务异常时拒绝出图，不再 fail-open", () => {
 test("BILL-01 幂等键绑定 accountId", () => {
   assert.match(IMAGE, /function idemKey\(rid, accountId\)/, "缺少按账号派生的幂等键");
   assert.match(IMAGE, /update\(String\(accountId\) \+ ":" \+ String\(rid\)\)/, "幂等键未包含 accountId");
-  assert.match(IMAGE, /const sameOwner = !d \|\| String\(d\.accountId \|\| ""\) === String\(accountId\)/,
+  assert.match(JOB_CLAIM, /String\(row\.accountId \|\| ""\) !== String\(accountId\)/,
     "命中缓存时未校验归属");
 });
 

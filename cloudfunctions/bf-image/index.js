@@ -259,6 +259,7 @@ async function runSeriesChild(opts) {
   if (claim.state === "busy") {
     return { index, ok: false, message: "这一张还在生成中，请稍后重试。", errorCategory: "in_progress" };
   }
+  if (claim.state !== "new") return { index, ok: false, message: "暂时无法确认生成状态，尚未重复生成。", errorCategory: "storage" };
 
   const r = await generate({
     prompt: seriesPrompt(prompt, index, total),
@@ -270,7 +271,7 @@ async function runSeriesChild(opts) {
   });
 
   if (!r.ok) {
-    await abortIdem(subRid, accountId, String(r.reason || "upstream").slice(0, 40));
+    await abortIdem(subRid, accountId, String(r.reason || "upstream").slice(0, 40), r.unknownOutcome === true);
     logStage("series_item_failed", {
       index, reason: String(r.reason || "").slice(0, 40), msg: String(r.msg || "").slice(0, 120),
     });
@@ -855,7 +856,6 @@ async function addImageCost(accountId, costCny, meta) {
 // ── 幂等 + 任务台账（10-23 改为"原子占位"模型）──
 // 旧实现：先查缓存 → 生成 → 写缓存。两个并发同 requestId 请求会同时未命中、各生成一次、各扣一次费。
 // 现在用 bf_image_jobs 的 _id 抢占：add(_id=rid) 成功才算拿到执行权，重复请求直接复用或返回进行中。
-const IDEM_TTL_MS = 5 * 60 * 1000;
 const JOB_COLL = "bf_image_jobs";
 
 /**
@@ -880,41 +880,15 @@ function normalizeRid(raw) {
 async function claimIdem(rid, accountId) {
   const id = normalizeRid(rid);
   const key = idemKey(id, accountId);
-  const col = getDb().collection(JOB_COLL);
-  try {
-    await col.add({
-      _id: key, clientRequestId: String(id).slice(0, 120), state: "processing",
-      accountId, ts: Date.now(), leanSec: Math.floor(Date.now() / 1000),
-    });
-    return { state: "new", key, rid: id };
-  } catch (e) {
+  const db = getDb();
+  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId });
+  if (claim.state === "done" && claim.asset) {
     try {
-      const r = await col.doc(key).get();
-      const d = (r && r.data && r.data[0]) || null;
-      // 归属校验：即使 hash 碰撞或旧数据异常，也绝不把别人的结果交出去
-      const sameOwner = !d || String(d.accountId || "") === String(accountId);
-      if (sameOwner && d && d.state === "done" && Date.now() - Number(d.ts || 0) < IDEM_TTL_MS) {
-        // 10-24 P0-3：组图重放必须返回**完整结果**，不能退化成"单图缓存"
-        return {
-          state: "done", url: d.url, key, rid: id,
-          kind: d.kind || "", result: d.result || null, model: d.model || "",
-        };
-      }
-      // 90 秒内仍是 processing：判为并发重复，不重复生成
-      if (sameOwner && d && d.state === "processing" && Date.now() - Number(d.ts || 0) < 90 * 1000) {
-        return { state: "busy", key, rid: id };
-      }
-      // 失败或超时：接管这条任务
-      await col.doc(key).set({
-        clientRequestId: String(id).slice(0, 120), state: "processing", accountId,
-        ts: Date.now(), retried: true,
-      });
-      return { state: "new", key, rid: id };
-    } catch (e2) {
-      // 台账不可用时仍允许出图（可用性），但不再声称"命中幂等"
-      return { state: "none", key, rid: id };
-    }
+      const signed = await require("./shared/asset-store").createAssetStore({ db, app: __APP }).sign(accountId, [claim.asset.id]);
+      claim.url = signed[0].url;
+    } catch { return { state: "unavailable", key, rid: id }; }
   }
+  return { ...claim, key, rid: id };
 }
 /**
  * 10-24 关键修复：finishIdem / abortIdem 必须用与 claimIdem **同一个** key。
@@ -977,12 +951,13 @@ async function touchIdem(rid, accountId) {
   } catch (e) { /* 续租失败不影响本次执行 */ }
 }
 
-async function abortIdem(rid, accountId, reason) {
+async function abortIdem(rid, accountId, reason, uncertain = false) {
   if (!rid) return false;
   const key = idemKey(rid, accountId);
   try {
     await getDb().collection(JOB_COLL).doc(key).update({
-      state: "failed", reason: String(reason || "").slice(0, 60), ts: Date.now(),
+      state: uncertain ? "uncertain" : "failed", reason: String(reason || "").slice(0, 60), ts: Date.now(),
+      costCommitted: !uncertain,
     });
     return true;
   } catch (e) {
@@ -1331,11 +1306,12 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     const j = await r.json().catch(() => null);
     const url = j && j.data && j.data[0] && j.data[0].url;
     if (!r.ok || !url) {
-      return { ok: false, code: 502, msg: "上游失败", status: r.status, detail: JSON.stringify(j).slice(0, 300) };
+      return { ok: false, code: 502, msg: "上游失败", status: r.status,
+        unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
     }
     return { ok: true, url, model: selectedModel, routeReason: route.reason, caps };
   } catch (e) {
-    return { ok: false, code: 504, msg: String((e && e.message) || e).slice(0, 200) };
+    return { ok: false, code: 504, unknownOutcome: true, msg: String((e && e.message) || e).slice(0, 200) };
   } finally {
     clearTimeout(timer);
   }
@@ -1821,9 +1797,11 @@ const server = http.createServer(async (req, res) => {
       logStage("idempotent_busy", { sub: auth.sub, rid });
       return send(409, {
         ok: false, code: 409, error: "IN_PROGRESS",
-        msg: "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
+        msg: claim.confirming ? "上一次生成的结果仍在确认中，请稍后查看，暂时不要重复提交。" : "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
       });
     }
+    if (claim.state !== "new") return send(503, { ok: false, error: "STORAGE_UNAVAILABLE",
+      msg: "暂时无法确认这次生成的状态，尚未重复生成，请稍后重试。" });
     if (!prompt && !hasStructured) { await abortIdem(rid, auth.sub, "missing_prompt"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" }); }
     if (prompt.length > 1500) { await abortIdem(rid, auth.sub, "prompt_too_long"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "描述过长，请精简到 1500 字以内" }); }
 
@@ -1977,7 +1955,9 @@ const server = http.createServer(async (req, res) => {
         task_kind: taskKind, quality_tier: qualityTier, requestId: rid,
       });
     }
-    await abortIdem(rid, auth.sub, out.msg);
+    await abortIdem(rid, auth.sub, out.msg, out.unknownOutcome === true);
+    if (out.unknownOutcome) return send(409, { ok: false, error: "IN_PROGRESS",
+      msg: "上一次生成的结果仍在确认中，请稍后查看，暂时不要重复提交。", requestId: rid });
     return send(out.code || 502, Object.assign({ ms: Date.now() - t0, hadImage: !!body.image }, out));
   }
 
