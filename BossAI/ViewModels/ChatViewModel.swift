@@ -544,7 +544,7 @@ final class ChatViewModel: ObservableObject {
         let keywords = [
             "海报", "名片", "封面", "配图", "插图", "插画", "生成", "做一张", "做一个",
             "画一张", "设计一张", "重绘", "改图", "改一下", "编辑", "修图", "换背景",
-            "加元素", "去元素", "融合", "叠加", "放到图上", "加 logo", "加文字",
+            "加元素", "去元素", "融合", "叠加", "放到图上", "logo", "商标", "徽标", "二维码", "加文字",
         ]
         return keywords.contains { lowered.contains($0) }
     }

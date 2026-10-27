@@ -42,5 +42,9 @@ final class ImageQualityPolicyTests: XCTestCase {
     func testLogoReplacementCannotFallThroughToGenerativeRedrawing() {
         XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换logo\",\"source\":\"last\"}",
             toolName:"image_edit",userText:"把你生成的海报中的logo换成我们的logo"))
+        XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换logo\",\"source\":\"attached\"}",
+            toolName:"image_generate",userText:"把你生成的海报中的logo换成我们的logo"))
+        XCTAssertNoThrow(try ImageToolArguments.decode("{\"prompt\":\"设计海报\",\"source\":\"none\"}",
+            toolName:"image_generate",userText:"设计一张新海报，不要Logo"))
     }
 }

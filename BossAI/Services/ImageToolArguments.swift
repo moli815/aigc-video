@@ -17,6 +17,10 @@ enum ImageToolArguments {
         let modern = toolName != "generate_image"
         let lower = userText.lowercased()
         let exactAssetReplacement = ["换成我们的logo", "换成我们的 logo", "替换成我们的logo", "换成这个logo", "换成上传的logo", "替换为上传的", "用我们的logo"].contains { lower.contains($0) }
+        let replacingExistingAsset = exactAssetReplacement && ["换成","替换"].contains { lower.contains($0) }
+        if modern, toolName != "image_edit", replacingExistingAsset {
+            throw InputError.invalid("原样替换标识请用image_edit及原素材合成，不得用普通生图重画")
+        }
         if toolName == "image_edit", exactAssetReplacement {
             guard args["source"] as? String == "both",
                   let fields = args["structured"] as? [String:Any],
