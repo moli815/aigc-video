@@ -91,13 +91,27 @@ private struct DailySyncTrigger: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task { await SyncService.shared.dailySyncIfNeeded(context: modelContext) }
+            .task {
+                await DiagnosticQueue.shared.flush()
+                SyncService.shared.schedule(context: modelContext)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bossAIKeysChanged)) { _ in
+                Task { await DiagnosticQueue.shared.flush() }
+                SyncService.shared.schedule(context: modelContext)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .bossAIFilesChanged)) { _ in
+                SyncService.shared.schedule(context: modelContext)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("bossAIDataChanged"))) { _ in
+                SyncService.shared.schedule(context: modelContext)
+            }
             .onChange(of: scenePhase) { _, phase in
                 // 10-25 底图缓存生命周期：进后台只清过期的（切个 App 回来还能复用，不白花钱）；
                 // 真正退出时整个缓存随进程消失，这里再显式清一次，避免"以为还在其实已失效"。
                 if phase == .background { BaseImageCache.shared.evictExpired() }
                 guard phase == .active else { return }
-                Task { await SyncService.shared.dailySyncIfNeeded(context: modelContext) }
+                Task { await DiagnosticQueue.shared.flush() }
+                SyncService.shared.schedule(context: modelContext)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in
                 BaseImageCache.shared.evictAll()

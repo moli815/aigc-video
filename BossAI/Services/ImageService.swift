@@ -247,6 +247,9 @@ final class ImageService {
         putReq.httpMethod = "PUT"
         putReq.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Authorization") }
+        if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Signature") }
+        if let cloudPath = credJSON["cloudPath"] as? String { putReq.setValue(cloudPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), forHTTPHeaderField: "key") }
+        if let fileId = credJSON["cosFileId"] as? String { putReq.setValue(fileId, forHTTPHeaderField: "x-cos-meta-fileid") }
         if let cosToken = credJSON["token"] as? String { putReq.setValue(cosToken, forHTTPHeaderField: "x-cos-security-token") }
         putReq.httpBody = data
         guard let (_, putResp) = try? await BoundedHTTPClient.data(for: putReq,

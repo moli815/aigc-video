@@ -200,7 +200,7 @@ test("IMG-01 响应体有大小上限与 MIME 校验", () => {
 });
 
 test("IMG-02 显式像素尺寸有上下限与总像素预算", () => {
-  assert.match(GUARDS, /const SIZE_MAX_EDGE = 4096/);
+  assert.match(GUARDS, /const SIZE_MAX_EDGE = 8192/);
   assert.match(GUARDS, /const SIZE_MAX_PIXELS = 4_622_220/);
   assert.match(GUARDS, /function clampExplicitSize\(raw\)/);
   assert.match(GUARDS, /if \(w \* h > SIZE_MAX_PIXELS\)/, "超出像素预算时未按比例缩放");

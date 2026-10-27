@@ -44,6 +44,9 @@ process.on("unhandledRejection", (err) => {
 const tcb = require("@cloudbase/node-sdk");
 const { computeTiers, applyTiersInto } = require("./tiers");
 const { publicError } = require("./error-catalog");
+const { createEventService } = require("./domains/events");
+const { createAssetStore } = require("./shared/asset-store");
+const { createSyncService } = require("./domains/sync-v2");
 const { AsyncLocalStorage } = require("async_hooks");
 // 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
 // 不需要逐层传参。每个请求在入口 enterWith 一次。
@@ -656,6 +659,9 @@ const UPSTREAM = {
 
 const APP = tcb.init({ env: process.env.TCB_ENV });
 const db = APP.database();
+const assetStore = createAssetStore({ db, app: APP });
+const eventService = createEventService({ db });
+const syncV2 = createSyncService({ db, assetStore });
 
 // ───────────────────────── 基础工具 ─────────────────────────
 
@@ -1583,7 +1589,15 @@ async function handleSyncPush(req, res) {
     const rawTs = Number(raw.updatedAt);
     const MAX_SKEW_MS = 5 * 60 * 1000;
     const updatedAt = (Number.isFinite(rawTs) && rawTs > 0 && rawTs <= now + MAX_SKEW_MS) ? rawTs : now;
-    const payload = typeof raw.payload === "string" ? raw.payload.slice(0, 400000) : JSON.stringify(raw.payload || {}).slice(0, 400000);
+    const payload = typeof raw.payload === "string" ? raw.payload : JSON.stringify(raw.payload || {});
+    // Never persist a sliced JSON document: a single damaged row can block all future pulls.
+    if (Buffer.byteLength(payload, "utf8") > 400000) {
+      failedItems.push({ refId, reason: "会话过长，请更新客户端后使用增量同步" });
+      continue;
+    }
+    try { JSON.parse(payload); } catch {
+      failedItems.push({ refId, reason: "同步数据格式无效" }); continue;
+    }
     try {
       const doc = { accountId: auth.sub, kind, refId, payload, updatedAt, deleted: !!raw.deleted, syncedAt: now };
       // 10-24 P1-7：确定性 _id = sha256(accountId|kind|refId)。
@@ -1832,6 +1846,9 @@ async function handleSyncDeleteConversation(req, res, rawId) {
   const refId = String(rawId || "").trim();
   const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   if (!UUID_RE.test(refId)) return sendError(res, 400, "BAD_ID", "会话标识格式不正确");
+
+  // Both protocol generations observe the same deletion; children cannot resurrect it.
+  await syncV2.deleteConversation(auth.sub, refId);
 
   const kind = "conversation";
   const now = nowMs();
@@ -4589,15 +4606,47 @@ async function handleToolEvent(req, res) {
   if (!auth) return;
   const body = await readJsonBody(req);
   const tool = String(body.tool || "").slice(0, 40);
-  const reason = String(body.reason || "").slice(0, 300);
+  const reason = maskText(String(body.reason || "")).slice(0, 300);
   if (!tool) return sendError(res, 400, "BAD_REQUEST", "缺少 tool");
   try {
     await db.collection("bf_tool_events").add({
       accountId: auth.sub, tool, reason, ts: nowMs(),
       platform: String(body.platform || "").slice(0, 40),
+      requestId: String(body.requestId || currentRequestId()).slice(0, 100),
+      errorCode: String(body.errorCode || "").replace(/[^a-zA-Z0-9_]/g, "").slice(0, 80),
     });
-  } catch { /* 诊断信息上报失败静默，不影响用户 */ }
+  } catch { return sendError(res, 503, "EVENT_SAVE_FAILED", "诊断记录暂未保存，稍后会重试"); }
   return sendJson(res, 200, { ok: true });
+}
+
+async function handleFoundation(req, res, url) {
+  const auth = await requireMember(req, res);
+  if (!auth) return;
+  const path = url.pathname;
+  const body = req.method === "GET" ? {} : await readJsonBody(req);
+  try {
+    if (path === "/api/sync/v2/push") return sendJson(res, 200, { ok: true, ...await syncV2.push(auth.sub, body.records) });
+    if (path === "/api/sync/v2/pull") {
+      const q = url.searchParams;
+      return sendJson(res, 200, { ok: true, ...await syncV2.pull(auth.sub,
+        q.get("since") || 0, q.has("watermark") ? q.get("watermark") : null, q.get("after") || 0, q.get("limit") || 50) });
+    }
+    if (path === "/api/events") {
+      const acceptedIds = await eventService.receive(auth.sub, body.events);
+      return sendJson(res, 200, { ok: true, acceptedIds });
+    }
+    if (path === "/api/assets/prepare") return sendJson(res, 200, { ok: true, ...await assetStore.prepare(auth.sub, body) });
+    if (path === "/api/assets/commit") return sendJson(res, 200, { ok: true, asset: await assetStore.commit(auth.sub, body.id) });
+    if (path === "/api/assets/urls") return sendJson(res, 200, { ok: true, items: await assetStore.sign(auth.sub, body.ids) });
+  } catch (error) {
+    const code = String(error && error.message || "");
+    const input = /^(INVALID_|SYNC_(INVALID|BATCH|RECORD|MESSAGES|CURSOR)|ASSET_(SIZE_LIMIT|TYPE_|INTEGRITY|PIXEL|METADATA))/.test(code);
+    const missing = code === "ASSET_NOT_FOUND";
+    logSafe({ tag: "foundation_failed", stage: path, code: input || missing ? code : "STORAGE_UNAVAILABLE", requestId: currentRequestId() });
+    return sendError(res, input ? 422 : missing ? 404 : 503,
+      input || missing ? code : "STORAGE_UNAVAILABLE",
+      input ? "这份文件暂时无法保存，请检查文件格式和大小。" : missing ? "没有找到可访问的文件。" : "云端保存暂未完成，本机内容已保留，请稍后重试保存。");
+  }
 }
 
 async function cacheGet(key) {
@@ -4702,6 +4751,12 @@ const server = http.createServer(async (req, res) => {
 
     // P0-64 工具错误上报（登录后，诊断用）
     if (m === "POST" && p === "/api/tool-event") return handleToolEvent(req, res);
+    if (m === "POST" && ["/api/events", "/api/assets/prepare", "/api/assets/commit", "/api/assets/urls"].includes(p)) {
+      return handleFoundation(req, res, url);
+    }
+    if ((m === "POST" && p === "/api/sync/v2/push") || (m === "GET" && p === "/api/sync/v2/pull")) {
+      return handleFoundation(req, res, url);
+    }
     // P0-67 DeepSeek 官方搜索/抓取代理（登录后）
     if (m === "POST" && p === "/api/tools/search") return handleToolsSearch(req, res);
     if (m === "POST" && p === "/api/tools/fetch") return handleToolsFetch(req, res);

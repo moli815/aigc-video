@@ -90,7 +90,7 @@ function makeHarness({ rows = [], accountId = "acct-A", requestId = "rid-1", add
 
   const factory = new Function(
     "db", "C", "crypto", "requireMember", "sendJson", "sendError", "nowMs",
-    "currentRequestId", "logSafe", "tagId", "maskText", "auditLog",
+    "currentRequestId", "logSafe", "tagId", "maskText", "auditLog", "syncV2",
     handlerSource() + "\nreturn handleSyncDeleteConversation;"
   );
 
@@ -109,7 +109,8 @@ function makeHarness({ rows = [], accountId = "acct-A", requestId = "rid-1", add
     (obj) => captured.logs.push(obj),
     (id) => "acct_x",
     (text) => String(text).slice(0, 8),
-    async (actor, action, extra) => { captured.audits.push({ actor, action, extra }); }
+    async (actor, action, extra) => { captured.audits.push({ actor, action, extra }); },
+    { async deleteConversation(owner, id) { captured.v2Delete = { owner, id }; } }
   );
 
   const run = async (refId) => {

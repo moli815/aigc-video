@@ -54,16 +54,22 @@ enum LibraryImageWriter {
                      context: ModelContext) -> Bool {
         guard !imageData.isEmpty else { return false }
 
-        let key = fingerprint(imageData)
+        let owner = HostedAccount.scopeKey
+        let hash = CloudAssetStore.sha256(imageData)
+        let key = owner + ":" + hash
         if savedFingerprints.contains(key) { return false }
 
         do {
-            try FileStore.store(data: imageData,
+            let existing = try context.fetch(FetchDescriptor<StoredFile>(predicate: #Predicate { $0.ownerKey == owner && $0.contentHash == hash }))
+            if !existing.isEmpty { savedFingerprints.insert(key); return false }
+            let file = try FileStore.store(data: imageData,
                                 filename: filename(prompt: prompt),
                                 kind: .generated,
                                 category: .image,
                                 sourceConversationId: conversationId?.uuidString ?? "",
                                 context: context)
+            file.contentHash = hash
+            try context.save()
             savedFingerprints.insert(key)
             PerformanceTrace.event("library_image_saved")
             return true

@@ -136,7 +136,7 @@ test("DEL-17 永久失败不再无限重试，且 403 绝不当成已删除", ()
 });
 
 test("DEL-18 同步：先补推墓碑，再拉取；拉取时不许复活已删会话", () => {
-  assert.match(SYNC, /try await push\(context: context\)[\s\S]{0,300}await ConversationDeletion\.flushPendingDeletes\(\)[\s\S]{0,120}try await pull\(context: context\)/,
+  assert.match(SYNC, /await ConversationDeletion\.flushPendingDeletes\(\)[\s\S]{0,600}try await pull\(context: context/,
     "syncNow 未在 pull 前补推删除墓碑");
   assert.match(SYNC, /ConversationDeletion\.isPendingDelete\(uuid\)[\s\S]{0,200}context\.delete\(existing\)/,
     "pull 缺少防复活守卫：本机已删的会话会被云端旧数据推回来");

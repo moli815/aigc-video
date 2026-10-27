@@ -22,6 +22,7 @@ extension ChatViewModel {
             streamingMessageId = nil
             streamTask = nil
             UserDefaults.standard.removeObject(forKey: Self.taskProgressKey)
+            NotificationCenter.default.post(name: Notification.Name("bossAIDataChanged"), object: nil)
         }
 
         let turnSpan = PerformanceTrace.begin("ChatTurn")

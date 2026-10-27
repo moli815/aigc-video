@@ -51,7 +51,11 @@ jobs:
         with:
           node-version: '20'
       - name: Backend and image contract regression
-        run: node --test tests-backend/*.test.js
+        run: |
+          node scripts/bundle-function-shared.js
+          node --check cloudfunctions/bf-api/index.js
+          node --check cloudfunctions/bf-image/index.js
+          node --test tests-backend/*.test.js
 
   # 第一道：SPM 单测（检索质量 + ExpertCore 回归），不过则不出包
   swift-core:

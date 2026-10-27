@@ -64,7 +64,12 @@ struct MessageRow: View {
     /// 抽成独立 @ViewBuilder：body 里再堆分支容易触发 SwiftUI 类型检查超时。
     @ViewBuilder
     private var imageSection: some View {
-        if isSeriesMessage, let meta = message.seriesMeta {
+        if message.imageData == nil, !CloudAssetStore.references(message.imageAssetsJSON).isEmpty {
+            if let meta = message.seriesMeta { Text(meta.statusLine).font(.caption).foregroundStyle(.secondary) }
+            ForEach(Array(CloudAssetStore.references(message.imageAssetsJSON).enumerated()), id: \.offset) { _, asset in
+                CloudMessageImage(asset: asset, owner: message.conversation?.ownerKey ?? "")
+            }
+        } else if isSeriesMessage, let meta = message.seriesMeta {
             SeriesImageGrid(messageID: message.id,
                             meta: meta,
                             firstImage: message.imageData,
@@ -205,24 +210,108 @@ private struct BlinkingCursor: View {
     }
 }
 
+/// Only a small derivative is loaded by scrolling. Full bytes are fetched on tap.
+private struct CloudMessageImage: View {
+    let asset: CloudAssetRef
+    let owner: String
+    @State private var thumbnail: UIImage?
+    @State private var original: Data?
+    @State private var loadingOriginal = false
+    @State private var errorText: String?
+    @State private var fullscreen = false
+    @State private var retry = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().scaledToFit()
+                    .frame(maxWidth: 560, maxHeight: 420)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture { Task { await openOriginal() } }
+                Button(loadingOriginal ? "正在下载原图…" : "查看原图") { Task { await openOriginal() } }
+                    .font(.caption).disabled(loadingOriginal)
+            } else if errorText == nil {
+                ProgressView("正在读取图片…").padding()
+            }
+            if let errorText {
+                Text(errorText).font(.caption).foregroundStyle(.secondary)
+                Button("重新读取") { retry += 1 }.font(.caption)
+            }
+        }
+        .task(id: retry) {
+            guard let session = CloudSession.capture(), session.owner == owner else { return }
+            errorText = nil
+            do {
+                let small = asset.variants?["thumbnail"] ?? asset
+                let data = try await CloudAssetStore.download(small, session: session)
+                if !Task.isCancelled { thumbnail = UIImage(data: data) }
+            } catch { errorText = "图片暂时没有读取成功，记录仍在，可以稍后重试。" }
+        }
+        .fullScreenCover(isPresented: $fullscreen) {
+            if let original { ImageFullscreenView(data: original) }
+        }
+    }
+    private func openOriginal() async {
+        guard !loadingOriginal, let session = CloudSession.capture(), session.owner == owner else { return }
+        loadingOriginal = true
+        defer { loadingOriginal = false }
+        do {
+            let data = try await CloudAssetStore.download(asset, session: session)
+            try session.validate()
+            original = data; fullscreen = true
+        } catch {
+            errorText = "原图暂时没有下载完成，可以稍后重试。"
+            DiagnosticQueue.shared.record(domain: "assets", stage: "image_download", code: "ASSET_DOWNLOAD_FAILED")
+        }
+    }
+}
+
 /// 文件预览弹窗（QuickLook + 分享/保存）
 struct FilePreviewSheet: View {
     @Environment(\.appTheme) private var theme
     let file: StoredFile
     @Environment(\.dismiss) private var dismiss
+    @State private var downloading = false
+    @State private var downloadError: String?
+    @State private var retry = 0
+    @State private var recovered = false
 
     private var url: URL { FileStore.url(for: file) }
 
     var body: some View {
         NavigationStack {
             Group {
-                if FileManager.default.fileExists(atPath: url.path) {
+                if recovered || FileManager.default.fileExists(atPath: url.path) {
                     QuickLookPreview(url: url)
+                } else if downloading {
+                    ProgressView("正在下载文件…")
+                } else if !file.cloudAssetJSON.isEmpty {
+                    VStack(spacing: 12) {
+                        Text(downloadError ?? "文件保存在云端，可以重新下载。")
+                        Button("重新下载") { retry += 1 }
+                    }.padding()
                 } else {
                     ContentUnavailableView("文件已不存在", systemImage: "exclamationmark.triangle")
                 }
             }
             .navigationTitle(file.name)
+            .task(id: retry) {
+                guard !FileManager.default.fileExists(atPath: url.path),
+                      let asset = CloudAssetStore.references(file.cloudAssetJSON).first,
+                      let session = CloudSession.capture(), session.owner == file.ownerKey else { return }
+                downloading = true
+                defer { downloading = false }
+                do {
+                    let data = try await CloudAssetStore.download(asset, session: session)
+                    try session.validate()
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    recovered = true
+                } catch {
+                    downloadError = "文件暂时没有下载完成，云端记录仍保留，可以稍后重试。"
+                    DiagnosticQueue.shared.record(domain: "assets", stage: "file_download", code: "ASSET_DOWNLOAD_FAILED")
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

@@ -167,6 +167,9 @@ enum FileStore {
     /// 10-23 P2：失败行为改为"手动恢复文件 + 清理日志"，避免对共享 ModelContext 调用宽泛 rollback()
     ///（rollback 会丢弃调用方在同一上下文上的所有未保存修改）。
     static func delete(_ file: StoredFile, context: ModelContext) throws {
+        let fileID = file.id
+        let fileOwner = file.ownerKey
+        // A durable tombstone must exist before deleting the last local metadata row.
         let path = url(for: file)
         let fileName = path.lastPathComponent
         // 隔离名：删除期间文件改姓改名，等库保存成功才真正移除
@@ -183,12 +186,19 @@ enum FileStore {
         if exists { try FileManager.default.moveItem(at: path, to: quarantine) }
 
         // 3) 删除数据库记录并保存
+        do { try SyncV2Engine.enqueueDeletion(kind: "file", id: fileID, owner: fileOwner) }
+        catch {
+            if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
+            try? FileManager.default.removeItem(at: journalURL)
+            throw error
+        }
         context.delete(file)
         do { try context.save() }
         catch {
             // 保存失败：撤销隔离（文件移回原位），清理日志，但不 rollback 整个上下文
             if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
             try? FileManager.default.removeItem(at: journalURL)
+            SyncV2Engine.cancelDeletion(kind: "file", id: fileID, owner: fileOwner)
             throw error
         }
 

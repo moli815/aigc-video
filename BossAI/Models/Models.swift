@@ -76,6 +76,8 @@ final class Message {
     var extraImagesJSON: Data? = nil
     /// 组图元信息（SeriesMeta 的 JSON 字符串）：请求/成功/失败序号/费用状态
     var seriesMetaJSON: String = ""
+    /// Durable object-storage references, in image order. Never signed URLs or base64.
+    var imageAssetsJSON: String = ""
 
     init(role: String, text: String, imageData: Data? = nil) {
         self.role = role
@@ -312,6 +314,9 @@ final class StoredFile {
     var categoryRaw: String = FileCategory.other.rawValue
     /// 相对 Files 目录的文件名
     var storedName: String = ""
+    /// Cloud asset metadata; local file can be downloaded again after reinstall.
+    var cloudAssetJSON: String = ""
+    var contentHash: String = ""
     var byteCount: Int = 0
     var createdAt: Date = Date()
     /// 来源会话（可空字符串）

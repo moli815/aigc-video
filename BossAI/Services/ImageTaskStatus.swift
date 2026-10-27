@@ -57,8 +57,8 @@ enum ImageTaskStatus {
 
         var message: String {
             switch self {
-            case .generateFailed: return "图片生成失败，请重试"
-            case .aspectMismatch: return "原图无法完整保留，请重新选择比例"
+            case .generateFailed: return "这次图片没有生成成功，已有内容已保留，可以稍后重试。"
+            case .aspectMismatch: return "生成结果的画布比例与要求不同，这次没有采用它。可以保留原比例再试一次。"
             }
         }
     }

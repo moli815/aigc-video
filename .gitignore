@@ -18,3 +18,5 @@ TestArtifacts/
 BossAI.zip
 node_modules/
 outputs/
+cloudfunctions/bf-api/shared/
+cloudfunctions/bf-image/shared/
