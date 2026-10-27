@@ -4,7 +4,7 @@ function matches(row, query) {
 }
 function memoryDatabase() {
   let tables = new Map(), tail = Promise.resolve();
-  function api(store) {
+  function api(store, transactional = false) {
     return {
       collection(name) {
         const table = () => {
@@ -17,7 +17,10 @@ function memoryDatabase() {
           async get() { return { data: [...table().values()].filter(row => matches(row, filter))
             .sort((a,b) => order ? (a[order] > b[order] ? 1 : a[order] < b[order] ? -1 : 0) : 0).slice(0, count).map(row => structuredClone(row)) }; },
           doc(id) { return {
-            async get() { return { data: table().has(id) ? [structuredClone(table().get(id))] : [] }; },
+            async get() {
+              const row = table().has(id) ? structuredClone(table().get(id)) : null;
+              return { data: transactional ? row : row ? [row] : [] };
+            },
             async set(row) { table().set(id, structuredClone({ ...row, _id: id })); return {}; },
             async update(patch) { if (!table().has(id)) throw new Error("NOT_FOUND"); table().set(id, { ...table().get(id), ...structuredClone(patch) }); return { updated: 1 }; },
           }; },
@@ -34,7 +37,7 @@ function memoryDatabase() {
     async runTransaction(callback) {
       const run = tail.then(async () => {
         const snapshot = structuredClone(tables);
-        const result = await callback(api(snapshot));
+        const result = await callback(api(snapshot, true));
         tables = snapshot; return result;
       });
       tail = run.catch(() => {}); return run;

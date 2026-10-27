@@ -4,10 +4,17 @@ import SwiftData
 
 @MainActor
 final class CloudFoundationTests: XCTestCase {
+    // Retain the container for the whole test, just as BossAIApp does in production.
+    // Returning only container.mainContext from a local container leaves its backing
+    // store lifetime dependent on SwiftData's internal ownership.
+    private var containers: [ModelContainer] = []
     private func makeContext() throws -> ModelContext {
         let schema = Schema([Conversation.self, Message.self, MemoryItem.self, StoredFile.self])
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)])
-        return container.mainContext
+        containers.append(container)
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        return context
     }
     private func row(kind: String, _ payload: [String: Any], deleted: Bool = false) throws -> [String: Any] {
         ["kind": kind, "deleted": deleted, "payload": String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!]

@@ -1,5 +1,6 @@
 "use strict";
 const { createAssetStore, boundedBytes, imageInfo, MAX_ASSET_BYTES } = require("./asset-store");
+const { documentOf } = require("./document-store");
 
 /// Recovery processes only already-generated results. This module has no model API.
 function createImageArchiver({ db, app, fetcher = fetch }) {
@@ -11,7 +12,7 @@ function createImageArchiver({ db, app, fetcher = fetch }) {
       const ref = db.collection("bf_image_jobs").doc(row._id);
       const claim = await db.runTransaction(async tx => {
         const locked = tx.collection("bf_image_jobs").doc(row._id);
-        const fresh = ((await locked.get()).data || [])[0];
+        const fresh = documentOf(await locked.get());
         if (!fresh || fresh.state !== "done") return { skipped: true };
         if (fresh.archiveState === "ready" && fresh.asset) return { asset: fresh.asset, archiveState: "ready" };
         if (Number(fresh.archiveLeaseUntil || 0) > Date.now()) return { skipped: true };

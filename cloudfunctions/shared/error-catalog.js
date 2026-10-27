@@ -6,8 +6,7 @@
 //   2. 每个错误必须同时给出：分类、是否可重试、面向用户的自然语言、受控动作；
 //   3. 未知错误一律走安全兜底，不泄露供应商响应、堆栈、路径或内部术语。
 //
-// 两份云函数各自持有一份（独立部署包，不能跨包 require）。
-// 修改时请同步 bf-api 与 bf-image，并在 tests 里断言两边的 code 集合一致。
+// Canonical source. Runtime compatibility adapters load the build-packaged copy.
 // ============================================================================
 
 /**
@@ -193,6 +192,21 @@ const CATALOG = {
     category: "storage", retryable: true,
     message: "这次同步没有完成，本地数据仍然完整，稍后会自动重试。",
     actions: ["retry"],
+  },
+  STORAGE_UNAVAILABLE: {
+    category: "storage", retryable: true,
+    message: "云端保存暂未完成，本机内容已保留，稍后会重试保存。",
+    actions: ["retry"],
+  },
+  ASSET_NOT_FOUND: {
+    category: "storage", retryable: false,
+    message: "没有找到可访问的文件，请从原设备重新同步或上传。",
+    actions: ["feedback"],
+  },
+  CLOUD_INPUT_INVALID: {
+    category: "input", retryable: false,
+    message: "这次内容没有完整保存，请检查输入后重试。",
+    actions: ["edit_request"],
   },
 
   // ── 兜底 ──

@@ -128,6 +128,15 @@ test("bounded asset fetch rejects oversized stream even without a content-length
   await assert.rejects(boundedBytes("http://localhost/private", 100, fetcher), /REJECTED/);
 });
 
+test("storage signing explicitly requests the official COS URL contract", async () => {
+  const db = memoryDatabase(); const bytes = Buffer.from([255,216,1,2,3]); const calls = [];
+  const app = { async uploadFile() { return {fileID:"cloud://bucket/file"}; },
+    async getTempFileURL({fileList}) { calls.push(fileList); return {fileList:fileList.map(x=>({fileID:x.fileID,tempFileURL:"https://bucket.myqcloud.com/file"}))}; } };
+  const store = createAssetStore({db,app});const asset=await store.archive("A",bytes,"image/jpeg");
+  await store.sign("A",[asset.id]);
+  assert.equal(calls[0][0].urlType,"COS_URL");
+});
+
 test("paid-image archive uses a lease; concurrent retries never call a model or duplicate the upload", async () => {
   const db = memoryDatabase(); let uploads = 0;
   const row = {_id:"paid", state:"done", accountId:"A", url:"https://image.volces.com/result", archiveState:"pending", ts:1};

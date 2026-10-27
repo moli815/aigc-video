@@ -106,7 +106,7 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
       const row = await owned(owner, id);
       if (row.state === "ready") return descriptor(row);
       if (!row.fileID) throw new Error("ASSET_UPLOAD_INCOMPLETE");
-      const signed = await app.getTempFileURL({ fileList: [{ fileID: row.fileID, maxAge: 60 }] });
+      const signed = await app.getTempFileURL({ fileList: [{ fileID: row.fileID, maxAge: 60, urlType: "COS_URL" }] });
       const url = signed.fileList && signed.fileList[0] && signed.fileList[0].tempFileURL;
       if (!url) throw new Error("ASSET_URL_FAILED");
       const bytes = await boundedBytes(url, row.byteCount, fetcher);
@@ -126,7 +126,7 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
       const rows = await Promise.all([...new Set(ids)].map(id => owned(owner, id)));
       if (rows.some(row => row.state !== "ready")) throw new Error("ASSET_NOT_READY");
       if (!rows.length) return [];
-      const response = await app.getTempFileURL({ fileList: rows.map(row => ({ fileID: row.fileID, maxAge: 900 })) });
+      const response = await app.getTempFileURL({ fileList: rows.map(row => ({ fileID: row.fileID, maxAge: 900, urlType: "COS_URL" })) });
       return rows.map(row => {
         const match = (response.fileList || []).find(item => item.fileID === row.fileID);
         if (!match || !(match.tempFileURL || match.download_url)) throw new Error("ASSET_URL_FAILED");

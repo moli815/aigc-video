@@ -1,5 +1,6 @@
 "use strict";
 const crypto = require("crypto");
+const { documentOf } = require("../shared/document-store");
 const KINDS = new Set(["conversation", "message", "memory", "file"]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function digest(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
@@ -33,7 +34,7 @@ function publicRow(row) {
 function createSyncService({ db, collection = "bf_sync_v2", metaCollection = "bf_sync_meta", assetStore }) {
   async function head(owner, tx = db) {
     const ref = tx.collection(metaCollection).doc("v2_" + digest(owner).slice(0, 32));
-    const data = ((await ref.get()).data || [])[0];
+    const data = documentOf(await ref.get());
     return { ref, revision: Number(data && data.revision || 0) };
   }
   return {
@@ -68,7 +69,7 @@ function createSyncService({ db, collection = "bf_sync_v2", metaCollection = "bf
         for (const record of records) {
           for (const [kind, id] of [[record.kind, record.refId], ...(record.parentId ? [["conversation", record.parentId]] : [])]) {
             const idKey = key(owner, kind, id);
-            if (!current.has(idKey)) current.set(idKey, ((await tx.collection(collection).doc(idKey).get()).data || [])[0] || null);
+            if (!current.has(idKey)) current.set(idKey, documentOf(await tx.collection(collection).doc(idKey).get()));
           }
         }
         for (const record of records) {

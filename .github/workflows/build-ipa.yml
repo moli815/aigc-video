@@ -173,6 +173,7 @@ jobs:
         run: |
           echo "===== 失败用例 ====="
           grep -nE "error: -\[|' failed \(|XCTAssert|Assertion Failure" /tmp/ios-tests.log | head -60 || true
+          xcrun xcresulttool get test-results summary --path TestResults.xcresult || true
 
       - name: Export visual regression samples
         if: success()

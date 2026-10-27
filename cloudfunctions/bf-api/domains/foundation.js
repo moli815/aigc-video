@@ -23,10 +23,13 @@ return async function handleFoundation(req, res, url) {
     const code = String(error && error.message || "");
     const input = /^(INVALID_|SYNC_(INVALID|DUPLICATE|BATCH|RECORD|MESSAGES|CURSOR)|ASSET_(SIZE_LIMIT|TYPE_|INTEGRITY|PIXEL|METADATA))/.test(code);
     const missing = code === "ASSET_NOT_FOUND";
-    logSafe({ tag: "foundation_failed", stage: path, code: input || missing ? code : "STORAGE_UNAVAILABLE", requestId: currentRequestId() });
+    const diagnosticCode = /^[A-Z][A-Z0-9_]{0,79}$/.test(code) ? code :
+      /^[A-Z][A-Z0-9_]{0,79}$/.test(String(error && error.code || "")) ? error.code : "UNCLASSIFIED";
+    logSafe({ tag: "foundation_failed", stage: path, code: input || missing ? code : "STORAGE_UNAVAILABLE",
+      diagnosticCode, errorType: String(error && error.name || "Error").slice(0, 40), requestId: currentRequestId() });
     return sendError(res, input ? 422 : missing ? 404 : 503,
-      input || missing ? code : "STORAGE_UNAVAILABLE",
-      input ? "这份文件暂时无法保存，请检查文件格式和大小。" : missing ? "没有找到可访问的文件。" : "云端保存暂未完成，本机内容已保留，请稍后重试保存。");
+      input ? "CLOUD_INPUT_INVALID" : missing ? "ASSET_NOT_FOUND" : "STORAGE_UNAVAILABLE",
+      input ? "这次内容没有完整保存，请检查输入后重试。" : missing ? "没有找到可访问的文件。" : "云端保存暂未完成，本机内容已保留，请稍后重试保存。");
   }
 }
 
