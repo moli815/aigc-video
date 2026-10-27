@@ -365,7 +365,7 @@ final class ChatViewModel: ObservableObject {
         var volatileSystem = ""
         let latestRequest = conv.messages.filter { $0.role == "user" }.max { $0.createdAt < $1.createdAt }?.text ?? ""
         if Self.mentionsImageGenerationOrEdit(latestRequest) {
-            volatileSystem += ImageDesignGuidance.instructions + "\n"
+            volatileSystem += ImageDesignGuidance.instructions(for: latestRequest) + "\n"
         }
         if !conv.rollingSummary.isEmpty {
             volatileSystem += "【前情摘要】本会话较早部分的要点：\n" + conv.rollingSummary + "\n\n"

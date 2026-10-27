@@ -12,7 +12,7 @@ final class DiagnosticQueue {
     }
     private var flushing = false
     private let allowed = Set(["traceId", "requestId", "jobId", "turnId", "appBuild", "domain",
-                               "stage", "errorCode", "model", "ratio", "billingState", "archiveState", "platform", "durationMs"])
+                               "stage", "errorCode", "model", "ratio", "billingState", "archiveState", "platform", "durationMs", "sourceCount", "attempt"])
     private func location(_ owner: String) -> URL {
         let scope = SHA256.hash(data: Data(owner.utf8)).map { String(format: "%02x", $0) }.joined()
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

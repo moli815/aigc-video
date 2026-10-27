@@ -15,6 +15,18 @@ enum ImageToolArguments {
               let value = try? JSONSerialization.jsonObject(with: data),
               var args = value as? [String: Any] else { throw InputError.invalid("JSON") }
         let modern = toolName != "generate_image"
+        let lower = userText.lowercased()
+        let exactAssetReplacement = ["换成我们的logo", "换成我们的 logo", "替换成我们的logo", "换成这个logo", "换成上传的logo", "替换为上传的", "用我们的logo"].contains { lower.contains($0) }
+        if toolName == "image_edit", exactAssetReplacement {
+            guard args["source"] as? String == "both",
+                  let fields = args["structured"] as? [String:Any],
+                  let assets = fields["preserve_assets"] as? [[String:Any]], !assets.isEmpty else {
+                throw InputError.invalid("原样替换标识需要source=both及structured.preserve_assets，不得重绘相似Logo")
+            }
+        }
+        if let reason = args["quality_reason"] {
+            guard let reason = reason as? String, ImageQualityPolicy.reasons.contains(reason) else { throw InputError.invalid("quality_reason") }
+        }
         if toolName == "image_decompose" || !modern {
             if args["prompt"] == nil { args["prompt"] = userText }
         }

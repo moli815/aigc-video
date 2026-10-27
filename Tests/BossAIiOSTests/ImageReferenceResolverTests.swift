@@ -22,6 +22,21 @@ final class ImageReferenceResolverTests: XCTestCase {
         XCTAssertEqual(refs, [generated, second])
     }
 
+    func testMentioningGeneratedPosterDoesNotDropUploadedLogo() {
+        XCTAssertNil(ImageReferenceResolver.sourceOverride(requested: "both",
+            userText: "把你生成的这张海报中的logo换成我们的logo",
+            hasAttachedImage: true, hasLastGeneratedImage: true))
+        XCTAssertEqual(ImageReferenceResolver.sourceOverride(requested: "last",
+            userText: "把你生成的这张海报中的logo换成我们的logo",
+            hasAttachedImage: true, hasLastGeneratedImage: true), "both")
+    }
+
+    func testBothSourceDoesNotSilentlyLoseMissingRequiredMaterial() {
+        XCTAssertNil(ImageReferenceResolver.sourceOverride(requested: "both",
+            userText: "修改你生成的海报中的Logo", hasAttachedImage: false, hasLastGeneratedImage: true))
+        XCTAssertThrowsError(try ImageReferenceResolver.resolve(source: "both", attachedImages: [], lastGeneratedImage: generated))
+    }
+
     func testMissingAttachmentFailsClosedInsteadOfReturningNoReferences() {
         XCTAssertThrowsError(try ImageReferenceResolver.resolve(source: "attached",
                                                                   attachmentIndex: 2,
@@ -67,6 +82,13 @@ final class ImageReferenceResolverTests: XCTestCase {
                                                               userText: "修改你刚才生成的那张海报",
                                                               hasAttachedImage: true,
                                                               hasLastGeneratedImage: true), "last")
+    }
+
+    func testExplicitMaterialExclusionOverridesBoth() {
+        XCTAssertEqual(ImageReferenceResolver.sourceOverride(requested:"both",userText:"不要用上传的素材，只改生成图",
+            hasAttachedImage:true,hasLastGeneratedImage:true),"last")
+        XCTAssertEqual(ImageReferenceResolver.sourceOverride(requested:"both",userText:"不要用生成图，只改上传的原图",
+            hasAttachedImage:true,hasLastGeneratedImage:true),"attached")
     }
 
     func testSourceIsNotOverriddenWhenNoReferenceIsAvailable() {

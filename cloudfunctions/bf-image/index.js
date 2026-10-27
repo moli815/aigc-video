@@ -159,8 +159,9 @@ function selectImageRoute({ taskKind, qualityTier }) {
   if (tier === "high") return { model: m.pro, reason: "tier=high" };
   if (tier === "fast") return { model: m.fast, reason: "tier=fast" };
 
-  // auto：尊重当前运行时路由配置，不从自然语言/成品名称二次推断模型档位。
-  return { model: m.fast, reason: "tier=auto" };
+  // The Agent supplies fast/high after scene classification. Missing/unknown
+  // classification is conservative; auto must not silently mean cheap-by-default.
+  return { model: m.pro, reason: "tier=auto(conservative-high)" };
 }
 
 let _rtLoadedAt = 0;

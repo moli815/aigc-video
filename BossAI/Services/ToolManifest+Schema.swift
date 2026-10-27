@@ -95,8 +95,22 @@ extension ToolManifest {
     /// 图片任务结构化的唯一用途：精确可见文案和可选版式元数据。
     private static let imageStructuredSchema: [String: Any] = [
         "type": "object",
-        "description": "仅承载程序需要精确处理的文字与版式元数据。所有视觉构思只写在 prompt，避免多份互相冲突的视觉指令。text 按语义分条逐字保留；无可见文字时填空数组。",
+        "description": "承载程序精确处理的文字、版式和原样保留素材元数据。视觉构思只写在 prompt，避免冲突。text 按语义分条逐字保留；无可见文字时填空数组。preserve_assets 仅用于原素材合成。",
         "properties": [
+            "preserve_outside": ["type":"boolean", "description":"搭配 preserve_assets 使用，默认true：除替换区域外恢复原图像素。只有用户明确要求同时修改其他区域时才false。"],
+            "preserve_assets": [
+                "type":"array", "maxItems":4,
+                "description":"仅image_edit：用户要求原样替换Logo/二维码等素材时使用，禁止让模型重画相似标识。必须source=both；reference_index=2对应上传原素材，1为海报底图。box是需要清理旧标识并放置原素材的区域，按画布0..1归一化；不明确时先确认位置，不能虚构覆盖大范围。",
+                "items":["type":"object", "properties":[
+                    "reference_index":["type":"integer","minimum":2,"maximum":6],
+                    "box":["type":"object","properties":[
+                        "x":["type":"number","minimum":0,"maximum":1],
+                        "y":["type":"number","minimum":0,"maximum":1],
+                        "width":["type":"number","exclusiveMinimum":0,"maximum":1],
+                        "height":["type":"number","exclusiveMinimum":0,"maximum":1]
+                    ],"required":["x","y","width","height"]]
+                ],"required":["reference_index","box"]]
+            ],
             "text": [
                 "type": "array",
                 "description": "最终画面里必须出现的精确文案。按标题/副标题/正文/标签/联系方式/页脚拆成多项，逐字照录，不要把整段合并成一个 body；不需要文字时填空数组。",
@@ -170,6 +184,7 @@ extension ToolManifest {
                     "maximum": 6,
                     "description": "source=attached 时选择本轮第几张图片，按用户附件显示顺序从 1 开始；只有一张图时填 1。",
                 ],
+                "quality_reason": ["type":"string", "enum":["draft","simple_visual","simple_edit","detailed_layout","identity_sensitive","brand_accuracy","complex_edit","final_delivery"], "description":"内部路由理由：草稿/简单视觉/简单改色可配fast；复杂版式、身份保持、品牌精确、复杂编辑或终稿配high。不得只按海报/名片类别选档。"],
                 "quality_tier": [
                     "type": "string",
                     "enum": ["fast", "high"],
@@ -198,6 +213,7 @@ extension ToolManifest {
                     "type": "string",
                     "description": "目标画布比例。仅用户明确要求改比例时填写；未要求改变时沿用原图比例。可填写常用比例或等价比例。",
                 ],
+                "quality_reason": ["type":"string", "enum":["draft","simple_visual","simple_edit","detailed_layout","identity_sensitive","brand_accuracy","complex_edit","final_delivery"], "description":"内部路由理由：草稿/简单视觉/简单改色可配fast；复杂版式、身份保持、品牌精确、复杂编辑或终稿配high。不得只按海报/名片类别选档。"],
                 "quality_tier": [
                     "type": "string",
                     "enum": ["fast", "high"],
@@ -244,6 +260,7 @@ extension ToolManifest {
             "properties": [
                 "prompt": ["type": "string", "description": "整组图的统一描述（各图差异点写清楚）"],
                 "count": ["type": "integer", "description": "生成张数（2-4）"],
+                "quality_reason": ["type":"string", "enum":["draft","simple_visual","simple_edit","detailed_layout","identity_sensitive","brand_accuracy","complex_edit","final_delivery"], "description":"内部路由理由：草稿/简单视觉/简单改色可配fast；复杂版式、身份保持、品牌精确、复杂编辑或终稿配high。不得只按海报/名片类别选档。"],
                 "quality_tier": [
                     "type": "string",
                     "enum": ["fast", "high"],

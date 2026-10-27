@@ -26,6 +26,14 @@ enum ImageUseCase {
 
 
     static func generate(context: ImageRequestContext, service: ImageService) async throws -> Data {
+        if let plan = try PreservedAssetWorkflow.plan(context) {
+            return try await PreservedAssetWorkflow.generate(plan:plan) { background in
+                try await generateNative(context:background,service:service)
+            }
+        }
+        return try await generateNative(context:context,service:service)
+    }
+    private static func generateNative(context: ImageRequestContext, service: ImageService) async throws -> Data {
         let limit = service.usesHostedIdempotency ? HostedAccount.cachedImageRetry : 0
         var attempt = 0
         while true {

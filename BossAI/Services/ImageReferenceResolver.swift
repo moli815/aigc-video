@@ -39,6 +39,17 @@ enum ImageReferenceResolver {
         let asksForLastGenerated = lastGeneratedPhrases.contains { value.contains($0) }
         let selected = requested?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
+        // A two-source request must remain two-source. Explicitly mentioning the
+        // base image does not revoke the uploaded material (e.g. replace its logo).
+        if ["不要用上传", "不使用上传", "只改生成图", "只修改生成图"].contains(where: {value.contains($0)}), hasLastGeneratedImage { return "last" }
+        if ["不要用生成图", "不使用生成图", "只改上传", "只修改上传"].contains(where: {value.contains($0)}), hasAttachedImage { return "attached" }
+        if selected == "both" { return nil }
+        let combinesUploadedMaterial = ["logo", "标志", "商标", "徽标", "素材"].contains { value.contains($0) }
+            && ["替换", "换成", "换为", "放到", "放在", "加到", "贴到"].contains { value.contains($0) }
+        if combinesUploadedMaterial && asksForLastGenerated && hasAttachedImage && hasLastGeneratedImage {
+            return "both"
+        }
+
         if asksForAttached, hasAttachedImage, selected != "both" { return "attached" }
         if asksForLastGenerated, hasLastGeneratedImage { return "last" }
         return nil

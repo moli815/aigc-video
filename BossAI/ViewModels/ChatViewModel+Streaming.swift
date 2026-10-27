@@ -520,6 +520,9 @@ extension ChatViewModel {
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
+                            let qualityDecision = ImageQualityPolicy.decide(userText:userText,tool:toolName,
+                                referenceCount:refs.count,modelTier:qualityTier,
+                                modelReason:args?["quality_reason"] as? String,structured:structuredArgs)
                             let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
                             // ── 10-24 P1：图片任务规划（只作用于图片分支，文本聊天完全不经过这里）──
                             // 把"比例/张数/档位/禁画字/保留原图"从模型随口决定，改成确定性推断；
@@ -533,7 +536,7 @@ extension ChatViewModel {
                                 referenceCount: refs.count,
                                 requestedCount: requestedCount > 0 ? requestedCount : nil,
                                 aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
-                                qualityTier: qualityTier.isEmpty ? nil : qualityTier,
+                                qualityTier: qualityDecision.tier,
                                 sourceSize: sourceSize,
                                 userSaid: userText,
                                 preferReferenceRedesign: toolName == "image_generate" && !refs.isEmpty)
@@ -587,6 +590,8 @@ extension ChatViewModel {
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
                                 targetSize: plan.targetSize)
+                            DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision.reason,
+                                requestId:imageCtx.requestId,fields:["sourceCount":String(refs.count),"ratio":planAspect])
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
                             if toolName == "image_series" {

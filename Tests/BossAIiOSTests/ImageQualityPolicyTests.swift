@@ -1,0 +1,46 @@
+import XCTest
+@testable import BossAI
+
+final class ImageQualityPolicyTests: XCTestCase {
+    func testAutoRoutingScenarioMatrix() {
+        let cases: [(String,String,Int,String?,String?,String)] = [
+            ("先出一版草稿","image_generate",0,nil,nil,"fast"),
+            ("简单苹果图标","image_generate",0,"fast","simple_visual","fast"),
+            ("产品背景改纯白","image_edit",1,"fast","simple_edit","fast"),
+            ("保留人脸换背景","image_edit",1,"fast","simple_edit","high"),
+            ("两个人友好握手","image_edit",1,"fast","simple_visual","high"),
+            ("替换公司Logo","image_edit",2,"fast","simple_edit","high"),
+            ("正式终稿","image_generate",0,"fast","final_delivery","high"),
+            ("最高质量画一只猫","image_generate",0,"fast","draft","high"),
+            ("复杂信息图","image_generate",0,"fast","detailed_layout","high"),
+            ("保留产品细节","image_edit",1,nil,nil,"high"),
+            ("重新设计这张海报","image_generate",1,nil,nil,"high"),
+            ("设计一张海报","image_generate",0,"fast",nil,"high"),
+            ("设计一张海报","image_generate",0,"high","simple_visual","high"),
+        ]
+        for (text,tool,count,tier,reason,expected) in cases {
+            XCTAssertEqual(ImageQualityPolicy.decide(userText:text,tool:tool,referenceCount:count,
+                modelTier:tier,modelReason:reason,structured:nil).tier,expected,text)
+        }
+    }
+    func testCopyAndPreservedAssetOverrideUnsafeLowTierRecommendation() {
+        let copy=(0..<4).map{["text":"信息\($0)"]}
+        let cases: [[String:Any]] = [["text":copy],["preserve_assets":[]]]
+        for fields in cases {
+            XCTAssertEqual(ImageQualityPolicy.decide(userText:"快速做图",tool:"image_generate",referenceCount:0,
+                modelTier:"fast",modelReason:"draft",structured:fields).tier,"high")
+        }
+    }
+    func testDesignLibraryIsDiverseAndInjectedInBoundedSubsets() {
+        XCTAssertGreaterThanOrEqual(ImageDesignGuidance.references.count,16)
+        XCTAssertLessThanOrEqual(ImageDesignGuidance.suggestions(for:"设计海报").count,6)
+        XCTAssertTrue(ImageDesignGuidance.suggestions(for:"要动漫绘本风").contains{$0.id=="anime-story"})
+        XCTAssertTrue(ImageDesignGuidance.suggestions(for:"水墨国风").contains{$0.id=="ink-space"})
+        XCTAssertLessThanOrEqual(ImageDesignGuidance.suggestions(for:"水墨国风").count,4)
+        XCTAssertFalse(ImageDesignGuidance.suggestions(for:"不要动漫，要水墨").contains{$0.id=="anime-story"})
+    }
+    func testLogoReplacementCannotFallThroughToGenerativeRedrawing() {
+        XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换logo\",\"source\":\"last\"}",
+            toolName:"image_edit",userText:"把你生成的海报中的logo换成我们的logo"))
+    }
+}

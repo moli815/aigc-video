@@ -2928,6 +2928,8 @@ async function handleChat(req, res) {
 
   if (!upstream.ok || !upstream.body) {
     const detail = await upstream.text().catch(() => "");
+    logSafe({tag: "chat_upstream_rejected", requestId: currentRequestId(),
+      ...require("./domains/chat-diagnostics").chatRejection(upstream.status, detail, upstreamBody)});
     // 不回传上游原始内容，避免泄露任何上游标识
     const busyC = [429, 430, 439, 503, 504].includes(upstream.status);
     return sendError(res, 502, "UPSTREAM_ERROR", busyC ? "服务繁忙，请稍等片刻再试" : "对话服务暂时不可用，请稍后重试");
