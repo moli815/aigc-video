@@ -44,7 +44,8 @@ enum ImageUseCase {
                     layerDecomposition: context.layerDecomposition, renderIntent: context.renderIntent,
                     aspectRatio: context.aspectRatio, taskKind: context.taskKind,
                     qualityTier: context.qualityTier, requestedCount: context.requestedCount,
-                    targetSize: context.targetSize, textMode: context.textMode == .overlay ? "overlay" : nil)
+                    targetSize: context.targetSize, textMode: context.textMode == .overlay ? "overlay" : nil,
+                    referenceRoles: context.referenceRoles)
             } catch {
                 // A direct provider has no documented idempotency guarantee. Do not retry
                 // an unknown paid result just because a client-side timeout occurred.

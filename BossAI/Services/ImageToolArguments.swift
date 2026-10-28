@@ -58,6 +58,43 @@ enum ImageToolArguments {
         if let source = args["source"] {
             guard let source = source as? String, allowedSources.contains(source) else { throw InputError.invalid("source") }
         } else if toolName == "image_edit" || toolName == "image_decompose" { throw InputError.invalid("source") }
+        // ── 2026-10-28 多附件合成（双图/多图）参数校验 ──────────────────────────
+        // 背景：用户上传「人物照 + 底图」，Agent 只传一张，人物照没离开设备，
+        // 模型只能按文字画个"有点像"的陌生人。这里在**计费之前**把参数钉死，
+        // 参数不对就回注修正，而不是发出一张注定错的请求。
+        let rawIndexes = args["source_indexes"]
+        let rawRoles = args["reference_roles"]
+        if rawIndexes != nil || rawRoles != nil {
+            guard rawIndexes != nil else { throw InputError.invalid("reference_roles 必须与 source_indexes 一起使用") }
+            guard let numbers = rawIndexes as? [NSNumber], (1...6).contains(numbers.count),
+                  numbers.allSatisfy({ n in
+                      String(cString: n.objCType) != "c"
+                          && n.doubleValue == Double(n.intValue)
+                          && (1...6).contains(n.intValue)
+                  }),
+                  Set(numbers.map(\.intValue)).count == numbers.count else {
+                throw InputError.invalid("source_indexes（1~6 的整数序号数组，不重复，最多 6 项）")
+            }
+            // 只有 attached 是多图语义；both 是"上次生成图 + 一张素材"的旧契约，混用会静默丢图。
+            guard (args["source"] as? String) == "attached" else {
+                throw InputError.invalid("source_indexes 只能配 source=attached；两张上传附件互合成不要用 both")
+            }
+            if toolName == "image_decompose" || !modern {
+                throw InputError.invalid("source_indexes（图层拆分只接受一张图）")
+            }
+            if args["source_index"] != nil {
+                throw InputError.invalid("source_index 与 source_indexes 只能二选一")
+            }
+            if let roles = rawRoles {
+                guard let list = roles as? [String], list.count == numbers.count,
+                      list.allSatisfy({ r in
+                          let t = r.trimmingCharacters(in: .whitespacesAndNewlines)
+                          return !t.isEmpty && t.count <= 24 && !t.contains("\n")
+                      }) else {
+                    throw InputError.invalid("reference_roles（需与 source_indexes 等长，每项不超过 24 字）")
+                }
+            }
+        }
         if let index = args["source_index"] {
             guard let n = index as? NSNumber, String(cString: n.objCType) != "c", n.doubleValue == Double(n.intValue),
                   (1...6).contains(n.intValue) else { throw InputError.invalid("source_index") }

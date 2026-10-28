@@ -58,4 +58,33 @@ final class ImageToolArgumentsTests: XCTestCase {
         XCTAssertGreaterThan(parts[0] * parts[1], 4_000_000)
         XCTAssertEqual(parts[0] / parts[1], 1.5, accuracy: 0.01)
     }
+
+    // MARK: - 2026-10-28 多附件参数
+
+    func testMultiAttachmentPairIsAccepted() throws {
+        let args = try ImageToolArguments.decode(
+            #"{"prompt":"把图1的人物合成到图2，两人握手","source":"attached","source_indexes":[2,1],"reference_roles":["底图","人物照片"]}"#,
+            toolName: "image_edit", userText: "把第一张上的人P到第二张上")
+        XCTAssertEqual((args["source_indexes"] as? [NSNumber])?.map(\.intValue), [2, 1])
+        XCTAssertEqual(args["reference_roles"] as? [String], ["底图", "人物照片"])
+    }
+
+    func testMultiAttachmentRequiresAttachedSourceAndMatchingRoles() {
+        // both 是"上次生成图+一张素材"的旧契约，混用会静默丢图
+        XCTAssertThrowsError(try ImageToolArguments.decode(
+            #"{"prompt":"合成","source":"both","source_indexes":[2,1]}"#,
+            toolName: "image_edit", userText: "合成两张图"))
+        // 角色数量必须与序号一致，否则服务端会错标"哪张是人物"
+        XCTAssertThrowsError(try ImageToolArguments.decode(
+            #"{"prompt":"合成","source":"attached","source_indexes":[2,1],"reference_roles":["底图"]}"#,
+            toolName: "image_edit", userText: "合成两张图"))
+        // source_index 与 source_indexes 不能同时出现
+        XCTAssertThrowsError(try ImageToolArguments.decode(
+            #"{"prompt":"合成","source":"attached","source_index":1,"source_indexes":[2,1]}"#,
+            toolName: "image_edit", userText: "合成两张图"))
+        // 重复序号是脏数据
+        XCTAssertThrowsError(try ImageToolArguments.decode(
+            #"{"prompt":"合成","source":"attached","source_indexes":[1,1]}"#,
+            toolName: "image_edit", userText: "合成两张图"))
+    }
 }

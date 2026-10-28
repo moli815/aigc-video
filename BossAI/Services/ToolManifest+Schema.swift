@@ -194,7 +194,21 @@ extension ToolManifest {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 6,
-                    "description": "source=attached 时选择本轮第几张图片，按用户附件显示顺序从 1 开始；只有一张图时填 1。",
+                    "description": "只用一张参考图时选择本轮第几张图片，按用户附件显示顺序从 1 开始；只有一张图时填 1。需要多张素材时改用 source_indexes。",
+                ],
+                "source_indexes": [
+                    "type": "array",
+                    "items": ["type": "integer", "minimum": 1, "maximum": 6],
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "description": "需要多张附件参与重设计/合成时按顺序列出，第一项是主参考图。需要保留某张图里的人物身份时，必须把那张图列进来，不能只用文字描述。",
+                ],
+                "reference_roles": [
+                    "type": "array",
+                    "items": ["type": "string"],
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "description": "与 source_indexes 一一对应的角色短语，例：["主参考","人物照片"]。",
                 ],
                 "quality_reason": ["type":"string", "enum":["draft","simple_visual","simple_edit","detailed_layout","identity_sensitive","brand_accuracy","complex_edit","final_delivery"], "description":"内部路由理由：草稿/简单视觉/简单改色可配fast；复杂版式、身份保持、品牌精确、复杂编辑或终稿配high。不得只按海报/名片类别选档。"],
                 "quality_tier": [
@@ -211,7 +225,7 @@ extension ToolManifest {
     /// ② 图生图编辑：source 必须明确指定底图（enum 强制，不再靠两个 boolean 猜）
     static let imageEditFunction: [String: Any] = [
         "name": "image_edit",
-        "description": "对已有图片做局部编辑（换背景、增删元素、修图），并尽量保持未提及区域、主体位置与原图画布。source 必填：last=最近生成图，attached=用户上传图，both=生成图底图+上传素材。source_index 从 1 开始选择本轮附件。若用户想基于原图重新设计一张全新作品，使用 image_generate + source=attached，避免局部编辑的像素保留约束。",
+        "description": "对已有图片做局部编辑（换背景、增删元素、修图），并尽量保持未提及区域、主体位置与原图画布。source 必填：last=最近生成图，attached=用户上传图（可多张，用 source_indexes 按顺序列出），both=生成图底图+一张上传素材。source_index 从 1 开始选择本轮附件。把某张附件里的人/物合成到另一张附件上时，必须用 source=attached + source_indexes=[底图序号, 素材序号]，只传一张会让模型看不到要合成的内容。若用户想基于原图重新设计一张全新作品，使用 image_generate + source=attached，避免局部编辑的像素保留约束。",
         "parameters": [
             "type": "object",
             "properties": [
@@ -235,13 +249,27 @@ extension ToolManifest {
                 "source": [
                     "type": "string",
                     "enum": ["last", "attached", "both"],
-                    "description": "底图来源：last=最近生成 | attached=用户上传 | both=双图融合（第一张为底图，第二张为叠加素材）",
+                    "description": "底图来源：last=最近生成图 | attached=用户上传图（可多张）| both=上次生成图作底图 + 一张上传素材（Logo/二维码原样替换用）。两张上传附件互合成请用 attached + source_indexes，不要用 both。",
                 ],
                 "source_index": [
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 6,
-                    "description": "source=attached/both 时选择本轮第几张图片，按附件显示顺序从 1 开始。",
+                    "description": "只用一张附件时选择本轮第几张图，按附件显示顺序从 1 开始。需要两张及以上时改用 source_indexes。",
+                ],
+                "source_indexes": [
+                    "type": "array",
+                    "items": ["type": "integer", "minimum": 1, "maximum": 6],
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "description": "需要多张附件参与时按顺序列出序号，**第一项必须是底图**，其后是素材。例：把第 1 张的人物合成到第 2 张底图上 → source=attached, source_indexes=[2,1]。只传一张会让模型看不到要合成的人。",
+                ],
+                "reference_roles": [
+                    "type": "array",
+                    "items": ["type": "string"],
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "description": "与 source_indexes 一一对应的角色短语，用于服务端标注「图1=底图、图2=人物照片」。例：["底图","人物照片"]。省略时服务端按「第一张底图、其余素材」标注。",
                 ],
                 "structured": imageStructuredSchema,
             ],

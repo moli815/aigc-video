@@ -41,6 +41,10 @@ struct ImageRequestContext {
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
     let textMode: ImageTextMode
+    /// 多图输入的角色标注（与 references 一一对应），例 ["底图","人物照片"]。
+    /// 服务端据此在 prompt 前拼「图1=底图、图2=人物照片」——没有这段标注，
+    /// 两张图同时到达模型也会被搞混，等于白传。
+    let referenceRoles: [String]
 
     /// 10-25 几何保护：显式像素尺寸（"1200x800"）。
     /// 有值时请求走 size 字段，精确保留来源画布比例；服务端再按该尺寸请求模型。
@@ -50,7 +54,8 @@ struct ImageRequestContext {
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
-         targetSize: String? = nil, textMode: ImageTextMode = .native, requestId: String = UUID().uuidString) {
+         targetSize: String? = nil, textMode: ImageTextMode = .native,
+         referenceRoles: [String] = [], requestId: String = UUID().uuidString) {
         self.requestId = requestId
         self.prompt = prompt
         self.references = references
@@ -63,6 +68,7 @@ struct ImageRequestContext {
         self.layerDecomposition = layerDecomposition
         self.targetSize = targetSize
         self.textMode = textMode
+        self.referenceRoles = referenceRoles
     }
 
     /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
@@ -76,7 +82,7 @@ struct ImageRequestContext {
                             renderIntent: renderIntent,
                             structured: structured,
                             layerDecomposition: layerDecomposition,
-                            targetSize: targetSize, textMode: textMode)
+                            targetSize: targetSize, textMode: textMode, referenceRoles: referenceRoles)
     }
 
     /// Builds a text-free background request: remove exact display copy from both prompt
@@ -109,7 +115,7 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: visualFields.isEmpty ? nil : visualFields,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize, textMode: .overlay)
+                                   targetSize: targetSize, textMode: .overlay, referenceRoles: referenceRoles)
     }
 
     private static func removingVisibleCopy(_ value: Any, values: [String]) -> Any {
@@ -139,7 +145,7 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: structured,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize, textMode: textMode)
+                                   targetSize: targetSize, textMode: textMode, referenceRoles: referenceRoles)
     }
 }
 
@@ -294,7 +300,8 @@ final class ImageService {
                              qualityTier: String?,
                              requestedCount: Int?,
                              targetSize: String? = nil,
-                             textMode: String? = nil) async throws -> URLRequest {
+                             textMode: String? = nil,
+                             referenceRoles: [String] = []) async throws -> URLRequest {
         let session = profile.id == "hosted" ? await MainActor.run { CloudSession.capture() } : nil
         let apiKey: String
         if profile.id == "hosted" {
@@ -339,7 +346,8 @@ final class ImageService {
                                                        renderIntent: renderIntent, aspectRatio: aspectRatio,
                                                        taskKind: taskKind, qualityTier: qualityTier,
                                                        requestedCount: requestedCount, targetSize: targetSize,
-                                                       textMode: textMode)
+                                                       textMode: textMode,
+                                                       referenceRoles: references.count > 1 ? referenceRoles : nil)
         } else {
             switch profile.style {
             case .volc:
@@ -435,13 +443,13 @@ final class ImageService {
     // MARK: - 单图（保持原契约，旧调用点零改动）
 
     /// 执行单图请求；reference 可用于整体重设计，edit 才表示局部编辑。返回图片二进制。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil, referenceRoles: [String] = []) async throws -> Data {
         let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
                                             requestId: requestId, layerDecomposition: layerDecomposition,
                                             renderIntent: renderIntent, aspectRatio: aspectRatio,
                                             taskKind: taskKind, qualityTier: qualityTier,
                                             requestedCount: requestedCount, targetSize: targetSize,
-                                            textMode: textMode)
+                                            textMode: textMode, referenceRoles: referenceRoles)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
         try await validateSession(for: request)
         if response.statusCode != 200 {

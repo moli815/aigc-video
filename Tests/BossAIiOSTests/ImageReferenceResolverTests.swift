@@ -120,4 +120,60 @@ final class ImageReferenceResolverTests: XCTestCase {
         XCTAssertEqual(background.references, [first])
         XCTAssertEqual(background.taskKind, "reference")
     }
+
+    // MARK: - 2026-10-28 多附件合成
+
+    /// 事故回归：用户传「人物照(1) + 底图(2)」要求合成，
+    /// Agent 只给 source_index=2，人物照从未离开设备，模型只能按文字编一个陌生人。
+    func testMultipleAttachmentsKeepTheGivenOrder() throws {
+        let refs = try ImageReferenceResolver.resolve(source: "attached",
+                                                      attachmentIndices: [2, 1],
+                                                      attachedImages: [first, second],
+                                                      lastGeneratedImage: generated)
+        XCTAssertEqual(refs, [second, first], "第一位必须是底图，第二位是素材")
+    }
+
+    func testDuplicateIndicesAreCollapsedWithoutReordering() throws {
+        let refs = try ImageReferenceResolver.resolve(source: "attached",
+                                                      attachmentIndices: [2, 2, 1],
+                                                      attachedImages: [first, second],
+                                                      lastGeneratedImage: generated)
+        XCTAssertEqual(refs, [second, first])
+    }
+
+    func testOutOfRangeIndexFailsClosedInsteadOfDroppingTheMaterial() {
+        XCTAssertThrowsError(try ImageReferenceResolver.resolve(source: "attached",
+                                                                attachmentIndices: [1, 3],
+                                                                attachedImages: [first, second],
+                                                                lastGeneratedImage: generated))
+    }
+
+    func testMoreThanSixReferencesIsRejected() {
+        let many = (1...7).map { Data("img-\($0)".utf8) }
+        XCTAssertThrowsError(try ImageReferenceResolver.resolve(source: "attached",
+                                                                attachmentIndices: Array(1...7),
+                                                                attachedImages: many,
+                                                                lastGeneratedImage: nil))
+    }
+
+    /// 旧契约不变：both 仍是「上次生成图 + 一张上传素材」，Logo 替换依赖它
+    func testBothStillMeansGeneratedBasePlusOneAttachment() throws {
+        let refs = try ImageReferenceResolver.resolve(source: "both",
+                                                      attachmentIndices: [1],
+                                                      attachedImages: [second],
+                                                      lastGeneratedImage: generated)
+        XCTAssertEqual(refs, [generated, second])
+    }
+
+    /// 双图合成意图识别：只认明确的双图指代，单图编辑不能被误判成双图
+    func testCrossAttachmentCompositeIntent() {
+        XCTAssertTrue(ImageReferenceResolver.requestsCrossAttachmentComposite(
+            "把第一张照片上的人物P在第二张照片上面，让两个人友好握手"))
+        XCTAssertTrue(ImageReferenceResolver.requestsCrossAttachmentComposite(
+            "把这张图里的人放到另一张上"))
+        XCTAssertFalse(ImageReferenceResolver.requestsCrossAttachmentComposite(
+            "把这张照片里的女士左边加一个人"))
+        XCTAssertFalse(ImageReferenceResolver.requestsCrossAttachmentComposite(
+            "把这张图里的天空换成日落"))
+    }
 }

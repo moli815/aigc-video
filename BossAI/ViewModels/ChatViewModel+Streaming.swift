@@ -460,6 +460,15 @@ extension ChatViewModel {
                             let sourceIndex = (args?["source_index"] as? Int)
                                 ?? (args?["source_index"] as? NSNumber)?.intValue
                                 ?? 1
+                            // 10-28 多图合成：Agent 可以一次指定多张本轮附件（**第一项是底图**）。
+                            // 事故根因：用户传「人物照+底图」，Agent 只给 source_index=2，
+                            // 人物照没离开设备，模型只能按文字编一个陌生人。
+                            let sourceIndices: [Int] = {
+                                let raw = (args?["source_indexes"] as? [NSNumber])?.map(\.intValue) ?? []
+                                return raw.isEmpty ? [sourceIndex] : raw
+                            }()
+                            let requestedRoles = ((args?["reference_roles"] as? [String]) ?? [])
+                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                             let requestedSource = args?["source"] as? String
                             let memoryFiles = try ImageMemory.selected(args?["library_refs"], issued: recalledImageIDs,
                                 context: modelContext, owner: HostedAccount.scopeKey)
@@ -482,7 +491,7 @@ extension ChatViewModel {
                                         (ImageReferenceResolver.userRequestsImageSource(userText) ? "attached" : "last")
                                     refs = try ImageReferenceResolver.resolve(
                                         source: resolvedToolSource ?? fallback,
-                                        attachmentIndex: sourceIndex,
+                                        attachmentIndices: sourceIndices,
                                         attachedImages: attachedCandidates,
                                         lastGeneratedImage: lastGeneratedImage)
                                 } else if toolName == "image_generate" {
@@ -490,14 +499,14 @@ extension ChatViewModel {
                                         ? "attached" : "none"
                                     refs = try ImageReferenceResolver.resolve(
                                         source: resolvedToolSource ?? fallback,
-                                        attachmentIndex: sourceIndex,
+                                        attachmentIndices: sourceIndices,
                                         attachedImages: attachedCandidates,
                                         lastGeneratedImage: lastGeneratedImage)
                                 } else if toolName == "image_decompose" {
                                     let fallback = attachedCandidates.isEmpty ? "last" : "attached"
                                     refs = try ImageReferenceResolver.resolve(
                                         source: resolvedToolSource ?? fallback,
-                                        attachmentIndex: sourceIndex,
+                                        attachmentIndices: sourceIndices,
                                         attachedImages: attachedCandidates,
                                         lastGeneratedImage: lastGeneratedImage)
                                 } else if toolName == "image_series" {
@@ -510,7 +519,7 @@ extension ChatViewModel {
                                         (editLast ? "last" : (useAttached ? "attached" : "none"))
                                     refs = try ImageReferenceResolver.resolve(
                                         source: resolvedToolSource ?? source,
-                                        attachmentIndex: sourceIndex,
+                                        attachmentIndices: sourceIndices,
                                         attachedImages: attachedCandidates,
                                         lastGeneratedImage: lastGeneratedImage)
                                 }
@@ -519,6 +528,19 @@ extension ChatViewModel {
                                                     "content": ToolPipeline.failureNote(
                                                         pluginID: toolName,
                                                         reason: error.localizedDescription)])
+                                continue
+                            }
+                            // ── 10-28 兜底：双附件合成意图，但只解析出一张图 → 回注修正 ──
+                            // 这是「文档改了 Agent 仍按老习惯调」的兜底：静默只发一张，
+                            // 用户会得到"底图对、人不对"的结果，而且没有任何错误提示。
+                            // 这里给一次参数修正机会（尚未调用模型、尚未计费）。
+                            if attachedCandidates.count >= 2, refs.count == 1,
+                               ImageReferenceResolver.requestsCrossAttachmentComposite(userText) {
+                                apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                    "content": "【参数需修正·尚未调用作图模型】用户要求把一张附件里的人/物合成到另一张附件上，" +
+                                        "但本次只提交了一张图，模型看不到要合成的内容。请改用 image_edit + source=attached + " +
+                                        "source_indexes=[底图序号, 素材序号] + reference_roles=[\"底图\",\"人物照片\"] 重新调用，" +
+                                        "并在 prompt 里点名“图几”。不要向用户解释参数。"])
                                 continue
                             }
                             // 10-21 结构化字段（有则优先，服务端按模板拼装）
@@ -596,7 +618,8 @@ extension ChatViewModel {
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
-                                targetSize: plan.targetSize)
+                                targetSize: plan.targetSize,
+                                referenceRoles: requestedRoles.count == refs.count ? requestedRoles : [])
                             DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision.reason,
                                 requestId:imageCtx.requestId,fields:["sourceCount":String(refs.count),"ratio":planAspect])
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──

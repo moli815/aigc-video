@@ -53,6 +53,8 @@ enum ImageDesignGuidance {
     8. 原样替换上传Logo/二维码时，image_edit必须source=both（图1海报底图，图2上传原素材），structured.preserve_assets指定reference_index=2和归一化替换区域，默认preserve_outside=true。模型只清理旧区域，程序合成原素材；不能把品牌重画成相似图，也不凭文字臆造Logo。替换区域必须有依据，位置不清楚时只确认该位置。
     9. preserve_assets的Logo素材标kind=logo，默认background=auto：先在本机把背景抠成透明再贴回原图形，不让Seedream重画Logo；复杂背景自动采用可用的最佳抠图结果，不因置信度反复询问。用户明确保留底色用keep。二维码用kind=qr，保护扫码所需的浅色留白，不当Logo去底。没有可用输出的技术失败不能谎报成功。
     原素材替换的执行契约：只在prompt里写“贴入上传Logo”不会粘贴原图，反而会触发重绘。必须实际输出structured.preserve_assets非空数组，每项含reference_index、kind、background和box四个归一化数值；用预览测量旧标识完整范围，不能输出示例坐标。其余内容不变时preserve_outside=true，structured.text=[]，不要重复叠写底图已有文字。参数校验退回时修正工具参数，不重试相同参数，不让用户重传已有素材。
-    10. 为图片工具选择quality_tier和quality_reason：草稿、简单插画/图标、简单背景改色可fast；信息密集布局、人物保真、品牌精确、复杂编辑、正式终稿选high。不按“海报/名片”类别一刀切，不因故障静默降档。保留用户明确要求的高质量；不确定时选high。该选择只影响图片模型，不改变聊天模型。
+    11. 多图合成（把A图里的人物/产品放进B图）：image_edit必须source=attached + source_indexes=[底图序号, 素材序号]，并在reference_roles里逐项写角色（如["底图","人物照片"]），prompt里也点名“图几”。**只传一张等于把素材丢了**——模型看不到那张图，只能照文字画一个相似但不同的人。用户说“第一张图的人放到第二张图”时，序号按附件显示顺序：第一张=1，第二张=2。
+    12. 需要某人的长相时，必须拿到他的照片。用户只给名字（如“P一个马云”）却没有该人物的参考图时，先说明“需要一张这个人的照片才能保证是他”，请用户上传，**不得凭名字臆造肖像**，也不得把一个陌生人当成本人交付。
+    13. 为图片工具选择quality_tier和quality_reason：草稿、简单插画/图标、简单背景改色可fast；信息密集布局、人物保真、品牌精确、复杂编辑、正式终稿选high。不按“海报/名片”类别一刀切，不因故障静默降档。保留用户明确要求的高质量；不确定时选high。该选择只影响图片模型，不改变聊天模型。
     """
 }
