@@ -26,7 +26,7 @@ final class ImageWaitMotionTests: XCTestCase {
 
     @MainActor func testWaitingCardVisual() throws {
         let renderer = ImageRenderer(content: ImageWaitingRow(state: ImageWaitState(kind: .generate))
-            .frame(width: 360).padding(20).environment(\.accessibilityReduceMotion, true))
+            .frame(width: 360).padding(20))
         renderer.scale = 2
         let image = try XCTUnwrap(renderer.uiImage)
         let attachment = XCTAttachment(image: image)
