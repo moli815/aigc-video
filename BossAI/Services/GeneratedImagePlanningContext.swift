@@ -13,7 +13,17 @@ enum GeneratedImagePlanningContext {
         let text = userText.lowercased()
         if ["不要用生成图", "不使用生成图", "不参考生成图", "只改上传", "只修改上传", "don't use generated", "do not use generated"].contains(where: { text.contains($0) }) { return false }
         let edits = ["替换", "换成", "换为", "换一下", "换个", "换一个", "换一种", "换背景", "换颜色", "换logo", "换 logo", "修改", "改成", "改为", "改一下", "调整", "编辑", "修图", "重做", "重绘", "重新设计", "重新排版", "添加", "新增", "加一个", "加上", "加点", "加文字", "加logo", "加 logo", "加我们的", "放到", "放在", "贴到", "贴上", "叠加", "去掉", "删除", "移除", "移动", "裁切", "抠图", "放大", "缩小", "edit ", "replace ", "change ", "add ", "remove ", "resize ", "redesign ", "crop "]
-        guard edits.contains(where: { text.contains($0) }) else { return false }
+        // A mention of editing is not an instruction to edit. Remove refusals and
+        // completed-action feedback, then require an actionable request clause.
+        var request = text.replacingOccurrences(of: "(?:不要|别|不用|无需|不需要|不必|不想)(?:再|继续)?(?:替换|换成|换为|换一下|换个|换一种|换背景|修改|改成|调整|编辑|修图|重做|重绘|重新设计|重新排版|添加|新增|加一个|加上|去掉|删除|移除|移动|裁切|抠图|放大|缩小)", with: "", options: .regularExpression)
+        request = request.replacingOccurrences(of: "(?:已经|已)(?:修改|编辑|调整|替换)|(?:修改|编辑|调整|替换|重做)(?:好了|完成|过了|过|完了)", with: "", options: .regularExpression)
+        request = request.replacingOccurrences(of: "(?:don't|do not|never|no need to)\\s+(?:edit|replace|change|add|remove|resize|redesign|crop)\\s*", with: "", options: .regularExpression)
+        guard edits.contains(where: { request.contains($0) }) else { return false }
+        let clauses = request.components(separatedBy: CharacterSet(charactersIn: "，。；！？,;!?\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let starts = ["请", "帮", "给", "把", "将", "再", "在", "对", "我想", "我要", "我希望", "能否", "能不能", "please ", "can you ", "could you ", "i want "]
+        let explicitAsk = ["帮我", "给我", "请你"].contains { request.contains($0) }
+        guard explicitAsk || clauses.contains(where: { clause in starts.contains(where: { clause.hasPrefix($0) }) || edits.contains(where: { clause.hasPrefix($0) }) }) else { return false }
         if ["你生成", "刚才生成", "刚生成", "上一张生成", "生成的这张", "生成的那张", "刚才那张", "generated", "you made", "previous image", "last image"].contains(where: { text.contains($0) }) { return true }
         // A current uploaded photo is never replaced by an unrelated generated image.
         return !hasAttachedImages && ImageReferenceResolver.userRequestsImageSource(text)

@@ -44,11 +44,11 @@ final class GeneratedImagePlanningContextTests: XCTestCase {
         return (user["content"] as? [[String: Any]] ?? []).compactMap { ($0["image_url"] as? [String: Any])?["url"] as? String }
     }
     func testOnlyEditingIntentsIncludeGeneratedPreview() {
-        for request in ["把你生成的海报logo换成我们的logo", "修改刚才生成的海报", "给刚才那张加一个人"] {
+        for request in ["把你生成的海报logo换成我们的logo", "修改刚才生成的海报", "给刚才那张加一个人", "不用重新设计你生成的海报，请替换Logo", "Please replace the logo in the generated poster"] {
             XCTAssertTrue(GeneratedImagePlanningContext.shouldInclude(userText: request, hasAttachedImages: true), request)
         }
         XCTAssertTrue(GeneratedImagePlanningContext.shouldInclude(userText: "重新设计这张图", hasAttachedImages: false))
-        for request in ["你生成的海报很好看", "解释一下logo的含义", "生成一张海报", "只改上传的图片，不使用生成图"] {
+        for request in ["你生成的海报很好看", "解释一下logo的含义", "生成一张海报", "只改上传的图片，不使用生成图", "不要修改你生成的海报", "你生成的海报已经修改好了", "Don't edit the generated poster", "你刚才说会修改你生成的海报"] {
             XCTAssertFalse(GeneratedImagePlanningContext.shouldInclude(userText: request, hasAttachedImages: true), request)
         }
         XCTAssertFalse(GeneratedImagePlanningContext.shouldInclude(userText: "重新设计这张图", hasAttachedImages: true))
