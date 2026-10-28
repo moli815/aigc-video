@@ -21,8 +21,15 @@ enum ImageToolArguments {
         if modern, toolName != "image_edit", replacingExistingAsset {
             throw InputError.invalid("原样替换标识请用image_edit及原素材合成，不得用普通生图重画")
         }
+        if let library = args["library_refs"] {
+            guard let ids = library as? [String], (1...4).contains(ids.count),
+                  ids.allSatisfy({ UUID(uuidString: $0) != nil }), Set(ids).count == ids.count else {
+                throw InputError.invalid("library_refs")
+            }
+        }
         if toolName == "image_edit", exactAssetReplacement {
-            guard args["source"] as? String == "both",
+            let historicalPair = (args["library_refs"] as? [String] ?? []).count >= 2
+            guard args["source"] as? String == "both" || historicalPair,
                   let fields = args["structured"] as? [String:Any],
                   let assets = fields["preserve_assets"] as? [[String:Any]], !assets.isEmpty else {
                 throw InputError.invalid("原样替换标识需要source=both及structured.preserve_assets，不得重绘相似Logo")

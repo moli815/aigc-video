@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), crypt
 const { memoryDatabase } = require("./foundation-fixture");
 const { createSyncService, normalizeRecord } = require("../cloudfunctions/bf-api/domains/sync-v2");
 const { normalizeEvent, createEventService } = require("../cloudfunctions/bf-api/domains/events");
-const { createAssetStore, assetSpec, assetKey, boundedBytes } = require("../cloudfunctions/shared/asset-store");
+const { uploadPrivate, createAssetStore, assetSpec, assetKey, boundedBytes } = require("../cloudfunctions/shared/asset-store");
 const { createImageArchiver } = require("../cloudfunctions/shared/image-archive");
 const id = "B665E22F-B174-4C75-931A-962EC43FE3E1";
 const mid = "B665E22F-B174-4C75-931A-962EC43FE3E2";
@@ -104,9 +104,9 @@ test("event persistence failure is never acknowledged", async () => {
 test("asset archive deduplicates within an account and blocks cross-account signing", async () => {
   const db = memoryDatabase(); let uploads = 0;
   const bytes = Buffer.from([255,216,1,2,3]);
-  const app = { async uploadFile({cloudPath}) { uploads++; return { fileID: "cloud://bucket/" + cloudPath }; },
+  const app = { async getUploadMetadata({cloudPath}) { uploads++; return { data: { url: "https://bucket.myqcloud.com/upload", fileId: "cloud://bucket/" + cloudPath, authorization: "test" } }; },
     async getTempFileURL({fileList}) { return { fileList: fileList.map(x => ({ fileID: x.fileID, tempFileURL: "https://bucket.myqcloud.com/object?signature=private" })) }; } };
-  const service = createAssetStore({ db, app });
+  const service = createAssetStore({ db, app, fetcher: async()=>new Response("") });
   const first = await service.archive("A", bytes, "image/jpeg");
   assert.deepEqual(await service.archive("A", bytes, "image/jpeg"), first); assert.equal(uploads, 1);
   await service.archive("B", bytes, "image/jpeg"); assert.equal(uploads, 2);
@@ -130,9 +130,9 @@ test("bounded asset fetch rejects oversized stream even without a content-length
 
 test("storage signing explicitly requests the official COS URL contract", async () => {
   const db = memoryDatabase(); const bytes = Buffer.from([255,216,1,2,3]); const calls = [];
-  const app = { async uploadFile() { return {fileID:"cloud://bucket/file"}; },
+  const app = { async getUploadMetadata() { return {data:{url:"https://bucket.myqcloud.com/upload",fileId:"cloud://bucket/file",authorization:"test"}}; },
     async getTempFileURL({fileList}) { calls.push(fileList); return {fileList:fileList.map(x=>({fileID:x.fileID,tempFileURL:"https://bucket.myqcloud.com/file"}))}; } };
-  const store = createAssetStore({db,app});const asset=await store.archive("A",bytes,"image/jpeg");
+  const store = createAssetStore({db,app,fetcher:async()=>new Response("")});const asset=await store.archive("A",bytes,"image/jpeg");
   await store.sign("A",[asset.id]);
   assert.equal(calls[0][0].urlType,"COS_URL");
 });
@@ -141,8 +141,8 @@ test("paid-image archive uses a lease; concurrent retries never call a model or 
   const db = memoryDatabase(); let uploads = 0;
   const row = {_id:"paid", state:"done", accountId:"A", url:"https://image.volces.com/result", archiveState:"pending", ts:1};
   await db.collection("bf_image_jobs").doc(row._id).set(row);
-  const archiver = createImageArchiver({db, app:{async uploadFile() { uploads++; return {fileID:"cloud://bucket/archived"}; }},
-    fetcher:async()=>new Response(Buffer.from([255,216,1,2,3]))});
+  const archiver = createImageArchiver({db, app:{async getUploadMetadata() { uploads++; return {data:{url:"https://bucket.myqcloud.com/upload",fileId:"cloud://bucket/archived",authorization:"test"}}; }},
+    fetcher:async(_,options)=>new Response(options?.method === "PUT" ? "" : Buffer.from([255,216,1,2,3]))});
   await Promise.all([archiver.archive(row),archiver.archive(row)]);
   const stored = (await db.collection("bf_image_jobs").doc("paid").get()).data[0];
   assert.equal(stored.archiveState,"ready");
@@ -162,4 +162,48 @@ test("archive failure preserves paid success and releases its lease for retry", 
   assert.equal(stored.archiveState,"pending");
   assert.equal(stored.archiveAttempts,1);
   assert.equal(stored.archiveLeaseUntil,0);
+});
+
+test("private object upload never inherits a public bucket ACL or follows redirects", async () => {
+  const app={getUploadMetadata:async()=>({data:{url:"https://bucket.myqcloud.com/object",fileId:"cloud://private",authorization:"test"}})};
+  let called=false;
+  const result=await uploadPrivate(app,"user/hash/assets/file",Buffer.from("x"),async(url,options)=>{
+    called=true;assert.equal(options.headers["x-cos-acl"],"private");assert.equal(options.redirect,"error");assert.equal(options.method,"PUT");return new Response("");
+  });
+  assert.ok(called);assert.equal(result.fileID,"cloud://private");
+  await assert.rejects(uploadPrivate(app,"x",Buffer.from("x"),async()=>new Response("denied",{status:403})),/UPLOAD_FAILED/);
+  await assert.rejects(uploadPrivate({getUploadMetadata:async()=>({data:{url:"https://evil.invalid/",fileId:"x",authorization:"x"}})},"x",Buffer.from("x")),/URL_REJECTED/);
+});
+
+test("signing legacy assets migrates ACL once, rejects foreign owners before IO", async () => {
+  const db=memoryDatabase(), bytes=Buffer.from([255,216,1,2,3]);
+  const sha=crypto.createHash("sha256").update(bytes).digest("hex"), key=assetKey("A",sha);
+  await db.collection("bf_assets").doc(key).set({_id:key,accountId:"A",state:"ready",sha256:sha,
+    byteCount:bytes.length,mime:"image/jpeg",fileID:"cloud://old",cloudPath:"user/A/file.jpg"});
+  let reads=0,uploads=0;
+  const app={getUploadMetadata:async()=>({data:{url:"https://bucket.myqcloud.com/upload",fileId:"cloud://new",authorization:"test"}}),
+    getTempFileURL:async({fileList})=>({fileList:fileList.map(x=>({fileID:x.fileID,tempFileURL:"https://bucket.myqcloud.com/download"}))})};
+  const store=createAssetStore({db,app,fetcher:async(_,options)=>{
+    if(options?.method==="PUT"){uploads++;assert.equal(options.headers["x-cos-acl"],"private");return new Response("");}
+    reads++;return new Response(bytes);
+  }});
+  await assert.rejects(store.sign("B",[key]),/NOT_FOUND/);
+  assert.equal(reads+uploads,0);
+  assert.equal((await store.sign("A",[key])).length,1);
+  assert.equal((await db.collection("bf_assets").doc(key).get()).data[0].privateACL,true);
+  await store.sign("A",[key]);
+  assert.equal(reads,1);assert.equal(uploads,1);
+});
+
+test("commit validates bytes before any replacement upload", async () => {
+  const db=memoryDatabase(), bytes=Buffer.from([255,216,1,2,3]);
+  const sha=crypto.createHash("sha256").update(bytes).digest("hex");let uploads=0;
+  const app={getUploadMetadata:async()=>{uploads++;return {data:{url:"https://bucket.myqcloud.com/upload",fileId:"cloud://new",authorization:"test"}};},
+    getTempFileURL:async()=>({fileList:[{tempFileURL:"https://bucket.myqcloud.com/download"}]})};
+  const store=createAssetStore({db,app,fetcher:async()=>new Response(Buffer.from([255,216,9,9,9]))});
+  const pending=await store.prepare("A",{sha256:sha,byteCount:bytes.length,mime:"image/jpeg"});
+  uploads=0;
+  await assert.rejects(store.commit("A",pending.assetId),/INTEGRITY_FAILED/);
+  assert.equal(uploads,0);
+  assert.equal((await db.collection("bf_assets").doc(pending.assetId).get()).data[0].state,"pending");
 });

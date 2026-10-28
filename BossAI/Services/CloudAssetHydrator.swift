@@ -5,6 +5,8 @@ import SwiftData
 @MainActor
 enum CloudAssetHydrator {
     static func file(_ file: StoredFile, session: CloudSession) async throws {
+        try session.validate()
+        guard file.modelContext != nil, file.ownerKey == session.owner else { throw CancellationError() }
         let url = FileStore.url(for: file)
         if FileManager.default.fileExists(atPath: url.path) { return }
         guard file.ownerKey == session.owner,
@@ -19,6 +21,8 @@ enum CloudAssetHydrator {
     }
 
     static func image(_ message: Message, session: CloudSession) async throws -> Data {
+        try session.validate()
+        guard message.modelContext != nil, message.conversation?.ownerKey == session.owner else { throw CancellationError() }
         if let bytes = message.imageData { return bytes }
         guard message.conversation?.ownerKey == session.owner,
               let asset = CloudAssetStore.references(message.imageAssetsJSON).first else {

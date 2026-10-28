@@ -46,6 +46,7 @@ enum CloudAssetStore {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"; request.timeoutInterval = 90; request.httpBody = data
         request.setValue(mime, forHTTPHeaderField: "Content-Type")
+        request.setValue("private", forHTTPHeaderField: "x-cos-acl")
         if let auth = upload["authorization"] as? String { request.setValue(auth, forHTTPHeaderField: "Authorization") }
         if let auth = upload["authorization"] as? String { request.setValue(auth, forHTTPHeaderField: "Signature") }
         if let path = upload["cloudPath"] as? String { request.setValue(path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), forHTTPHeaderField: "key") }

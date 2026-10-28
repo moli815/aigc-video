@@ -4,10 +4,11 @@ import Foundation
 extension ToolManifest {
     static let recallHistoryFunction: [String: Any] = [
         "name": "recall_history",
-        "description": "用户提及以前的项目、人员、决定、联系方式、偏好，或需要跨会话关联时，先查历史再回答。将用户的隐含描述改写为最多3组可匹配的实体/同义关键词（例如品牌主色→Logo颜色/配色）；不确定时可分步缩小检索。只查当前账号，不联网。不宣称找到工具未返回的信息。",
+        "description": "用户提及以前的项目、人员、决定、联系方式、偏好或图片素材时，先查历史再回答。改写为最多3组实体/同义关键词；例如平台界面→平台首页/大屏、品牌配色→Logo颜色。可返回账号图片记忆ID供作图工具library_refs选取原图；需要重新看图时include_images=true，只读取最相关的两张预览。描述并非当前经营数据；不宣称找到未返回的信息。",
         "parameters": ["type": "object", "properties": [
             "queries": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 3,
-                        "description": "人物/项目名+待查字段，可用不同同义说法；不要复制整段用户指令"]
+                        "description": "人物/项目名+待查字段，可用不同同义说法；不要复制整段用户指令"],
+            "include_images": ["type": "boolean", "description": "需要分析以前上传图片或用其做设计时设true，最多读两张相关预览；仅回忆文字事实时省略"]
         ], "required": ["queries"]]
     ]
     /// 构造 expert_skill 工具定义：operation 枚举按专家是否带计算器动态收窄，
@@ -173,6 +174,7 @@ extension ToolManifest {
         "parameters": [
             "type": "object",
             "properties": [
+                "library_refs": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 4, "description": "使用recall_history返回的历史图片ID，按输入顺序提供原图；仅在明确要使用历史素材时填写。填写后取代source/source_index，不得编造ID。第一张是重设计参考，后续为辅助素材。"],
                 "prompt": ["type": "string", "description": "唯一完整的视觉指令：主体、场景、构图、光影、风格和用户要求；不要把精确可见文字混入此字段，原文放 structured.text。"],
                 "render_intent": [
                     "type": "string",
@@ -213,6 +215,7 @@ extension ToolManifest {
         "parameters": [
             "type": "object",
             "properties": [
+                "library_refs": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 4, "description": "recall_history返回的历史图片ID，按顺序取原图，第一张为编辑底图、后续为原样合成素材。填写后取代source/source_index；禁止编造ID。"],
                 "prompt": ["type": "string", "description": "唯一完整的局部编辑指令：说明改什么、哪里改、哪些内容保持；服务端只追加不与修改要求冲突的编辑边界。"],
                 "render_intent": [
                     "type": "string",

@@ -60,6 +60,28 @@ async function boundedBytes(url, limit, fetcher = fetch) {
     return Buffer.concat(parts);
   } finally { clearTimeout(timer); }
 }
+// Object ACL overrides the legacy bucket's public-read default. Never upload
+// account assets with the SDK's default inherited ACL.
+async function uploadPrivate(app, cloudPath, bytes, fetcher = fetch) {
+  const metadata = await app.getUploadMetadata({ cloudPath });
+  const d = metadata.data || {};
+  if (!d.url || !d.fileId || !d.authorization) throw new Error("ASSET_UPLOAD_UNAVAILABLE");
+  const url = new URL(d.url);
+  if (url.protocol !== "https:" || url.username || url.password ||
+      !url.hostname.endsWith(".myqcloud.com") || (url.port && url.port !== "443")) throw new Error("ASSET_URL_REJECTED");
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetcher(url.href, { method: "PUT", redirect: "error", signal: controller.signal,
+      headers: { Signature: d.authorization, authorization: d.authorization,
+        "x-cos-security-token": d.token || "", "x-cos-meta-fileid": d.cosFileId || "",
+        key: encodeURIComponent(cloudPath), "x-cos-acl": "private" }, body: bytes });
+    if (!response.ok) throw new Error("ASSET_UPLOAD_FAILED");
+    // COS normally returns an empty body. Reject an XML error without logging it.
+    const body = await response.text();
+    if (body.includes("<Error>")) throw new Error("ASSET_UPLOAD_FAILED");
+    return { fileID: d.fileId };
+  } finally { clearTimeout(timer); }
+}
 function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }) {
   const col = () => db.collection(collection);
   async function owned(owner, id) {
@@ -85,7 +107,7 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
   }
   async function markReady(row, fileID, bytes) {
     const info = validateBytes(row, bytes);
-    const patch = { state: "ready", fileID, verifiedAt: Date.now(), updatedAt: Date.now(),
+    const patch = { state: "ready", privateACL: true, fileID, verifiedAt: Date.now(), updatedAt: Date.now(),
       ...(info.width ? { width: info.width, height: info.height } : {}) };
     await col().doc(row._id).update(patch);
     return descriptor({ ...row, ...patch });
@@ -93,7 +115,7 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
   return {
     async prepare(owner, raw) {
       const row = await ensurePending(owner, assetSpec(raw));
-      if (row.state === "ready") return { ready: true, asset: descriptor(row) };
+      if (row.state === "ready" && row.privateACL === true) return { ready: true, asset: descriptor(row) };
       const metadata = await app.getUploadMetadata({ cloudPath: row.cloudPath });
       const data = metadata.data || {};
       const fileID = data.fileId || data.fileID;
@@ -104,20 +126,22 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
     },
     async commit(owner, id) {
       const row = await owned(owner, id);
-      if (row.state === "ready") return descriptor(row);
+      if (row.state === "ready" && row.privateACL === true) return descriptor(row);
       if (!row.fileID) throw new Error("ASSET_UPLOAD_INCOMPLETE");
       const signed = await app.getTempFileURL({ fileList: [{ fileID: row.fileID, maxAge: 60, urlType: "COS_URL" }] });
       const url = signed.fileList && signed.fileList[0] && signed.fileList[0].tempFileURL;
       if (!url) throw new Error("ASSET_URL_FAILED");
       const bytes = await boundedBytes(url, row.byteCount, fetcher);
-      return markReady(row, row.fileID, bytes);
+      validateBytes(row, bytes);
+      const uploaded = await uploadPrivate(app, row.cloudPath, bytes, fetcher);
+      return markReady(row, uploaded.fileID, bytes);
     },
     async archive(owner, bytes, mime) {
       const spec = assetSpec({ sha256: hash(bytes), byteCount: bytes.length, mime });
       const row = await ensurePending(owner, spec);
-      if (row.state === "ready") return descriptor(row);
+      if (row.state === "ready" && row.privateACL === true) return descriptor(row);
       validateBytes(row, bytes);
-      const uploaded = await app.uploadFile({ cloudPath: row.cloudPath, fileContent: bytes });
+      const uploaded = await uploadPrivate(app, row.cloudPath, bytes, fetcher);
       if (!uploaded.fileID) throw new Error("ASSET_UPLOAD_INCOMPLETE");
       return markReady(row, uploaded.fileID, bytes);
     },
@@ -126,6 +150,18 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
       const rows = await Promise.all([...new Set(ids)].map(id => owned(owner, id)));
       if (rows.some(row => row.state !== "ready")) throw new Error("ASSET_NOT_READY");
       if (!rows.length) return [];
+      // Migrate legacy inherited-ACL objects on first authenticated access.
+      // Sequential byte buffers avoid multiplying the function's memory budget.
+      for (const row of rows) if (row.privateACL !== true) {
+        const old = await app.getTempFileURL({ fileList: [{ fileID: row.fileID, maxAge: 60, urlType: "COS_URL" }] });
+        const url = old.fileList && old.fileList[0] && old.fileList[0].tempFileURL;
+        if (!url) throw new Error("ASSET_URL_FAILED");
+        const bytes = await boundedBytes(url, row.byteCount, fetcher);
+        validateBytes(row, bytes);
+        const uploaded = await uploadPrivate(app, row.cloudPath, bytes, fetcher);
+        await markReady(row, uploaded.fileID, bytes);
+        row.fileID = uploaded.fileID; row.privateACL = true;
+      }
       const response = await app.getTempFileURL({ fileList: rows.map(row => ({ fileID: row.fileID, maxAge: 900, urlType: "COS_URL" })) });
       return rows.map(row => {
         const match = (response.fileList || []).find(item => item.fileID === row.fileID);
@@ -145,4 +181,4 @@ function createAssetStore({ db, app, collection = "bf_assets", fetcher = fetch }
     },
   };
 }
-module.exports = { createAssetStore, assetSpec, assetKey, imageInfo, validateBytes, descriptor, boundedBytes, MAX_ASSET_BYTES };
+module.exports = { uploadPrivate, createAssetStore, assetSpec, assetKey, imageInfo, validateBytes, descriptor, boundedBytes, MAX_ASSET_BYTES };

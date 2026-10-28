@@ -72,6 +72,7 @@ final class ContextRecallTests: XCTestCase {
         XCTAssertTrue(result.contains("橙色"))
         XCTAssertThrowsError(try ContextRecall.execute(arguments: "{\"queries\":[\"a\",\"b\",\"c\",\"d\"]}", context: model, current: current))
         XCTAssertTrue(ToolManifest.coreToolIDs.contains("recall_history"))
+        XCTAssertTrue(try EffectiveToolPolicy.forExpert(ExpertCatalog.general).permits("recall_history"))
         XCTAssertEqual(ToolManifest.recallHistoryFunction["name"] as? String, "recall_history")
     }
     func testMemoryInjectionSearchesAllAndRejectsTombstones() throws {
@@ -84,4 +85,29 @@ final class ContextRecallTests: XCTestCase {
         let result = service.injectionFragment(context: model, query: "星河项目")
         XCTAssertTrue(result.contains("采用橙色")); XCTAssertFalse(result.contains("删除记忆"))
     }
+    func testImageMemoryFindsOldOriginalAndExcludesOtherAccounts() throws {
+        let model = try context(), owner = HostedAccount.scopeKey
+        let own = StoredFile(name: "平台首页.png", ext: "png", storedName: "fixture.png", kind: .uploaded, category: .image, byteCount: 12, textContent: "智慧消安一体化平台大屏，历史截图数据非实时")
+        own.createdAt = Date(timeIntervalSince1970: 1); model.insert(own)
+        for i in 0..<210 {
+            model.insert(StoredFile(name: "风景\(i).jpg", ext: "jpg", storedName: "x", kind: .uploaded, category: .image, byteCount: 1))
+        }
+        let other = StoredFile(name: "平台首页机密.png", ext: "png", storedName: "secret", kind: .uploaded, category: .image, byteCount: 1)
+        other.ownerKey = "other-account"; model.insert(other); try model.save()
+        let found = try ImageMemory.search(queries: ["平台首页"], context: model, owner: owner)
+        XCTAssertEqual(found.map(\.id), [own.id])
+        XCTAssertTrue(ImageMemory.description(found).contains("非实时"))
+        XCTAssertEqual(try ImageMemory.selected([own.id.uuidString], issued: [own.id], context: model, owner: owner).first?.id, own.id)
+        XCTAssertThrowsError(try ImageMemory.selected([other.id.uuidString], issued: [other.id], context: model, owner: owner))
+        XCTAssertThrowsError(try ImageMemory.selected([own.id.uuidString], issued: [], context: model, owner: owner))
+        model.delete(own); try model.save()
+        XCTAssertThrowsError(try ImageMemory.selected([own.id.uuidString], issued: [own.id], context: model, owner: owner))
+    }
+    func testImageMemoryArgumentValidation() throws {
+        let id = UUID().uuidString
+        let args = try ImageToolArguments.decode("{\"prompt\":\"重新设计平台海报\",\"source\":\"attached\",\"library_refs\":[\"\(id)\"]}", toolName: "image_generate", userText: "用以前的平台截图")
+        XCTAssertEqual(args["library_refs"] as? [String], [id])
+        XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"x\",\"library_refs\":[\"forged\"]}", toolName: "image_generate", userText: "x"))
+    }
+
 }

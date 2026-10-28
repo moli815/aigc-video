@@ -68,6 +68,8 @@ struct EffectiveToolPolicy: Equatable, Sendable {
             return availableToolIDs.contains("expert_skill")
         case "search_library":
             return availableToolIDs.contains("search_library")
+        case "recall_history":
+            return availableToolIDs.contains("recall_history")
         case "render_chart":
             return availableToolIDs.contains("render_chart")
         case "web_search", "$web_search":
