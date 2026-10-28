@@ -1111,6 +1111,31 @@ const EDIT_CONSTRAINTS =
   "若用户要求更换背景、色调或光线，则允许对应部分发生变化，不得同时要求该部分保持原样。\n" +
   "新增内容须与场景透视、光照和阴影自然融合；不要添加未提及元素、额外文字或水印。";
 /**
+ * 10-28 交付物边界兜底：图片里不放"核对说明"。
+ *
+ * 事故：用户要一张 AI 热讯周报海报，成品底部印着「数据来源：公开报道整理，截至…」
+ * 和「未核实项：Meta Muse 留存与付费转化未公开…」。
+ * 那是我们自己的数据真实性规则（META_RULE 第 1~5 条）被错误地执行到了**图片**上：
+ * 出处与未核实项本该写在聊天正文，结果印进了交付物。
+ *
+ * 规则层已经改了（bf-api META_RULE 新增【交付物边界】），这里是执行层兜底：
+ * 真到请求时还带着这些行，就按行剔掉——宁可少一行装饰，也不让成品印着"未核实"。
+ * 只按行首匹配，不做模糊替换，避免误删正文里正常出现的"来源"二字。
+ */
+const META_COPY_PATTERN = /^(数据来源|资料来源|信息来源|来源\s*[:：]|检索时间|截至[^，。]{0,12}[日号]|未核实|待确认|未公开|免责声明|仅供参考|整理自)/;
+
+function metaCopyLike(line) {
+  const text = String(line || "").trim().replace(/^[·•\-*\s]+/, "");
+  return !!text && META_COPY_PATTERN.test(text);
+}
+
+function stripMetaCopy(text) {
+  const lines = String(text || "").split("\n");
+  const kept = lines.filter((line) => !metaCopyLike(line));
+  return { text: kept.join("\n").trim(), removed: lines.length - kept.length };
+}
+
+/**
  * 10-28 多图输入契约。
  *
  * 事故：用户上传「人物照 + 底图」，要求把人物照里的人合成到底图上握手。
@@ -1271,7 +1296,12 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
 
   // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
   const overlayMode = String(textMode || "") === "overlay";
-  const rawPrompt = String(prompt || "").trim();
+  // 交付物边界兜底：把"数据来源/未核实/仅供参考"这类核对说明从画面文案里剔掉
+  const cleanedPrompt = stripMetaCopy(prompt);
+  if (cleanedPrompt.removed > 0) {
+    logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
+  }
+  const rawPrompt = String(cleanedPrompt.text || "").trim();
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
@@ -1283,6 +1313,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
   if (rawPrompt && !overlayMode) {
     const missingCopy = visibleCopyValues(structured && structured.text)
+      .filter((value) => !metaCopyLike(value))
       .filter((value) => !rawPrompt.includes(value));
     if (missingCopy.length) {
       basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
