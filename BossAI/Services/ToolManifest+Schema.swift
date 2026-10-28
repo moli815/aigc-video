@@ -208,7 +208,7 @@ extension ToolManifest {
                     "items": ["type": "string"],
                     "minItems": 1,
                     "maxItems": 6,
-                    "description": "与 source_indexes 一一对应的角色短语，例：["主参考","人物照片"]。",
+                    "description": "与 source_indexes 一一对应的角色短语，例：「主参考、人物照片」。",
                 ],
                 "quality_reason": ["type":"string", "enum":["draft","simple_visual","simple_edit","detailed_layout","identity_sensitive","brand_accuracy","complex_edit","final_delivery"], "description":"内部路由理由：草稿/简单视觉/简单改色可配fast；复杂版式、身份保持、品牌精确、复杂编辑或终稿配high。不得只按海报/名片类别选档。"],
                 "quality_tier": [
@@ -269,7 +269,7 @@ extension ToolManifest {
                     "items": ["type": "string"],
                     "minItems": 1,
                     "maxItems": 6,
-                    "description": "与 source_indexes 一一对应的角色短语，用于服务端标注「图1=底图、图2=人物照片」。例：["底图","人物照片"]。省略时服务端按「第一张底图、其余素材」标注。",
+                    "description": "与 source_indexes 一一对应的角色短语，用于服务端标注「图1=底图、图2=人物照片」。例：「底图、人物照片」。省略时服务端按「第一张底图、其余素材」标注。",
                 ],
                 "structured": imageStructuredSchema,
             ],
