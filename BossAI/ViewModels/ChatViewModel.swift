@@ -351,6 +351,10 @@ final class ChatViewModel: ObservableObject {
     func buildAPIMessages(conv: Conversation) async -> [[String: Any]] {
         let span = PerformanceTrace.begin("ContextBuild")
         defer { PerformanceTrace.end("ContextBuild", span) }
+        let contextOwner = HostedAccount.scopeKey
+        let contextSession = CloudSession.capture()
+        guard !Task.isCancelled, conv.modelContext != nil, conv.ownerKey == contextOwner, !conv.isDeleted else { return [] }
+        let sortedMessages = conv.messages.sorted { $0.createdAt < $1.createdAt }
         let identity = UserIdentity.load()
         let memories = memoryService.injectionFragment(context: modelContext)
 
@@ -363,7 +367,7 @@ final class ChatViewModel: ObservableObject {
             + ResponsePolicy.prompt(reply: identity.replyStyle, answer: answerStyle)
             + Self.capabilityPrompt()
         var volatileSystem = ""
-        let latestRequest = conv.messages.filter { $0.role == "user" }.max { $0.createdAt < $1.createdAt }?.text ?? ""
+        let latestRequest = sortedMessages.last(where: { $0.role == "user" })?.text ?? ""
         if Self.mentionsImageGenerationOrEdit(latestRequest) {
             volatileSystem += ImageDesignGuidance.instructions(for: latestRequest) + "\n"
         }
@@ -386,8 +390,14 @@ final class ChatViewModel: ObservableObject {
         // 在循环处理最新消息时一并塞进 content。这样"先传图识别、再发文字做新海报"
         // 时模型仍能看到原图，避免误判为只改文字或选错工具。
         let latestUserMessage = sortedMessages.last(where: { $0.role == "user" })
+        let generatedPreview: Message?
+        if let user = latestUserMessage,
+           GeneratedImagePlanningContext.shouldInclude(userText: user.text, hasAttachedImages: files(for: user).contains(where: \.isImage)) {
+            generatedPreview = GeneratedImagePlanningContext.latestGenerated(in: sortedMessages, before: user)
+        } else { generatedPreview = nil }
         var carriedImageURL: String?
         if let latestUser = latestUserMessage,
+           generatedPreview == nil,
            latestUser.attachmentIdList.isEmpty,
            Self.mentionsImageGenerationOrEdit(latestUser.text) {
             let recentImageFile = sortedMessages
@@ -467,6 +477,17 @@ final class ChatViewModel: ObservableObject {
                 messages.append(["role": m.role, "content": content])
             }
         }
+        if let generatedPreview {
+            if GeneratedImagePlanningContext.canAppend(to: messages),
+               let preview = await GeneratedImagePlanningContext.dataURL(for: generatedPreview, in: conv, owner: contextOwner, session: contextSession) {
+                messages = GeneratedImagePlanningContext.appending(preview, to: messages)
+            } else {
+                messages = GeneratedImagePlanningContext.notingUnavailable(in: messages)
+            }
+        }
+        guard !Task.isCancelled, conv.modelContext != nil, HostedAccount.scopeKey == contextOwner, conv.ownerKey == contextOwner,
+              !conv.isDeleted, conv.messages.filter({ $0.role == "user" }).max(by: { $0.createdAt < $1.createdAt })?.id == latestUserMessage?.id else { return [] }
+        if let contextSession { do { try contextSession.validate() } catch { return [] } }
         var remaining = 48000
         var selected: [[String: Any]] = []
         for message in messages.dropFirst(2).reversed() {
