@@ -85,9 +85,30 @@ enum ContextRecall {
                 }
             }
             candidates = select(candidates, query: query, limit: 12)
-            descriptor.fetchOffset += page.count
+            descriptor.fetchOffset = (descriptor.fetchOffset ?? 0) + page.count
             if page.count < 64 { break }
         }
         return fragment(select(candidates, query: query, limit: 6), budget: 4500)
+    }
+
+    @MainActor static func execute(arguments: String, context: ModelContext, current: Conversation) throws -> String {
+        guard let data = arguments.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let queries = object["queries"] as? [String], (1...3).contains(queries.count),
+              queries.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.count <= 200 }) else {
+            throw ExpertSkillError.invalidInput("历史检索需要1至3组简短关键词")
+        }
+        let owner = HostedAccount.scopeKey
+        guard current.modelContext != nil, current.ownerKey == owner, !current.isDeleted else { throw CancellationError() }
+        let memories = try context.fetch(FetchDescriptor<MemoryItem>(predicate: #Predicate { $0.ownerKey == owner && !$0.isDeleted }))
+        let records = memories.map { Record(id: $0.id.uuidString, text: $0.content, source: $0.source, date: max($0.createdAt, $0.updatedAt)) }
+        var pieces: [String] = []
+        for query in queries {
+            let facts = fragment(select(records, query: query, limit: 6), budget: 2400)
+            let history = history(context: context, owner: owner, current: current, query: query,
+                                  recentIDs: Set(current.messages.filter { $0.role == "user" }.sorted { $0.createdAt < $1.createdAt }.suffix(1).map(\.id)))
+            if !facts.isEmpty || !history.isEmpty { pieces.append("查询：\(query)\n" + facts + history) }
+        }
+        return pieces.isEmpty ? "未在当前账号已同步的历史中找到匹配记录。不要猜测或声称用户曾经说过；可换关键词或询问具体项目。" : String(pieces.joined(separator: "\n").prefix(10000))
     }
 }

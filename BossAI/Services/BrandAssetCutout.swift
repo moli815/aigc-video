@@ -50,8 +50,14 @@ enum BrandAssetCutout {
         }
         var border: [Int] {
             let step = max(1, max(width, height) / 128)
-            return stride(from: 0, to: width, by: step).flatMap { [$0, (height - 1) * width + $0] }
-                + stride(from: 0, to: height, by: step).flatMap { [$0 * width, $0 * width + width - 1] }
+            var indices: [Int] = []
+            for x in stride(from: 0, to: width, by: step) {
+                indices.append(x); indices.append((height - 1) * width + x)
+            }
+            for y in stride(from: 0, to: height, by: step) {
+                indices.append(y * width); indices.append(y * width + width - 1)
+            }
+            return indices
         }
         func png() throws -> Data {
             var left = width, top = height, right = -1, bottom = -1, visible = 0

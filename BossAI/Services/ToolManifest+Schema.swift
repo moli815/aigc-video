@@ -2,6 +2,14 @@ import Foundation
 
 /// Model-visible contracts and execution metadata belong to the same manifest.
 extension ToolManifest {
+    static let recallHistoryFunction: [String: Any] = [
+        "name": "recall_history",
+        "description": "用户提及以前的项目、人员、决定、联系方式、偏好，或需要跨会话关联时，先查历史再回答。将用户的隐含描述改写为最多3组可匹配的实体/同义关键词（例如品牌主色→Logo颜色/配色）；不确定时可分步缩小检索。只查当前账号，不联网。不宣称找到工具未返回的信息。",
+        "parameters": ["type": "object", "properties": [
+            "queries": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 3,
+                        "description": "人物/项目名+待查字段，可用不同同义说法；不要复制整段用户指令"]
+        ], "required": ["queries"]]
+    ]
     /// 构造 expert_skill 工具定义：operation 枚举按专家是否带计算器动态收窄，
     /// calculator 参数仅在有可用计算器时暴露，防模型调用不存在的计算器
     static func expertSkillFunction(_ capability: ExpertCapability) -> [String: Any] {
@@ -329,6 +337,7 @@ extension ToolManifest {
         for plugin in plugins where plugin.id != "generate_image" && policy.permits(plugin.id) {
             var schema: [String: Any]
             switch plugin.id {
+            case "recall_history": schema = recallHistoryFunction
             case "web_search": guard includeSearch else { continue }; schema = webSearchFunction
             case "render_chart": schema = renderChartFunction
             case "image_generate": schema = imageGenerateFunction

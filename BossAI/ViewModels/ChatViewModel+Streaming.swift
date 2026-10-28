@@ -852,6 +852,17 @@ extension ChatViewModel {
                                 "content": ToolPipeline.failureNote(pluginID: "create_document", reason: error.localizedDescription)])
                         }
 
+                    case "recall_history":
+                        statusText = "正在查找相关历史…"
+                        do {
+                            let result = try ContextRecall.execute(arguments: call.arguments, context: modelContext, current: conv)
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.boundResult(result, pluginID: "recall_history")])
+                        } catch {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                "content": ToolPipeline.failureNote(pluginID: "recall_history", reason: error.localizedDescription)])
+                        }
+
                     case "web_search":
                         let info = Self.searchQuery(call, fallback: userText)
                         let key = ResearchIntent.fingerprint(info.0, recency: info.1.rawValue)

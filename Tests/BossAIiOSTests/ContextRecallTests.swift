@@ -63,6 +63,17 @@ final class ContextRecallTests: XCTestCase {
         XCTAssertTrue(ContextRecall.history(context: model, owner: HostedAccount.scopeKey, current: conversation,
             query: "星河项目预算", recentIDs: [message.id]).isEmpty)
     }
+    func testAgentCanSearchAlternateTermsThroughBoundedTool() throws {
+        let model = try context()
+        let old = Conversation(expertId: "general", title: "品牌约定"); model.insert(old)
+        let message = Message(role: "user", text: "星河Logo采用橙色"); message.conversation = old; model.insert(message)
+        let current = Conversation(expertId: "general", title: "new"); model.insert(current); try model.save()
+        let result = try ContextRecall.execute(arguments: "{\"queries\":[\"品牌配色\",\"星河Logo\"]}", context: model, current: current)
+        XCTAssertTrue(result.contains("橙色"))
+        XCTAssertThrowsError(try ContextRecall.execute(arguments: "{\"queries\":[\"a\",\"b\",\"c\",\"d\"]}", context: model, current: current))
+        XCTAssertTrue(ToolManifest.coreToolIDs.contains("recall_history"))
+        XCTAssertEqual(ToolManifest.recallHistoryFunction["name"] as? String, "recall_history")
+    }
     func testMemoryInjectionSearchesAllAndRejectsTombstones() throws {
         let model = try context()
         for i in 1...65 { model.insert(MemoryItem(content: "其他偏好第\(i)条")) }
