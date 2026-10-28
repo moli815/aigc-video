@@ -6,7 +6,11 @@ import UIKit
 enum PreservedAssetWorkflow {
     struct Placement {
         let referenceIndex: Int
+        /// 品牌素材最终落位（已按品牌栅格/比例调整）
         let box: CGRect
+        /// 需要模型清理的原始区域。与 box 分开是因为：替换旧标识时要清掉**旧**的那块，
+        /// 而新素材按品牌规范可能比旧标识小——两个框混用会留下旧标识的残影。
+        let cleanBox: CGRect
         let image: UIImage
         let sourceData: Data
         let cutoutMode: BrandAssetCutout.Mode
@@ -66,7 +70,27 @@ enum PreservedAssetWorkflow {
             guard let kind = BrandAssetCutout.Kind(rawValue: entry["kind"] as? String ?? inferredKind.rawValue),
                   let requestedMode = BrandAssetCutout.Mode(rawValue: entry["background"] as? String ?? "auto") else { throw Failure.invalidPlacement }
             let keepBackground = ["保留底色", "不要抠图", "不要去底", "不去底"].contains { description.contains($0) }
-            placements.append(Placement(referenceIndex:Int(indexValue),box:box,image:image,
+            // ── 2026-10-28 品牌落位 ──────────────────────────────────────────────
+            // 旧实现把模型估的框当成"最终位置+尺寸"，合成时把 logo 撑满整个框：
+            // 框贴边就贴边、框大就巨大，所以用户看到的是"生硬覆盖"。
+            // 现在模型只负责给方位，尺寸/边距/比例由 BrandPlacementPlanner 按品牌规范算。
+            // 例外：明确"替换旧标识"时保留原框——那是要覆盖掉旧 Logo，缩小会留残影。
+            let promptText = context.prompt.lowercased()
+            let replacingExisting = ["替换", "换掉", "更换", "换成", "换为", "改成"].contains { promptText.contains($0) }
+            let aspect = max(0.05, image.size.width / max(1, image.size.height))
+            let placementBox: CGRect
+            if replacingExisting {
+                placementBox = box
+            } else {
+                let canvas = original.size
+                let pixels = BrandPlacementPlanner.adjust(box: box, logoAspect: aspect,
+                                                          canvas: canvas, hint: context.prompt)
+                placementBox = CGRect(x: pixels.minX / max(1, canvas.width),
+                                      y: pixels.minY / max(1, canvas.height),
+                                      width: pixels.width / max(1, canvas.width),
+                                      height: pixels.height / max(1, canvas.height))
+            }
+            placements.append(Placement(referenceIndex:Int(indexValue),box:placementBox,cleanBox:box,image:image,
                 sourceData:context.references[Int(indexValue)-1],cutoutMode:keepBackground ? .keep : requestedMode,kind:kind))
         }
         var fields = context.structured ?? [:]
@@ -74,7 +98,7 @@ enum PreservedAssetWorkflow {
         let materialIndices = Set(placements.map { $0.referenceIndex-1 })
         let references = context.references.enumerated().filter { !materialIndices.contains($0.offset) }.map(\.element)
         let regions = placements.map { p in
-            "<bbox>\(Int(p.box.minX*999)),\(Int(p.box.minY*999)),\(Int(p.box.maxX*999)),\(Int(p.box.maxY*999))</bbox>"
+            "<bbox>\(Int(p.cleanBox.minX*999)),\(Int(p.cleanBox.minY*999)),\(Int(p.cleanBox.maxX*999)),\(Int(p.cleanBox.maxY*999))</bbox>"
         }.joined(separator:"；")
         let background = ImageRequestContext(prompt:context.prompt + "\n本次仅处理底图：清除区域\(regions)中的旧标识并自然补齐背景，不绘制替换Logo/商标/二维码。原始素材将于后续直接合成，其形状与文字不得由模型重新设计。",
             references:references,taskKind:context.taskKind,qualityTier:context.qualityTier,
@@ -115,8 +139,15 @@ enum PreservedAssetWorkflow {
                 let area = box.insetBy(dx:padding,dy:padding)
                 let scale = min(area.width/placement.image.size.width,area.height/placement.image.size.height)
                 let target = CGSize(width:placement.image.size.width*scale,height:placement.image.size.height*scale)
+                // 贴纸感的另一半来自"平贴"：素材和底图之间没有任何光学关系。
+                // 加一层极轻的接触阴影（短边 0.8% 模糊、16% 黑），让它落在画面上而不是浮着。
+                let shortEdge = min(size.width,size.height)
+                renderer.cgContext.setShadow(offset:CGSize(width:0,height:max(1,shortEdge*0.0025)),
+                                             blur:max(2,shortEdge*0.008),
+                                             color:UIColor.black.withAlphaComponent(0.16).cgColor)
                 placement.image.draw(in:CGRect(x:area.midX-target.width/2,y:area.midY-target.height/2,
                                                width:target.width,height:target.height))
+                renderer.cgContext.setShadow(offset:.zero,blur:0,color:nil)
                 renderer.cgContext.restoreGState()
             }
         }
@@ -130,7 +161,8 @@ enum PreservedAssetWorkflow {
             let material = try await BrandAssetCutout.prepare(placement.sourceData, mode: placement.cutoutMode, kind: placement.kind)
             try Task.checkCancellation()
             guard await MainActor.run(body:{HostedAccount.scopeKey==owner}), let image = orientedImage(material) else { throw CancellationError() }
-            placements.append(Placement(referenceIndex:placement.referenceIndex,box:placement.box,image:image,
+            placements.append(Placement(referenceIndex:placement.referenceIndex,box:placement.box,
+                cleanBox:placement.cleanBox,image:image,
                 sourceData:material,cutoutMode:placement.cutoutMode,kind:placement.kind))
         }
         let prepared = Plan(original:plan.original,placements:placements,preserveOutside:plan.preserveOutside,background:plan.background)
