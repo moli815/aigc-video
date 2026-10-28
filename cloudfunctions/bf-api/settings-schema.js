@@ -33,6 +33,8 @@ const SECTION_OF = {
   generation: [
     "APP_CHAT_TIMEOUT", "APP_CHAT_FIRST_TOKEN_TIMEOUT", "APP_IMAGE_TIMEOUT",
     "APP_STREAM_RETRY", "APP_IMAGE_RETRY", "APP_IMAGE_VERIFY",
+    "APP_LOGO_CUTOUT", "APP_LOGO_CUTOUT_BEST_EFFORT", "APP_LOGO_CUTOUT_TOLERANCE", "APP_LOGO_CUTOUT_MAX_EDGE",
+    "APP_GENERATED_PREVIEW_ENABLED", "APP_GENERATED_PREVIEW_EDGE",
     "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_PRICE_FAST",
     "IMAGE_MAX_EDGE", "IMAGE_QUALITY", "IMAGE_MAX_PIXELS", "IMAGE_2K_PIXELS",
     "IMGPROG_STAGE1", "IMGPROG_STAGE2", "IMGPROG_STAGE3", "IMGPROG_ETA",
@@ -81,6 +83,12 @@ const META = {
     description: "逗号分隔的尺寸白名单，供模型选择；留空使用服务端默认。" },
 
   // 生成与性能
+  APP_LOGO_CUTOUT: { title: "Logo 自动去底", widget: "toggle", risk: "medium" },
+  APP_LOGO_CUTOUT_BEST_EFFORT: { title: "复杂背景尽力处理", widget: "toggle", risk: "medium" },
+  APP_LOGO_CUTOUT_TOLERANCE: { title: "纯色背景容差", widget: "number", min: 8, max: 80, step: 1, risk: "medium" },
+  APP_LOGO_CUTOUT_MAX_EDGE: { title: "抠图最大长边", widget: "number", min: 256, max: 2048, step: 1, risk: "low" },
+  APP_GENERATED_PREVIEW_ENABLED: { title: "编辑时提供一张生成图预览", widget: "toggle", risk: "medium" },
+  APP_GENERATED_PREVIEW_EDGE: { title: "生成图预览长边", widget: "number", min: 256, max: 1024, step: 1, risk: "low" },
   APP_CHAT_TIMEOUT: { title: "对话请求超时", widget: "number", min: 10, max: 600, step: 1, unit: "秒", risk: "high",
     description: "单次对话请求的整体超时。过小会频繁中断，过大会让用户长时间等待。" },
   APP_CHAT_FIRST_TOKEN_TIMEOUT: { title: "首包超时", widget: "number", min: 0, max: 600, step: 1, unit: "秒", risk: "high",

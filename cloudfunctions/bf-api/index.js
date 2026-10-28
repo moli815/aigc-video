@@ -156,6 +156,12 @@ const RUNTIME_SPECS = {
   APP_IMAGE_TIMEOUT:  { type: "num", label: "App·生图请求超时（秒）", def: () => Number(process.env.APP_IMAGE_TIMEOUT || 315) },
   APP_STREAM_RETRY:   { type: "num", label: "App·流式中断自动重试次数（0=关闭）", def: () => Number(process.env.APP_STREAM_RETRY || 1) },
   APP_IMAGE_RETRY:    { type: "num", label: "App·生图失败重试次数（0=关闭）", def: () => Number(process.env.APP_IMAGE_RETRY || 1) },
+  APP_LOGO_CUTOUT: { type: "str", label: "Logo本机自动去底（1=开/0=关闭）", def: () => "1" },
+  APP_LOGO_CUTOUT_BEST_EFFORT: { type: "str", label: "复杂Logo自动尽力抠图（1=不因低置信度询问/0=严格校验）", def: () => "1" },
+  APP_LOGO_CUTOUT_TOLERANCE: { type: "num", label: "Logo纯色背景容差（App安全范围8–80）", def: () => 32 },
+  APP_LOGO_CUTOUT_MAX_EDGE: { type: "num", label: "Logo本机处理长边（App安全范围256–2048）", def: () => 2048 },
+  APP_GENERATED_PREVIEW_ENABLED: { type: "str", label: "生成图编辑单张预览开关（1=开/0=关）", def: () => "1" },
+  APP_GENERATED_PREVIEW_EDGE: { type: "num", label: "编辑预览长边（App安全范围256–1024）", def: () => 1024 },
   // P0-70 生图动效文案（云端可配）：App 端"正在绘制/精修中"等提示语，改文案不出包
   IMGPROG_STAGE1:     { type: "str", label: "生图动效·阶段1文案（0~15秒）", def: () => process.env.IMGPROG_STAGE1 || "正在绘制中..." },
   IMGPROG_STAGE2:     { type: "str", label: "生图动效·阶段2文案（15~45秒）", def: () => process.env.IMGPROG_STAGE2 || "正在绘制中..." },

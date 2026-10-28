@@ -185,7 +185,7 @@ final class GeneratedImagePlanningContextTests: XCTestCase {
         let (vm, conv) = try model()
         _ = add("assistant", "", at: 0, data: image(.blue), to: conv, vm: vm)
         _ = add("user", "修改你生成的海报", at: 1, to: conv, vm: vm)
-        conv.isDeleted = true; try vm.modelContext.save()
+        vm.modelContext.delete(conv); try vm.modelContext.save()
         let messages = await vm.buildAPIMessages(conv: conv)
         XCTAssertTrue(messages.isEmpty)
     }

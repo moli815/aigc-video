@@ -8,6 +8,9 @@ enum PreservedAssetWorkflow {
         let referenceIndex: Int
         let box: CGRect
         let image: UIImage
+        let sourceData: Data
+        let cutoutMode: BrandAssetCutout.Mode
+        let kind: BrandAssetCutout.Kind
     }
     struct Plan {
         let original: UIImage
@@ -55,7 +58,16 @@ enum PreservedAssetWorkflow {
             guard x >= 0, y >= 0, w > 0, h > 0, x+w <= 1, y+h <= 1, w*h <= 0.35 else { throw Failure.invalidPlacement }
             let box = CGRect(x:x,y:y,width:w,height:h)
             guard !placements.contains(where: { $0.box.intersects(box) }) else { throw Failure.invalidPlacement }
-            placements.append(Placement(referenceIndex:Int(indexValue),box:box,image:image))
+            let description = context.prompt.lowercased()
+            let inferredKind: BrandAssetCutout.Kind = description.contains("二维码") || description.contains("qr") ? .qr
+                : (["logo", "标识", "标志", "商标", "徽标"].contains(where: { description.contains($0) }) ? .logo : .image)
+            if let raw = entry["kind"], !(raw is String) { throw Failure.invalidPlacement }
+            if let raw = entry["background"], !(raw is String) { throw Failure.invalidPlacement }
+            guard let kind = BrandAssetCutout.Kind(rawValue: entry["kind"] as? String ?? inferredKind.rawValue),
+                  let requestedMode = BrandAssetCutout.Mode(rawValue: entry["background"] as? String ?? "auto") else { throw Failure.invalidPlacement }
+            let keepBackground = ["保留底色", "不要抠图", "不要去底", "不去底"].contains { description.contains($0) }
+            placements.append(Placement(referenceIndex:Int(indexValue),box:box,image:image,
+                sourceData:context.references[Int(indexValue)-1],cutoutMode:keepBackground ? .keep : requestedMode,kind:kind))
         }
         var fields = context.structured ?? [:]
         fields.removeValue(forKey:"preserve_assets"); fields.removeValue(forKey:"preserve_outside")
@@ -113,6 +125,15 @@ enum PreservedAssetWorkflow {
     }
     static func generate(plan: Plan, generateBackground: (ImageRequestContext) async throws -> Data) async throws -> Data {
         let owner = await MainActor.run { HostedAccount.scopeKey }
+        var placements: [Placement] = []
+        for placement in plan.placements {
+            let material = try await BrandAssetCutout.prepare(placement.sourceData, mode: placement.cutoutMode, kind: placement.kind)
+            try Task.checkCancellation()
+            guard await MainActor.run(body:{HostedAccount.scopeKey==owner}), let image = orientedImage(material) else { throw CancellationError() }
+            placements.append(Placement(referenceIndex:placement.referenceIndex,box:placement.box,image:image,
+                sourceData:material,cutoutMode:placement.cutoutMode,kind:placement.kind))
+        }
+        let prepared = Plan(original:plan.original,placements:placements,preserveOutside:plan.preserveOutside,background:plan.background)
         let signature = try JSONSerialization.data(withJSONObject:["owner":owner,"prompt":plan.background.prompt,
             "aspect":plan.background.aspectRatio,"size":plan.background.targetSize ?? "","tier":plan.background.qualityTier,
             "kind":plan.background.taskKind,"intent":plan.background.renderIntent,"textMode":plan.background.textMode.rawValue,
@@ -140,6 +161,6 @@ enum PreservedAssetWorkflow {
         }
         try Task.checkCancellation()
         guard await MainActor.run(body:{HostedAccount.scopeKey==owner}), let cleaned = UIImage(data:bytes) else { throw Failure.compositionFailed }
-        return try compose(plan:plan,cleaned:cleaned)
+        return try compose(plan:prepared,cleaned:cleaned)
     }
 }

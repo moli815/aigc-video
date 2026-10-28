@@ -356,7 +356,10 @@ final class ChatViewModel: ObservableObject {
         guard !Task.isCancelled, conv.modelContext != nil, conv.ownerKey == contextOwner, !conv.isDeleted else { return [] }
         let sortedMessages = conv.messages.sorted { $0.createdAt < $1.createdAt }
         let identity = UserIdentity.load()
-        let memories = memoryService.injectionFragment(context: modelContext)
+        let latestRequest = sortedMessages.last(where: { $0.role == "user" })?.text ?? ""
+        let memories = memoryService.injectionFragment(context: modelContext, query: latestRequest)
+        let historyRecall = ContextRecall.history(context: modelContext, owner: contextOwner, current: conv,
+            query: latestRequest, recentIDs: Set(sortedMessages.suffix(40).map(\.id)))
 
         // P0-2 缓存稳定化：拆成两条 system 消息——
         // ① 稳定块（专家提示词+身份+回复风格）永不变化，保证方舟前缀缓存始终命中；
@@ -367,14 +370,13 @@ final class ChatViewModel: ObservableObject {
             + ResponsePolicy.prompt(reply: identity.replyStyle, answer: answerStyle)
             + Self.capabilityPrompt()
         var volatileSystem = ""
-        let latestRequest = sortedMessages.last(where: { $0.role == "user" })?.text ?? ""
         if Self.mentionsImageGenerationOrEdit(latestRequest) {
             volatileSystem += ImageDesignGuidance.instructions(for: latestRequest) + "\n"
         }
         if !conv.rollingSummary.isEmpty {
             volatileSystem += "【前情摘要】本会话较早部分的要点：\n" + conv.rollingSummary + "\n\n"
         }
-        volatileSystem += memories
+        volatileSystem += memories + historyRecall
             + "\n【时效铁律】凡涉及价格、新品、型号、配置、汇率、政策法规、版本号、榜单等易变事实：必须先调用 web_search 获取最新信息并在回答中标注信息日期，禁止仅凭训练记忆作答；检索不可用时明确声明信息可能过时。"
             + "\n【本任务模式】" + researchMode.prompt
             + "\n【当前实际模型配置】" + chatService.configurationLabel

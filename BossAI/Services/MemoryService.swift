@@ -25,7 +25,7 @@ final class MemoryService {
     }
 
     /// 注入用：返回「【关于用户的已知信息】」片段
-    func injectionFragment(context: ModelContext) -> String {
+    func injectionFragment(context: ModelContext, query: String = "") -> String {
         // 只取最近 100 条做对照 + 注入上限裁剪：控制 token 成本与提示词长度
         // 10-22 P1 隔离修复：记忆注入必须只取当前账号，否则 A 的偏好会被注入 B 的提示词
         let injectKey = HostedAccount.scopeKey
@@ -33,12 +33,14 @@ final class MemoryService {
             predicate: #Predicate { $0.ownerKey == injectKey && !$0.isDeleted },
             sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
         )
-        descriptor.fetchLimit = AppConfig.memoryInjectLimit
         let items = (try? context.fetch(descriptor)) ?? []
         guard !items.isEmpty else { return "" }
-        let limited = Array(items.prefix(AppConfig.memoryInjectLimit))
-        let lines = limited.enumerated().map { "\($0.offset + 1). \($0.element.content)" }
-        return "\n\n【关于用户的已知信息】\n" + lines.joined(separator: "\n")
+        let records = items.map { ContextRecall.Record(id: $0.id.uuidString, text: $0.content,
+            source: $0.source, date: max($0.createdAt, $0.updatedAt)) }
+        let relevant = ContextRecall.select(records, query: query, limit: 12)
+        let ids = Set(relevant.map(\.id))
+        let fallback = records.filter { !ids.contains($0.id) }.prefix(4)
+        return ContextRecall.fragment(relevant + fallback, budget: 5500)
     }
 
     /// 后台抽取：对照现有记忆返回 add/update/skip 操作并落库。
@@ -46,6 +48,7 @@ final class MemoryService {
     func extract(from recentDialogue: String, source: String = "", context: ModelContext) async {
         // 10-22：记录发起任务时的账号归属，写库前校验
         let ownerAtStart = HostedAccount.scopeKey
+        let sessionAtStart = CloudSession.capture()
         // P0-46 修复：会员模式（hosted）走服务端抽取——此前本地抽取依赖 apiKey，
         // 而会员模式的 apiKey 为空 → 记忆抽取从未生效（记忆功能在会员模式失效）。
         // 服务端抽取算法可热更（改策略不出包），且各端行为一致。
@@ -106,6 +109,8 @@ final class MemoryService {
               let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
               let content = message["content"] as? String else { return }
+        guard HostedAccount.scopeKey == ownerAtStart else { return }
+        if let sessionAtStart { do { try sessionAtStart.validate() } catch { return } }
 
         // 容错提取 JSON 数组：模型可能在 JSON 前后附说明文字，取首 "[" 到末 "]" 之间的内容再解析
         guard let start = content.firstIndex(of: "["),
@@ -134,7 +139,9 @@ final class MemoryService {
                 // 10-23 P1 修复：update 既有记录前也必须校验账号归属，防止切账号后修改旧账号记忆。
                 guard HostedAccount.scopeKey == ownerAtStart else { return }
                 if let index = op["index"] as? Int, existing.indices.contains(index) {
+                    guard existing[index].modelContext != nil, !existing[index].isDeleted else { continue }
                     existing[index].content = text
+                    existing[index].updatedAt = Date()
                     if !source.isEmpty { existing[index].source = source }
                 } else {
                     // 模型给出的 index 越界（幻觉）：退化为新增，不丢内容
@@ -157,6 +164,7 @@ final class MemoryService {
     private func extractViaHosted(from recentDialogue: String, source: String, context: ModelContext) async {
         // 10-22：记录发起任务时的账号归属，写库前校验
         let ownerAtStart = HostedAccount.scopeKey
+        let sessionAtStart = CloudSession.capture()
         guard !BudgetTracker.isExceeded(), !Task.isCancelled else { return }
         // 10-22 P1 隔离修复：抽取/更新只针对当前账号的记忆，避免把别人的记忆当成"已有"去更新
         let memKey = HostedAccount.scopeKey
@@ -169,7 +177,8 @@ final class MemoryService {
         let existingContents = existing.map(\.content)
 
         let ops = await HostedAccount.shared.extractMemories(dialogue: recentDialogue, existing: existingContents)
-        guard !ops.isEmpty, !Task.isCancelled else { return }
+        guard !ops.isEmpty, !Task.isCancelled, HostedAccount.scopeKey == ownerAtStart else { return }
+        if let sessionAtStart { do { try sessionAtStart.validate() } catch { return } }
 
         var known = Set(existingContents)
         for op in ops {
@@ -187,7 +196,9 @@ final class MemoryService {
                 // 10-23 P1 修复：update 既有记录前也必须校验账号归属。
                 guard HostedAccount.scopeKey == ownerAtStart else { return }
                 if let index, existing.indices.contains(index), !content.isEmpty {
+                    guard existing[index].modelContext != nil, !existing[index].isDeleted else { continue }
                     existing[index].content = content
+                    existing[index].updatedAt = Date()
                     if !source.isEmpty { existing[index].source = source }
                 } else if !content.isEmpty, !known.contains(content) {
                     // index 越界（幻觉）：退化为新增，不丢内容

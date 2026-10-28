@@ -103,6 +103,8 @@ extension ToolManifest {
                 "description":"仅image_edit：用户要求原样替换Logo/二维码等素材时使用，禁止让模型重画相似标识。必须source=both；reference_index=2对应上传原素材，1为海报底图。box是需要清理旧标识并放置原素材的区域，按画布0..1归一化；不明确时先确认位置，不能虚构覆盖大范围。",
                 "items":["type":"object", "properties":[
                     "reference_index":["type":"integer","minimum":2,"maximum":6],
+                    "kind":["type":"string","enum":["logo","qr","image"],"description":"原素材类型；二维码必须qr以保护扫码留白。"],
+                    "background":["type":"string","enum":["auto","keep","remove"],"description":"logo默认auto：先本机去除纯色背景，复杂底色用系统抠图并自动采用可用的最佳结果，不因背景复杂反复确认。保留底色用keep，明确抠透明用remove。二维码保留留白，不去底。只有技术失败才报处理未完成。"],
                     "box":["type":"object","properties":[
                         "x":["type":"number","minimum":0,"maximum":1],
                         "y":["type":"number","minimum":0,"maximum":1],

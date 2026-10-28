@@ -38,6 +38,7 @@ enum GeneratedImagePlanningContext {
     }
 
     static func canAppend(to messages: [[String: Any]]) -> Bool {
+        guard HostedAccount.behaviorBool("generatedPreviewEnabled", default: true) else { return false }
         guard let user = messages.last(where: { $0["role"] as? String == "user" }) else { return false }
         let parts = contentParts(user)
         return parts.filter { $0["type"] as? String == "image_url" }.count < 6
@@ -69,6 +70,7 @@ enum GeneratedImagePlanningContext {
     /// Native ImageIO downsamples before decoding; no crop, retained EXIF orientation.
     static func dataURL(from raw: Data) async -> String? {
         guard !Task.isCancelled else { return nil }
+        let edge = min(maxPreviewEdge, max(256, HostedAccount.behaviorInt("generatedPreviewEdge", default: maxPreviewEdge)))
         let result = await Task.detached(priority: .userInitiated) { () -> String? in
             guard raw.count <= 32 * 1024 * 1024, let pixels = ImageGeometry.pixelSize(of: raw),
                   Double(pixels.width) * Double(pixels.height) <= 40_000_000,
@@ -76,7 +78,7 @@ enum GeneratedImagePlanningContext {
                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: maxPreviewEdge
+                    kCGImageSourceThumbnailMaxPixelSize: edge
                   ] as CFDictionary) else { return nil }
             // JPEG has no alpha. A neutral white backing keeps dark transparent
             // artwork visible without modifying the original image or its geometry.
