@@ -1110,6 +1110,35 @@ const EDIT_CONSTRAINTS =
   "\n\n【局部编辑】只执行用户明确要求的修改；尽量保持未指定区域、人物身份、物体位置与原图画布不变。\n" +
   "若用户要求更换背景、色调或光线，则允许对应部分发生变化，不得同时要求该部分保持原样。\n" +
   "新增内容须与场景透视、光照和阴影自然融合；不要添加未提及元素、额外文字或水印。";
+/**
+ * 10-28 多图输入契约。
+ *
+ * 事故：用户上传「人物照 + 底图」，要求把人物照里的人合成到底图上握手。
+ * 请求里确实到了两张图，但没有任何角色说明，模型只能猜哪张是底图、哪张是素材，
+ * 于是它照 prompt 里的文字重新画了一个"有点像"的人——看起来像合成，其实人换了。
+ *
+ * 规则：输入图 >= 2 时，在 prompt 最前面显式编号并声明合成义务。
+ * 角色由客户端 reference_roles 提供（与图序一一对应）；缺省按「第一张底图、其余素材」，
+ * 这与客户端 ImageReferenceResolver 的顺序契约严格一致，两边不能各说各话。
+ */
+function multiImageContract(image, referenceRoles) {
+  const list = Array.isArray(image) ? image : (image ? [image] : []);
+  if (list.length < 2) return "";
+  const roles = Array.isArray(referenceRoles) ? referenceRoles : [];
+  const labels = list.map((_, i) => {
+    const role = String(roles[i] || "").trim().slice(0, 24);
+    if (role) return `图${i + 1}=${role}`;
+    return i === 0 ? `图${i + 1}=底图` : `图${i + 1}=素材${i}`;
+  });
+  return "\n\n【多图输入·必须按编号理解】本次共 " + list.length + " 张输入图（按发送顺序）：" +
+    labels.join("；") + "。\n" +
+    "① 用户说“第一张/第二张/图几/这张图里的人”时，一律按上面的编号理解；\n" +
+    "② 输出画布以底图为准，不裁切、不改变底图既有构图与用户未指定的区域；\n" +
+    "③ 素材图中的人物/产品必须**原样使用其面部、发型、体型、服装与外观**，禁止用相似但不同的人或物替代；\n" +
+    "④ 只执行用户明确要求的合成/替换/消除，不重绘整张画面；\n" +
+    "⑤ 合成位置、尺度、透视与光影要自然，接触处必须有合理阴影。";
+}
+
 const REFERENCE_CONSTRAINTS =
   "\n\n【参考图重新设计】输入图只提供主题、主体与关键信息，**必须重新设计整张作品**：" +
   "①重做版式与元素排列，不复刻参考图的布局、图标排布、分割方式；" +
@@ -1191,7 +1220,7 @@ const RENDER_INTENT_RULES = {
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
 };
 
-async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode }) {
+async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles }) {
   const apiKey = String(RT.IMAGE_API_KEY || "");
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
@@ -1268,7 +1297,9 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : "");
   // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
   const needsNoText = overlayMode;
-  const finalPrompt = basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
+  // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
+  const finalPrompt = multiImageContract(image, referenceRoles)
+    + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
 
   const resolvedSize = resolveSize(size, aspectRatio);
   if (!resolvedSize) {
@@ -1925,6 +1956,7 @@ const server = http.createServer(async (req, res) => {
       renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
       taskKind, qualityTier, requestedCount,
       textMode: String(body.text_mode || ""),
+      referenceRoles: body.reference_roles,
     });
     // 能力不支持：任务已在路由阶段被拦下，这里不再重试、不再吞成 502
     if (!out.ok && out.unsupported) {
