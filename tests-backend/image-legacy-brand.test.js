@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { VERSION, enabledFor, injectLegacyBrandGuidance } = require('../cloudfunctions/shared/image-legacy-brand');
-const { sanitizeToolCall, ToolCallStreamGuard } = require('../cloudfunctions/shared/image-delivery');
+const { VERSION, enabledFor, injectLegacyBrandGuidance, guardBrandCalls, requestsMultipleBrandOutputs } = require('../cloudfunctions/shared/image-legacy-brand');
+const { sanitizeToolCall, sanitizeCompletion, ToolCallStreamGuard } = require('../cloudfunctions/shared/image-delivery');
 
 const accountId = 'isolated-compat-test';
 const policy = { enabled: true, accountIds: [accountId] };
@@ -26,6 +26,14 @@ test('admission uses an explicit exact account id, never a wildcard or substring
   assert.equal(enabledFor(policy, 'isolated'), false);
   assert.equal(enabledFor({ enabled: true, accountIds: new Array(101).fill(accountId) }, accountId), false);
   assert.equal(enabledFor(' '.repeat(6001), accountId), false);
+});
+
+test('explicit all-member rollout is enabled only for a nonempty authenticated subject', () => {
+  assert.equal(enabledFor({ enabled: true, audience: 'all' }, accountId), true);
+  assert.equal(enabledFor({ enabled: true, audience: 'all' }, ''), false);
+  assert.equal(enabledFor({ enabled: true, audience: '*' }, accountId), false);
+  assert.equal(enabledFor({ enabled: false, audience: 'all' }, accountId), false);
+  assert.equal(inject({ policy: { enabled: true, audience: 'all' } }).length, messages.length + 1);
 });
 
 test('the phone must actually declare the compatible edit contract', () => {
@@ -106,4 +114,48 @@ for (const [name, args] of legacyCalls) test('existing execution fields survive 
   const last = JSON.parse(stream.pushLine(frame({}, 'tool_calls')).slice(6));
   assertLegacy(JSON.parse(last.choices[0].delta.tool_calls[0].function.arguments));
   stream.end();
+});
+
+const edit = (id, args = { prompt: '添加原Logo', source: 'both', source_index: 1 }) =>
+  ({ id, type: 'function', function: { name: 'image_edit', arguments: JSON.stringify(args) } });
+test('identical parallel image calls yield one executable edit, with privacy-safe diagnostics', () => {
+  const first = edit('a'), second = edit('b', { source_index: 1, source: 'both', prompt: '添加原Logo' });
+  const document = { id: 'doc', function: { name: 'create_document', arguments: '{"body":"合同"}' } }, logs = [];
+  const output = guardBrandCalls([first, document, second], event => logs.push(event));
+  assert.deepEqual(output, [first, document]);
+  assert.deepEqual(logs, [{ event: 'brand_duplicate_calls_removed', removed: 1 }]);
+});
+test('different positions, prompts or source material fail before any executable call is forwarded', () => {
+  const logs = [];
+  assert.throws(() => guardBrandCalls([edit('a'), edit('b', { prompt: '添加原Logo', source: 'both', source_index: 2 })], e => logs.push(e)), { code: 'BRAND_PLAN_CONFLICT' });
+  assert.deepEqual(logs, [{ event: 'brand_plan_conflict', imageCallCount: 2 }]);
+});
+test('two input photos do not imply two deliverables; explicit per-poster edits remain supported', () => {
+  assert.equal(requestsMultipleBrandOutputs('我发两张图片，一张Logo一张海报，把Logo加上海报'), false);
+  for (const text of ['给每张海报加上Logo', '两张海报都加上Logo', '分别给两张海报添加Logo']) {
+    assert.equal(requestsMultipleBrandOutputs(text), true);
+    const calls = [edit('a'), edit('b', { prompt: '第二张加Logo', source: 'attached', source_index: 2 })];
+    assert.equal(guardBrandCalls(calls, () => {}, text), calls);
+  }
+});
+test('non-stream completion uses the same duplicate-call boundary', () => {
+  const response = { choices: [{ message: { role: 'assistant', tool_calls: [edit('a'), edit('b')] } }] };
+  const output = sanitizeCompletion(response, '加上Logo', undefined, guardBrandCalls);
+  assert.equal(output.choices[0].message.tool_calls.length, 1);
+  assert.equal(response.choices[0].message.tool_calls.length, 2);
+});
+test('stream duplicate calls are withheld until complete and sent only once', () => {
+  const guard = new ToolCallStreamGuard('加上Logo', undefined, guardBrandCalls);
+  const frame = (calls, finish = null) => 'data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: finish }] });
+  const early = guard.pushLine(frame([{ ...edit('a'), index: 0 }, { ...edit('b'), index: 1 }]));
+  assert.equal(JSON.parse(early.slice(6)).choices[0].delta.tool_calls, undefined);
+  const last = guard.pushLine(frame([], 'tool_calls'));
+  assert.equal(JSON.parse(last.slice(6)).choices[0].delta.tool_calls.length, 1);
+  guard.end();
+});
+test('stream conflicting plans cannot partially leak an image call', () => {
+  const guard = new ToolCallStreamGuard('加上Logo', undefined, guardBrandCalls);
+  guard.pushLine('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [
+    { ...edit('a'), index: 0 }, { ...edit('b', { prompt: '不同方案', source: 'both' }), index: 1 }] } }] }));
+  assert.throws(() => guard.pushLine('data: [DONE]'), { code: 'BRAND_PLAN_CONFLICT' });
 });
