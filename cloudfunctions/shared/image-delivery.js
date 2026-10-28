@@ -85,21 +85,21 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   if (result.removed) observe({ removed: result.removed, tool: call.function.name });
   return { ...call, function: { ...call.function, arguments: JSON.stringify(args) } };
 }
-function sanitizeCompletion(data, userText, observe) {
+function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => calls) {
   if (!data || !Array.isArray(data.choices)) return data;
   return { ...data, choices: data.choices.map(choice => {
     const message = choice.message;
     if (!message || !Array.isArray(message.tool_calls)) return choice;
-    return { ...choice, message: { ...message, tool_calls: message.tool_calls.map(call => sanitizeToolCall(call, userText, observe)) } };
+    return { ...choice, message: { ...message, tool_calls: finalizeCalls(message.tool_calls.map(call => sanitizeToolCall(call, userText, observe))) } };
   }) };
 }
 class ToolCallStreamGuard {
-  constructor(userText, observe) { this.userText = userText; this.observe = observe; this.pending = new Map(); this.bytes = 0; }
+  constructor(userText, observe, finalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.pending = new Map(); this.bytes = 0; }
   flush(index) {
     const calls = this.pending.get(index);
     if (!calls) return [];
     this.pending.delete(index);
-    return [...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe));
+    return this.finalizeCalls([...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe)));
   }
   pushLine(line) {
     if (!line.trim().startsWith("data:")) return line;

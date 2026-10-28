@@ -50,7 +50,7 @@ const { createAssetStore } = require("./shared/asset-store");
 const { createSyncService } = require("./domains/sync-v2");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGuard } = require("./shared/image-delivery");
-const { injectLegacyBrandGuidance } = require("./shared/image-legacy-brand");
+const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
 // 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
 // 不需要逐层传参。每个请求在入口 enterWith 一次。
@@ -124,7 +124,7 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
-  IMAGE_LEGACY_BRAND_POLICY: { type: "json", label: "旧包Logo规划灰度（默认关闭，仅指定账号）", def: () => '{"enabled":false,"accountIds":[]}' },
+  IMAGE_LEGACY_BRAND_POLICY: { type: "json", label: "旧包Logo规划（支持全员开启或指定账号）", def: () => '{"enabled":false,"accountIds":[]}' },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "2K" },
   IMAGE_PRICE_FAST:   { type: "num", label: "作图价 · Flash ≤1.5K（元/张，官方成本 0.12）", def: () => Number(process.env.IMAGE_PRICE_FAST || 0.3) },
@@ -2770,8 +2770,13 @@ async function handleChat(req, res) {
   // newer image-delivery policy, including user-requested disclosure exceptions.
   const imageUserText = latestUserText(body.messages || []);
   messages = injectDeliveryRule(messages);
+  const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
     policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
+  const legacyBrandActive = messages !== beforeLegacyBrand;
+  const observeBrand = fields => logSafe({ tag: "image_brand_planning", requestId: currentRequestId(), ...fields });
+  const finalizeImageCalls = legacyBrandActive ? calls => guardBrandCalls(calls, observeBrand, imageUserText) : undefined;
+  if (legacyBrandActive) observeBrand({ event: "planning_enabled" });
   const observeImageBoundary = fields => logSafe({ tag: "image_tool_copy_cleaned", requestId: currentRequestId(), ...fields });
   if (RUNTIME.CHAT_RULES && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("能力表达铁律"))) {
     let lastSys = -1;
@@ -2827,6 +2832,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
+  if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;
   delete upstreamBody.tier;   // 自定义路由字段不透传给上游
   if (String(RUNTIME.CHAT_THINKING_STYLE || "dashscope") !== "ark") delete upstreamBody.thinking;   // 百炼不收 thinking.type
@@ -2972,10 +2978,11 @@ async function handleChat(req, res) {
         { model: tier.model, tier: tier.name, promptTokens: pt, completionTokens: ct, estimated: !hasUsage });
     } catch { /* 记账失败不影响本次返回 */ }
     if (MODEL_MASK && data && typeof data.model === "string") data.model = MODEL_MASK;   // P0-38 模型名脱敏
-    try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary); }
+    try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary, finalizeImageCalls); }
     catch (e) {
       logSafe({ tag: "image_tool_arguments_invalid", requestId: currentRequestId(), stage: "non_stream" });
-      return sendError(res, 502, "UPSTREAM_ERROR", "这次作图参数没有整理完整，请再试一次。");
+      return sendError(res, 502, "UPSTREAM_ERROR", e?.code === "BRAND_PLAN_CONFLICT"
+        ? "这次标识编辑方案有冲突，还没有开始生成图片，请再试一次。" : "这次作图参数没有整理完整，请再试一次。");
     }
     return sendJson(res, 200, data);
   }
@@ -2994,7 +3001,7 @@ async function handleChat(req, res) {
   let textIn = "";
   let aborted = false;
   let streamCompleted = false;   // 正常读完上游流（区别于客户端中断）
-  const toolGuard = new ToolCallStreamGuard(imageUserText, observeImageBoundary);
+  const toolGuard = new ToolCallStreamGuard(imageUserText, observeImageBoundary, finalizeImageCalls);
 
   req.on("close", () => { aborted = true; });
 
@@ -3034,7 +3041,8 @@ async function handleChat(req, res) {
     }
   } catch (e) {
     logSafe({ tag: "chat_stream_incomplete", requestId: currentRequestId(), code: "STREAM_OR_TOOL_ARGUMENTS_INCOMPLETE" });
-    if (!aborted) res.write("data: " + JSON.stringify({ error: { code: "UPSTREAM_ERROR", message: "这次回复没有接收完整，请再试一次。" } }) + "\n\n");
+    if (!aborted) res.write("data: " + JSON.stringify({ error: { code: "UPSTREAM_ERROR", message: e?.code === "BRAND_PLAN_CONFLICT"
+      ? "这次标识编辑方案有冲突，还没有开始生成图片，请再试一次。" : "这次回复没有接收完整，请再试一次。" } }) + "\n\n");
   } finally {
     try { res.end(); } catch { /* ignore */ }
   }

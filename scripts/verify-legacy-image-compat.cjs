@@ -10,6 +10,7 @@ const app = sdk.init({ env: 'xmy-test-d5g8c0xcifcefcfd5', region: 'ap-shanghai',
   secretKey: credential.tmpSecretKey, sessionToken: credential.tmpToken });
 const db = app.database(), host = 'https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com';
 const id = 'legacy-compat-' + crypto.randomBytes(6).toString('hex'), username = id.replaceAll('-', '_');
+const liveEnabled = process.argv.includes('--live-enabled');
 const account = db.collection('bf_accounts').doc(id), report = { at: new Date().toISOString(), checks: [], paidImageCalls: 0 };
 let created = false, token = '';
 function check(name, fields = {}) { const row = { name, ...fields }; report.checks.push(row); console.log(JSON.stringify(row)); }
@@ -49,9 +50,15 @@ const editTool = { type: 'function', function: { name: 'image_edit', description
     const runtime = (await db.collection('bf_config').doc('runtime').get()).data[0]?.data || {};
     let policy = runtime.IMAGE_LEGACY_BRAND_POLICY;
     if (typeof policy === 'string') { try { policy = JSON.parse(policy); } catch { policy = null; } }
-    assert.notEqual(policy?.enabled, true, 'new planner must remain closed for customer traffic');
-    assert.equal(enabledFor(runtime.IMAGE_LEGACY_BRAND_POLICY, id), false);
-    check('new Logo planning remains closed; no runtime policy was changed');
+    if (liveEnabled) {
+      assert.equal(enabledFor(runtime.IMAGE_LEGACY_BRAND_POLICY, id), true);
+      assert.equal(policy.audience, 'all');
+      check('live Logo planning is enabled for existing members; verifier changed no runtime policy');
+    } else {
+      assert.notEqual(policy?.enabled, true, 'use --live-enabled when the feature has been opened');
+      assert.equal(enabledFor(runtime.IMAGE_LEGACY_BRAND_POLICY, id), false);
+      check('new Logo planning remains closed; no runtime policy was changed');
+    }
     const health = await request('/api/health'); assert.equal(health.value.ok, true); check('existing health endpoint');
     const models = await request('/img/models'); assert.equal(models.value.routingMode, 'auto'); assert.equal(models.value.autoPolicy.defaultTier, 'fast'); check('Flash-first auto policy remains unchanged');
     const password = crypto.randomBytes(24).toString('hex'), salt = crypto.randomBytes(16).toString('hex'), now = new Date();
@@ -72,10 +79,10 @@ const editTool = { type: 'function', function: { name: 'image_edit', description
         { type: 'image_url', image_url: { url: logo } },
         { type: 'text', text: '【本次编辑前生成图预览】这是底图预览，不是用户附件，不计入source_index。both时为第1张底图。' },
         { type: 'image_url', image_url: { url: base } }] }];
-    // Test the candidate guidance against the real frontend model using synthetic
-    // images. Cloud-side admission remains disabled and is covered by unit tests.
-    const planned = injectLegacyBrandGuidance({ messages: input, tools: [editTool], policy: { enabled: true, accountIds: [id] }, accountId: id });
-    assert.equal(planned.length, input.length + 1);
+    // Live mode sends the unmodified phone-style request, exercising server-side
+    // admission and injection instead of manually adding guidance to the probe.
+    const planned = liveEnabled ? input : injectLegacyBrandGuidance({ messages: input, tools: [editTool], policy: { enabled: true, accountIds: [id] }, accountId: id });
+    assert.equal(planned.length, input.length + (liveEnabled ? 0 : 1));
     for (const stream of [false, true]) {
       const response = await request('/api/chat', { chatMode: 'standard', stream, max_tokens: 1800, messages: planned,
         tools: [editTool], tool_choice: { type: 'function', function: { name: 'image_edit' } } });
@@ -94,20 +101,27 @@ const editTool = { type: 'function', function: { name: 'image_edit', description
         console.log(JSON.stringify({ unexpectedCalls: report.unexpectedCalls }));
       }
       assert.equal(calls.length, 1); const args = JSON.parse(calls[0].function.arguments), fields = args.structured;
+      const plannedFields = { stream, tool: calls[0].function.name, source: args.source, sourceIndex: args.source_index,
+        sourceIndexes: args.source_indexes, assets: fields?.preserve_assets, preserveOutside: fields?.preserve_outside,
+        textCount: fields?.text?.length };
+      report.planningOutputs = [...(report.planningOutputs || []), plannedFields];
+      console.log(JSON.stringify({ plannedFields }));
       assert.equal(calls[0].function.name, 'image_edit'); assert.equal(args.source, 'both');
       assert.equal(args.source_indexes, undefined); assert.equal(args.reference_roles, undefined);
       assert.equal(args.source_index ?? 1, 1); assert.equal(fields.preserve_outside, true); assert.deepEqual(fields.text, []);
       assert.equal(fields.preserve_assets.length, 1); const asset = fields.preserve_assets[0]; assert.equal(asset.reference_index, 2); assert.equal(asset.kind, 'logo');
       const b = asset.box; assert.ok(['x', 'y', 'width', 'height'].every(k => typeof b[k] === 'number' && Number.isFinite(b[k])));
       assert.ok(b.x >= 0 && b.y >= 0 && b.width > 0 && b.height > 0 && b.x + b.width <= 1 && b.y + b.height <= 1 && b.width * b.height <= 0.35);
-      check(stream ? 'candidate Logo guidance: real SSE, old-package executable fields' : 'candidate Logo guidance: real JSON, old-package executable fields',
-        { ms: response.ms, syntheticOnly: true, box: b });
+      check(stream ? 'Logo guidance: real SSE, old-package executable fields' : 'Logo guidance: real JSON, old-package executable fields',
+        { ms: response.ms, syntheticOnly: true, serverInjected: liveEnabled, box: b });
     }
     const after = (await account.get()).data[0]; assert.equal(after.imageUsedCny, 0); check('planning made zero image-model calls');
     report.ok = true;
-  } catch (error) { report.ok = false; report.error = String(error.message || error).replace(/https?:\/\/\S+/g, '[url]').slice(0, 250); throw error; }
+  } catch (error) { report.ok = false; report.error = String(error.message || error).replace(/https?:\/\/\S+/g, '[url]').slice(0, 250);
+    report.errorLocation = String(error.stack || '').split('\n').find(line => line.includes('verify-legacy-image-compat.cjs:'))?.trim(); throw error; }
   finally {
     if (created) { assert.ok(id.startsWith('legacy-compat-')); await account.remove(); report.temporaryAccountDeleted = true; }
     fs.writeFileSync(path.join(root, 'outputs/legacy-image-compat-verification.json'), JSON.stringify(report, null, 2));
+    fs.writeFileSync(path.join(root, 'outputs/legacy-image-compat-' + report.at.replace(/[:.]/g, '-') + '.json'), JSON.stringify(report, null, 2));
   }
 })().catch(error => { console.error(String(error.message || error).replace(/https?:\/\/\S+/g, '[url]').slice(0, 250)); process.exitCode = 1; });

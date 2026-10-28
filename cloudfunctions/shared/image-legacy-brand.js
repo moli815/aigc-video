@@ -1,10 +1,11 @@
 "use strict";
 
-// A server-owned, account-scoped experiment for phones already in customers' hands.
+// Server-owned planning for phones already in customers' hands.
 // Never manufacture tool capabilities, asset IDs, image bytes or a new protocol.
 const VERSION = "LEGACY_BRAND_PLANNING_V1";
 const RULE = `【${VERSION}·已安装客户端素材合成】
 目标是保留用户喜欢的原海报，为原Logo找到不遮挡内容的位置，而不是重新画一个相似Logo。
+同一张海报的一次编辑只调用一次image_edit；多个Logo放在同一个preserve_assets数组中，不另生成Logo图片、不同时提交两个编辑方案。
 先读本轮实际图片和已有预览，区分底图、Logo、人物和风格参考；只使用本轮真实附件序号或检索返回的原件ID。底图在references首位；不要根据用户编号猜发送槽位。不能只发底图而漏掉人物或产品素材。
 已生成海报+一张上传Logo：用image_edit、source=both、source_index=上传Logo序号；不能同时传source_indexes或reference_roles。structured.preserve_assets的reference_index=2、kind=logo、background=auto。保留旧文字时structured.text=[]、preserve_outside=true，避免再次叠字。这里Logo由手机保留原素材并合成，底图模型不收到Logo是正常的，不能宣称它已重绘Logo。
 两张上传图互合成人物/产品时，用source=attached、source_indexes=[底图序号,素材序号,...]及等长reference_roles。仅选用户需要的素材，不能把所有历史图片无差别送入。精确Logo替换在旧包有额外本地校验：source=attached的双附件不能冒充both（both会改用上次生成图）；先用已开放的recall_history找出两张真实原件，library_refs=[底图ID,LogoID]，没有检索返回的ID不得编造、不得声称已支持这个入口。网页裁取/网上Logo抓取也只有开放了真实对应工具才能声称执行。
@@ -19,8 +20,10 @@ function enabledFor(policy, accountId) {
     try { value = JSON.parse(value); } catch { return false; }
   }
   if (!value || typeof value !== "object" || Array.isArray(value) || value.enabled !== true) return false;
-  // No wildcard or global rollout: admission always uses the authenticated subject.
-  if (!Array.isArray(value.accountIds) || value.accountIds.length > 100 || typeof accountId !== "string" || !accountId) return false;
+  // Public rollout must be explicit; the caller is still an authenticated member.
+  if (typeof accountId !== "string" || !accountId) return false;
+  if (value.audience === "all") return true;
+  if (!Array.isArray(value.accountIds) || value.accountIds.length > 100) return false;
   return value.accountIds.some(id => typeof id === "string" && id !== "*" && id === accountId);
 }
 
@@ -42,4 +45,34 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
   return [...messages, { role: "system", content: RULE }];
 }
 
-module.exports = { VERSION, RULE, enabledFor, injectLegacyBrandGuidance };
+function requestsMultipleBrandOutputs(text) {
+  // Count target works, not input references: two photos can still make ONE poster.
+  return /(?:每张|每一张|各张)(?:海报|图片|图)|(?:两张|三张|这些|这几张|所有)(?:海报|图片|图)[^，。\n]{0,12}(?:都|各|分别)|分别(?:给|为)[^，。\n]{0,16}(?:添加|加上|替换)/.test(String(text || ""));
+}
+
+function guardBrandCalls(calls, observe = () => {}, userText = "") {
+  if (requestsMultipleBrandOutputs(userText)) return calls;
+  const imageNames = new Set(["image_edit", "image_generate", "image_series", "image_decompose", "generate_image"]);
+  const imageCalls = calls.filter(call => imageNames.has(call?.function?.name));
+  if (imageCalls.length < 2) return calls;
+  const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
+  const identity = call => JSON.stringify([call.function.name, stable(JSON.parse(call.function.arguments))]);
+  const first = identity(imageCalls[0]);
+  // Only byte-equivalent execution data (ignoring object key order) can be merged.
+  // Different positions/sources/prompts require a new plan, never silently choose one.
+  if (imageCalls.some(call => identity(call) !== first)) {
+    observe({ event: "brand_plan_conflict", imageCallCount: imageCalls.length });
+    const error = new Error("BRAND_PLAN_CONFLICT"); error.code = "BRAND_PLAN_CONFLICT"; throw error;
+  }
+  let kept = false;
+  const output = calls.filter(call => {
+    if (!imageNames.has(call?.function?.name)) return true;
+    if (kept) return false;
+    kept = true; return true;
+  });
+  observe({ event: "brand_duplicate_calls_removed", removed: imageCalls.length - 1 });
+  return output;
+}
+
+module.exports = { VERSION, RULE, enabledFor, injectLegacyBrandGuidance, guardBrandCalls, requestsMultipleBrandOutputs };
