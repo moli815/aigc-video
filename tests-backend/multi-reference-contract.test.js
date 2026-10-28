@@ -85,12 +85,12 @@ test("request contract carries reference_roles to the server", () => {
 });
 
 test("server annotates multi-image input before the user prompt", () => {
-  assert.match(imageFunction, /function multiImageContract\(image, referenceRoles\)/,
+  assert.match(imageFunction, /function multiImageContract\(image, referenceRoles, taskKind\)/,
     "缺少多图编号契约");
-  assert.match(imageFunction, /const finalPrompt = multiImageContract\(image, referenceRoles\)/,
+  assert.match(imageFunction, /const finalPrompt = multiImageContract\(image, referenceRoles, taskKind\)/,
     "多图契约没有被拼进 finalPrompt");
   const contract = imageFunction.slice(imageFunction.indexOf("function multiImageContract"));
-  assert.match(contract, /原样使用其面部、发型、体型、服装与外观/,
+  assert.match(contract, /未被用户要求修改的人物身份、发型、服装、产品外观必须保留/,
     "没有禁止用相似但不同的人替代素材人物");
   assert.match(imageFunction, /referenceRoles: body\.reference_roles/,
     "入口没有把 reference_roles 传给 generate");

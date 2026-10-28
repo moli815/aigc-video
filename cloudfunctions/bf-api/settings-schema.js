@@ -27,7 +27,7 @@ const SECTION_OF = {
     "CHAT_MODEL_STANDARD", "CHAT_MODEL_HIGH", "CHAT_MODEL_ULTRA", "CHAT_MODEL_PRO",
     "CHAT_MODEL_UTILITY", "CHAT_MODEL_UTILITY_LITE", "CHAT_MODEL_VISION", "CHAT_THINKING_STYLE",
     "IMAGE_PROVIDER", "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES",
-    "IMAGE_ROUTING_MODE", "EMBED_MODEL",
+    "IMAGE_ROUTING_MODE", "IMAGE_AUTO_POLICY", "EMBED_MODEL",
     "IMAGE_SIZES",
   ],
   generation: [
@@ -113,6 +113,8 @@ const META = {
     enum: ["auto", "flash_only", "pro_only"],
     enumLabels: { auto: "自动（按任务）", flash_only: "全部快速档", pro_only: "全部高质量档" },
     description: "运维止损用。flash_only 可在高质量模型故障时立刻把全站切到快速档；pro_only 用于临时提质量对比。" },
+  IMAGE_AUTO_POLICY: { title: "自动作图 · 升级策略 JSON", widget: "json", risk: "medium", maxLength: 6000,
+    description: "auto 默认 Flash。可配置 defaultTier、honorClientHigh、proTaskKinds、proReasons、minReferencesForPro、nativeTextCharsForPro、retryQualityToPro、capabilityFallback、fallbackCodes。客户端旧 high 推荐默认不强制升级；超时或不确定结果不会重复生图。" },
   IMAGE_FAST_MODE: { title: "生图提速模式", widget: "toggle", risk: "medium",
     description: "开启=fast（更快）；关闭=standard（质量优先）。由 bf-image 实际读取。" },
   IMAGE_SIZE: { title: "生图默认尺寸", widget: "enum", enum: ["1K", "1.5K", "2K"], risk: "high",

@@ -34,6 +34,8 @@ const {
 const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
 const { providerPromptOptions } = require("./shared/image-policy");
+const { cleanImageRequest } = require("./shared/image-delivery");
+const { autoDecision, parseAutoPolicy, canFallbackToPro } = require("./image-routing");
 const { AsyncLocalStorage } = require("async_hooks");
 const reqStore = new AsyncLocalStorage();
 function currentRequestId() {
@@ -56,6 +58,7 @@ const RT = {
   IMAGE_MODEL_PRO: process.env.IMAGE_MODEL_PRO || "",
   IMAGE_MODEL_SERIES: process.env.IMAGE_MODEL_SERIES || "",
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
+  IMAGE_AUTO_POLICY: process.env.IMAGE_AUTO_POLICY || "{}",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
   IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "0.3",   // Flash ≤1.5K（官方成本 0.12）
@@ -68,7 +71,7 @@ const RT = {
 // 避免 bf_config 里遗留的旧值把线上出图整体打挂。其余为非敏感调参项，可从 DB 覆盖。
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
-  "IMAGE_FAST_MODE", "IMAGE_SIZE",
+  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY",
   "IMAGE_PRICE_FAST", "IMAGE_PRICE_SMALL", "IMAGE_PRICE_2K", "RATE_IMAGE_PER_HOUR",
 ];
 /**
@@ -134,7 +137,8 @@ function promptOptimizationMode(routingMode, fastMode) {
     ? "standard" : "fast";
 }
 
-function selectImageRoute({ taskKind, qualityTier }) {
+function selectImageRoute(input) {
+  const { taskKind, qualityTier } = input;
   const m = modelsOf();
   const mode = String(RT.IMAGE_ROUTING_MODE || "auto").trim();
   const kind = String(taskKind || "generate").trim();
@@ -152,16 +156,14 @@ function selectImageRoute({ taskKind, qualityTier }) {
     return { model: "", reason: "series-unsupported", unsupported: true };
   }
   if (kind === "decompose") {
-    if (capsOf(m.pro).layers) return { model: m.pro, reason: "task=decompose" };
-    if (capsOf(m.fast).layers) return { model: m.fast, reason: "task=decompose(fallback-fast)" };
+    const high = autoDecision(input, RT.IMAGE_AUTO_POLICY).tier === "high";
+    const first = high ? m.pro : m.fast, second = high ? m.fast : m.pro;
+    if (capsOf(first).layers) return { model: first, reason: "task=decompose(preferred)" };
+    if (capsOf(second).layers) return { model: second, reason: "task=decompose(capability-fallback)" };
     return { model: "", reason: "decompose-unsupported", unsupported: true };
   }
-  if (tier === "high") return { model: m.pro, reason: "tier=high" };
-  if (tier === "fast") return { model: m.fast, reason: "tier=fast" };
-
-  // The Agent supplies fast/high after scene classification. Missing/unknown
-  // classification is conservative; auto must not silently mean cheap-by-default.
-  return { model: m.pro, reason: "tier=auto(conservative-high)" };
+  const decision = autoDecision(input, RT.IMAGE_AUTO_POLICY);
+  return { model: decision.tier === "high" ? m.pro : m.fast, reason: decision.reason };
 }
 
 let _rtLoadedAt = 0;
@@ -1118,23 +1120,9 @@ const EDIT_CONSTRAINTS =
  * 那是我们自己的数据真实性规则（META_RULE 第 1~5 条）被错误地执行到了**图片**上：
  * 出处与未核实项本该写在聊天正文，结果印进了交付物。
  *
- * 规则层已经改了（bf-api META_RULE 新增【交付物边界】），这里是执行层兜底：
- * 真到请求时还带着这些行，就按行剔掉——宁可少一行装饰，也不让成品印着"未核实"。
- * 只按行首匹配，不做模糊替换，避免误删正文里正常出现的"来源"二字。
+ * 规则独立注入；实际文案清理由 shared/image-delivery 在工具回程和 Provider
+ * 编译前共用。保留用户要求的正文、截止日期及免责声明，不做品类关键词封禁。
  */
-const META_COPY_PATTERN = /^(数据来源|资料来源|信息来源|来源\s*[:：]|检索时间|截至[^，。]{0,12}[日号]|未核实|待确认|未公开|免责声明|仅供参考|整理自)/;
-
-function metaCopyLike(line) {
-  const text = String(line || "").trim().replace(/^[·•\-*\s]+/, "");
-  return !!text && META_COPY_PATTERN.test(text);
-}
-
-function stripMetaCopy(text) {
-  const lines = String(text || "").split("\n");
-  const kept = lines.filter((line) => !metaCopyLike(line));
-  return { text: kept.join("\n").trim(), removed: lines.length - kept.length };
-}
-
 /**
  * 10-28 多图输入契约。
  *
@@ -1146,7 +1134,7 @@ function stripMetaCopy(text) {
  * 角色由客户端 reference_roles 提供（与图序一一对应）；缺省按「第一张底图、其余素材」，
  * 这与客户端 ImageReferenceResolver 的顺序契约严格一致，两边不能各说各话。
  */
-function multiImageContract(image, referenceRoles) {
+function multiImageContract(image, referenceRoles, taskKind) {
   const list = Array.isArray(image) ? image : (image ? [image] : []);
   if (list.length < 2) return "";
   const roles = Array.isArray(referenceRoles) ? referenceRoles : [];
@@ -1155,13 +1143,14 @@ function multiImageContract(image, referenceRoles) {
     if (role) return `图${i + 1}=${role}`;
     return i === 0 ? `图${i + 1}=底图` : `图${i + 1}=素材${i}`;
   });
-  return "\n\n【多图输入·必须按编号理解】本次共 " + list.length + " 张输入图（按发送顺序）：" +
+  return "\n\n【多图输入·素材角色】本次共 " + list.length + " 张输入图（以下编号仅为上游发送槽位，不是用户附件原始编号）：" +
     labels.join("；") + "。\n" +
-    "① 用户说“第一张/第二张/图几/这张图里的人”时，一律按上面的编号理解；\n" +
-    "② 输出画布以底图为准，不裁切、不改变底图既有构图与用户未指定的区域；\n" +
-    "③ 素材图中的人物/产品必须**原样使用其面部、发型、体型、服装与外观**，禁止用相似但不同的人或物替代；\n" +
-    "④ 只执行用户明确要求的合成/替换/消除，不重绘整张画面；\n" +
-    "⑤ 合成位置、尺度、透视与光影要自然，接触处必须有合理阴影。";
+    "① 按底图、人物素材、产品素材、风格参考的角色执行，不能擅自把用户附件编号解释成上面的槽位编号；\n" +
+    "② 素材中未被用户要求修改的人物身份、发型、服装、产品外观必须保留，禁止用相似但不同的人或物替代；\n" +
+    (String(taskKind || "") === "reference"
+      ? "③ 本次是重新设计：底图提供主题与内容，必须按新风格重构版式与元素排列，风格参考不作为保持原构图的要求；\n"
+      : "③ 输出画布以底图为准，不裁切；只修改用户指定区域，保留其余构图与内容；\n") +
+    "④ 合成位置、尺度、透视与光影要自然，接触处必须有合理阴影。";
 }
 
 const REFERENCE_CONSTRAINTS =
@@ -1250,14 +1239,21 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
   // 10-24 混合路由：模型由服务端决定，App 只表达任务类型与质量偏好。
-  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier });
+  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier, prompt, image, structured, textMode });
   if (route.unsupported) {
     logStage("route_unsupported", { taskKind: taskKind || "generate", reason: route.reason });
     return { ok: false, code: 422, msg: "当前配置的模型不支持该任务", unsupported: true, reason: route.reason };
   }
-  const selectedModel = String(route.model || "").trim() || String(RT.IMAGE_MODEL || "").trim();
+  let selectedModel = String(route.model || "").trim() || String(RT.IMAGE_MODEL || "").trim();
   if (!selectedModel) return { ok: false, code: 503, msg: "未配置生图模型" };
-  const caps = capsOf(selectedModel);
+  let caps = capsOf(selectedModel);
+  if (String(RT.IMAGE_ROUTING_MODE) === "auto" && parseAutoPolicy(RT.IMAGE_AUTO_POLICY).capabilityFallback
+      && ((layerDecomposition === true && !caps.layers) || (image && !caps.edit))) {
+    const pro = modelsOf().pro, proCaps = capsOf(pro);
+    if (pro && (!layerDecomposition || proCaps.layers) && (!image || proCaps.edit)) {
+      selectedModel = pro; caps = proCaps; route.reason = "auto:capability-pro";
+    }
+  }
   // 10-25 P0：把"最终用了哪个模型、为什么"写进日志。
   // 只打模型 id 与原因码，不打提示词正文（含用户内容），排查够用且不落隐私。
   logStage("image_route", {
@@ -1297,11 +1293,12 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
   const overlayMode = String(textMode || "") === "overlay";
   // 交付物边界兜底：把"数据来源/未核实/仅供参考"这类核对说明从画面文案里剔掉
-  const cleanedPrompt = stripMetaCopy(prompt);
+  const cleanedPrompt = cleanImageRequest({ prompt, structured });
+  structured = cleanedPrompt.structured;
   if (cleanedPrompt.removed > 0) {
     logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
   }
-  const rawPrompt = String(cleanedPrompt.text || "").trim();
+  const rawPrompt = String(cleanedPrompt.prompt || "").trim();
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
@@ -1313,7 +1310,6 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
   if (rawPrompt && !overlayMode) {
     const missingCopy = visibleCopyValues(structured && structured.text)
-      .filter((value) => !metaCopyLike(value))
       .filter((value) => !rawPrompt.includes(value));
     if (missingCopy.length) {
       basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
@@ -1329,7 +1325,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
-  const finalPrompt = multiImageContract(image, referenceRoles)
+  const finalPrompt = multiImageContract(image, referenceRoles, taskKind)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
 
   const resolvedSize = resolveSize(size, aspectRatio);
@@ -1370,19 +1366,36 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 拿不到"上游超时"这个可判定的错误码。
   const timer = setTimeout(() => controller.abort(), 260000);
   try {
-    const r = await fetch(IMAGE_BASE + "/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    const j = await r.json().catch(() => null);
-    const url = j && j.data && j.data[0] && j.data[0].url;
-    if (!r.ok || !url) {
-      return { ok: false, code: 502, msg: "上游失败", status: r.status,
-        unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await fetch(IMAGE_BASE + "/images/generations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+        body: JSON.stringify(payload), signal: controller.signal,
+      });
+      const j = await r.json().catch(() => null);
+      const url = j && j.data && j.data[0] && j.data[0].url;
+      if (!r.ok || !url) {
+        logStage("image_upstream_rejected", { model: selectedModel, status: r.status,
+          upstreamCode: String(j && j.error && j.error.code || j && j.code || "UNKNOWN").slice(0, 100),
+          missingField: String(j && j.error && j.error.param || ((String(j && j.error && j.error.message || "").match(/missing\s+['"`]?([a-z_]+)/i) || [])[1]) || "").replace(/[^a-z_]/gi, "").slice(0, 40) });
+        if (attempt === 0 && canFallbackToPro({ mode: String(RT.IMAGE_ROUTING_MODE), selected: selectedModel,
+            pro: modelsOf().pro, status: r.status, body: j, policy: RT.IMAGE_AUTO_POLICY })) {
+          const previous = selectedModel;
+          selectedModel = modelsOf().pro; caps = capsOf(selectedModel);
+          // A definite capability rejection permits one upgrade, under the same
+          // idempotency claim and total deadline. Never retry an uncertain result.
+          payload.model = selectedModel;
+          delete payload.optimize_prompt_options;
+          if (caps.fastPromptMode) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
+          route.reason = "auto:capability-rejection-pro";
+          logStage("image_route_upgrade", { from: previous, model: selectedModel, reason: route.reason, status: r.status });
+          continue;
+        }
+        return { ok: false, code: 502, msg: "上游失败", status: r.status,
+          unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
+      }
+      return { ok: true, url, model: selectedModel, routeReason: route.reason, caps };
     }
-    return { ok: true, url, model: selectedModel, routeReason: route.reason, caps };
   } catch (e) {
     return { ok: false, code: 504, unknownOutcome: true, msg: String((e && e.message) || e).slice(0, 200) };
   } finally {
@@ -1474,6 +1487,7 @@ const server = http.createServer(async (req, res) => {
     return send(200, {
       ok: true,
       routingMode: String(RT.IMAGE_ROUTING_MODE || "auto"),
+      autoPolicy: parseAutoPolicy(RT.IMAGE_AUTO_POLICY),
       promptOptimizationMode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE),
       resolutionTier: String(RT.IMAGE_SIZE || "1.5K"),
       seriesMode: "single_image_orchestration",
