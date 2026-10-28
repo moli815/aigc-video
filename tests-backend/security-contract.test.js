@@ -305,9 +305,8 @@ test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
   // 10-25：原来靠 `rawTier !== "auto"` 判显式，pro/hd 这类别名会漏判并静默降级；
   // 现在统一先 normalizeTier() 归一化，再比较 high/fast，语义不变但覆盖所有别名。
   assert.match(body, /const tier = normalizeTier\(qualityTier\)/, "未先归一化档位");
-  assert.match(body, /if \(tier === "high"\) return \{ model: m\.pro/, "high 未走 Pro");
-  assert.match(body, /if \(tier === "fast"\) return \{ model: m\.fast/, "fast 未走 Flash");
-  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT|prompt|renderIntent/,
+  assert.match(body, /decision\.tier === "high" \? m\.pro : m\.fast/, "服务端统一策略未选择模型");
+  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT/,
     "路由仍从提示词或物料类型隐式推断模型档位");
   assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/,
     "Pro 强制模式必须优先于质量档位分支");

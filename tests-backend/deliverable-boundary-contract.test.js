@@ -22,38 +22,32 @@ const apiFunction = read("cloudfunctions/bf-api/index.js");
 const imageFunction = read("cloudfunctions/bf-image/index.js");
 
 test("META_RULE draws the boundary between text deliverables and images", () => {
-  assert.match(apiFunction, /【交付物边界/, "缺少交付物边界规则块");
-  const start = apiFunction.indexOf("【交付物边界");
-  const block = apiFunction.slice(start, start + 900);
+  assert.match(apiFunction, /messages = injectDeliveryRule\(messages\)/, "独立规则未接入真实请求");
+  const block = require('../cloudfunctions/shared/image-delivery').DELIVERY_RULE;
   for (const token of ["数据来源", "未核实", "仅供参考"]) {
     assert.ok(block.includes(token), `边界规则没有点名「${token}」`);
   }
   assert.match(block, /聊天回复正文|正文/, "没有说明核对说明该写在哪里");
-  assert.match(block, /不写进图,?不等于可以编|不得写进 image prompt|等同于|不冲突/,
+  assert.match(block, /不得.*编造/,
     "没有说明与真实性规则不冲突，模型可能理解成允许编造");
 });
 
 test("bf-image strips meta copy before building the prompt", () => {
-  assert.match(imageFunction, /const META_COPY_PATTERN/);
-  assert.match(imageFunction, /function stripMetaCopy/);
-  const around = imageFunction.slice(imageFunction.indexOf("const cleanedPrompt = stripMetaCopy"), imageFunction.indexOf("const cleanedPrompt = stripMetaCopy") + 260);
-  assert.match(around, /const rawPrompt = String\(cleanedPrompt\.text/, "清理结果没有进入 rawPrompt");
-  assert.match(imageFunction, /visibleCopyValues\(structured && structured\.text\)\s*\n?\s*\.filter\(\(value\) => !metaCopyLike\(value\)\)/,
-    "「需准确呈现的原文」仍然会把核对说明塞回底图");
+  assert.match(imageFunction, /require\("\.\/shared\/image-delivery"\)/);
+  assert.match(imageFunction, /const cleanedPrompt = cleanImageRequest/);
+  const around = imageFunction.slice(imageFunction.indexOf("const cleanedPrompt = cleanImageRequest"), imageFunction.indexOf("const cleanedPrompt = cleanImageRequest") + 450);
+  assert.match(around, /const rawPrompt = String\(cleanedPrompt\.prompt/, "清理结果没有进入 rawPrompt");
+  assert.match(around, /structured = cleanedPrompt.structured/, "结构化文案未复用同一处理结果");
 });
 
 test("stripMetaCopy removes only meta lines and keeps real content", () => {
-  const start = imageFunction.indexOf("const META_COPY_PATTERN");
-  const end = imageFunction.indexOf("/**\n * 10-28 多图输入契约");
-  assert.ok(start > 0 && end > start, "无法截取剥离函数");
-  // 直接执行源码里的这两个函数，避免测试与实现各写一套正则
-  const factory = new Function(imageFunction.slice(start, end) + "\nreturn { stripMetaCopy, metaCopyLike };");
-  const { stripMetaCopy, metaCopyLike } = factory();
+  const {cleanText:stripMetaCopy,labelOf}=require('../cloudfunctions/shared/image-delivery');
+  const metaCopyLike=text=>!!labelOf(text);
 
   assert.equal(metaCopyLike("数据来源：公开报道整理"), true);
   assert.equal(metaCopyLike("· 未核实项：Meta 留存率未公开"), true);
-  assert.equal(metaCopyLike("截至2026年10月28日"), true);
-  assert.equal(metaCopyLike("免责声明：本文仅供参考"), true);
+  assert.equal(metaCopyLike("截至2026年10月28日"), false, "正常截止日期必须保留");
+  assert.equal(metaCopyLike("免责声明：本文仅供参考"), false, "不能把免责声明一律删除");
   assert.equal(metaCopyLike("标题：本周 AI 热讯周报"), false, "正常标题不能误伤");
   assert.equal(metaCopyLike("要点：OpenAI 发布 GPT-6.1 Terra"), false);
 

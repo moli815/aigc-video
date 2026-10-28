@@ -57,7 +57,7 @@ test("only pixel edits receive edit boundaries; pixel similarity is diagnostic o
   assert.match(imageFunction, /const isPixelEdit = !!image && String\(taskKind \|\| ""\) === "edit"/);
   // 10-26：finalPrompt 多了"底图无字"这一层；10-28 又在最前面加了多图编号契约。
   // 三段拼接顺序固定：多图编号 → 用户 prompt → 无字约束 → 任务边界。EDIT_CONSTRAINTS 仍只给像素编辑。
-  assert.match(imageFunction, /const finalPrompt = multiImageContract\(image, referenceRoles\)\s*\n\s*\+ basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
+  assert.match(imageFunction, /const finalPrompt = multiImageContract\(image, referenceRoles, taskKind\)\s*\n\s*\+ basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
   assert.match(imageFunction, /const taskPolicy = isPixelEdit[\s\S]{0,160}EDIT_CONSTRAINTS/);
   assert.match(imageFunction, /if \(out\.ok && body\.image && taskKind === "edit"\)[\s\S]{0,400}decision: "diagnostic_only"/);
   assert.doesNotMatch(imageFunction, /edit_over_redraw_retry/);

@@ -49,6 +49,7 @@ const { membershipExpired } = require("./domains/member-access");
 const { createAssetStore } = require("./shared/asset-store");
 const { createSyncService } = require("./domains/sync-v2");
 const { providerPromptOptions } = require("./shared/image-policy");
+const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGuard } = require("./shared/image-delivery");
 const { AsyncLocalStorage } = require("async_hooks");
 // 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
 // 不需要逐层传参。每个请求在入口 enterWith 一次。
@@ -121,6 +122,7 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL_PRO:    { type: "str", label: "作图模型 · 高质量档（品牌主视觉/最终稿/精细改图）", def: () => process.env.IMAGE_MODEL_PRO || "doubao-seedream-5-0-pro-260628" },
   IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
+  IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "2K" },
   IMAGE_PRICE_FAST:   { type: "num", label: "作图价 · Flash ≤1.5K（元/张，官方成本 0.12）", def: () => Number(process.env.IMAGE_PRICE_FAST || 0.3) },
@@ -1159,11 +1161,7 @@ const META_RULE_BUILTIN = `【身份与表达】你是中防AI助手，底层由
 【多实体收集类任务的执行规范】
 当用户要求收集、汇总或对比多个对象时：1.先把对象清单列全并核实命名真实存在（产品线存在跳代与改名，不要等差数列补型号，不要默认"还没发布"）；2.对清单里每一个对象单独发起一次 web_search（关键词=对象全名+要查的字段），严禁一句笼统关键词搜完所有对象；3.可在一轮里并行发起多个搜索，先核实对象再补缺失字段，不重复查询同一主题；4.结论旁标注（来源 N），只引用实际支持的编号；5.表格下方说明哪些字段没查到、为什么；6.复数表述任务必须先列具体对象清单再逐对象搜索，只评估预检索证据视为未完成任务；7.纯指令消息基于已有数据直接操作，不重新检索；8.用户要"统计图"时先分析意图：精确数字图表→render_chart（数据必须来自已核实来源），概念示意→image_edit（图上不标具体数字）。
 【工具使用】需要最新资讯、行情、政策时主动调用 web_search；需要海报、配图或修改图片时调用 image_edit；用户要求"整理成文档/做成PPT/导出表格/出一份报告"时调用 create_document，生成后只用一两句话说明，不要重复正文。
-【交付物边界 - 图片里不放"核对说明"】上面第 1~5 条真实性规则约束的是**文字交付**（聊天回复、表格、文档）。做海报、封面、信息图、卡片这类**图片作品**时，以下内容一律**不得**出现在画面里，也不得写进 image prompt 或 structured.text：
-· 数据来源 / 资料来源 / 信息来源 / 检索时间 / 截至某日
-· 未核实项 / 未核实 / 待确认 / 未公开
-· 免责声明 / 仅供参考 / 整理自公开报道
-图片只承载作品本身需要的信息：标题、副标题、要点、日期、地点、品牌与联系方式。核对说明、出处与"没查到什么"统一写在**聊天回复正文**的最后一段（一两句即可）。理由：图片是交付物，交付物上印着"未核实"等于把质检报告印在产品上；用户拿去做汇报会被质疑。这条与真实性规则不冲突——不写进图，不等于可以编；编造照样禁止，出处照样要在正文交代。`;
+图片交付边界与路由指导由独立版本化规则统一注入；真实性要求同时适用于图片中的事实，不得编造。`;
 
 function estimateTokens(text) {
   return Math.max(1, Math.ceil(String(text || "").length / 1.5));
@@ -2766,6 +2764,11 @@ async function handleChat(req, res) {
   if (metaRuleText && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("数据真实性铁律"))) {
     messages = [{ role: "system", content: metaRuleText }].concat(messages);
   }
+  // Existing phones carry the legacy truthfulness rule. It must not suppress
+  // newer image-delivery policy, including user-requested disclosure exceptions.
+  const imageUserText = latestUserText(body.messages || []);
+  messages = injectDeliveryRule(messages);
+  const observeImageBoundary = fields => logSafe({ tag: "image_tool_copy_cleaned", requestId: currentRequestId(), ...fields });
   if (RUNTIME.CHAT_RULES && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("能力表达铁律"))) {
     let lastSys = -1;
     for (let i = 0; i < messages.length; i++) if (messages[i] && messages[i].role === "system") lastSys = i;
@@ -2965,6 +2968,11 @@ async function handleChat(req, res) {
         { model: tier.model, tier: tier.name, promptTokens: pt, completionTokens: ct, estimated: !hasUsage });
     } catch { /* 记账失败不影响本次返回 */ }
     if (MODEL_MASK && data && typeof data.model === "string") data.model = MODEL_MASK;   // P0-38 模型名脱敏
+    try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary); }
+    catch (e) {
+      logSafe({ tag: "image_tool_arguments_invalid", requestId: currentRequestId(), stage: "non_stream" });
+      return sendError(res, 502, "UPSTREAM_ERROR", "这次作图参数没有整理完整，请再试一次。");
+    }
     return sendJson(res, 200, data);
   }
 
@@ -2982,6 +2990,7 @@ async function handleChat(req, res) {
   let textIn = "";
   let aborted = false;
   let streamCompleted = false;   // 正常读完上游流（区别于客户端中断）
+  const toolGuard = new ToolCallStreamGuard(imageUserText, observeImageBoundary);
 
   req.on("close", () => { aborted = true; });
 
@@ -2997,7 +3006,7 @@ async function handleChat(req, res) {
       buffered = lines.pop() || "";
       let outChunk = "";
       for (const line of lines) {
-        outChunk += maskModel(normalizeStreamLine(line)) + "\n";
+        outChunk += maskModel(toolGuard.pushLine(normalizeStreamLine(line))) + "\n";
       }
       if (outChunk) res.write(outChunk);
       for (const line of lines) {
@@ -3014,9 +3023,14 @@ async function handleChat(req, res) {
       }
       if (aborted) break;
     }
-    if (!aborted) streamCompleted = true;   // 上游流正常读完
+    if (!aborted) {
+      if (buffered.trim()) res.write(maskModel(toolGuard.pushLine(normalizeStreamLine(buffered))) + "\n\n");
+      toolGuard.end();
+      streamCompleted = true;
+    }
   } catch (e) {
-    // 客户端断开或上游中断，仍按已产生内容记账
+    logSafe({ tag: "chat_stream_incomplete", requestId: currentRequestId(), code: "STREAM_OR_TOOL_ARGUMENTS_INCOMPLETE" });
+    if (!aborted) res.write("data: " + JSON.stringify({ error: { code: "UPSTREAM_ERROR", message: "这次回复没有接收完整，请再试一次。" } }) + "\n\n");
   } finally {
     try { res.end(); } catch { /* ignore */ }
   }
