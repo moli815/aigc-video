@@ -74,11 +74,11 @@ struct HostedLoginView: View {
                         field(icon: "person", placeholder: "登录账号", text: $username, secure: false, tag: .user)
                         field(icon: "lock", placeholder: "登录密码", text: $password, secure: true, tag: .pass)
 
-                        if let errorText {
+                        if let shownError = errorText ?? account.lastErrorMessage {
                             HStack(alignment: .top, spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.caption)
-                                Text(errorText)
+                                Text(shownError)
                                     .font(.footnote)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,6 +180,7 @@ struct HostedLoginView: View {
         guard !busy else { return }
         busy = true
         errorText = nil
+        account.lastErrorMessage = nil
         do {
             try await account.login(username: username, password: password)
             // 登录成功后重新读取凭据，根视图会自动切换到主界面

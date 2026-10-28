@@ -45,6 +45,7 @@ const tcb = require("@cloudbase/node-sdk");
 const { computeTiers, applyTiersInto } = require("./tiers");
 const { publicError } = require("./error-catalog");
 const { createEventService } = require("./domains/events");
+const { membershipExpired } = require("./domains/member-access");
 const { createAssetStore } = require("./shared/asset-store");
 const { createSyncService } = require("./domains/sync-v2");
 const { providerPromptOptions } = require("./shared/image-policy");
@@ -162,6 +163,9 @@ const RUNTIME_SPECS = {
   APP_LOGO_CUTOUT_MAX_EDGE: { type: "num", label: "Logo本机处理长边（App安全范围256–2048）", def: () => 2048 },
   APP_GENERATED_PREVIEW_ENABLED: { type: "str", label: "生成图编辑单张预览开关（1=开/0=关）", def: () => "1" },
   APP_GENERATED_PREVIEW_EDGE: { type: "num", label: "编辑预览长边（App安全范围256–1024）", def: () => 1024 },
+  APP_IMAGE_WAIT_PARTICLES: { type: "str", label: "生图C版粒子等待（1=开/0=仅文案）", def: () => "1" },
+  APP_IMAGE_WAIT_PARTICLE_COUNT: { type: "num", label: "等待粒子数量（App限制60–240）", def: () => 200 },
+  APP_IMAGE_WAIT_CYCLE: { type: "num", label: "等待聚散周期秒数（App限制3–12）", def: () => 5.8 },
   // P0-70 生图动效文案（云端可配）：App 端"正在绘制/精修中"等提示语，改文案不出包
   IMGPROG_STAGE1:     { type: "str", label: "生图动效·阶段1文案（0~15秒）", def: () => process.env.IMGPROG_STAGE1 || "正在绘制中..." },
   IMGPROG_STAGE2:     { type: "str", label: "生图动效·阶段2文案（15~45秒）", def: () => process.env.IMGPROG_STAGE2 || "正在绘制中..." },
@@ -914,7 +918,7 @@ async function requireMember(req, res) {
       sendError(res, 401, "SESSION_REPLACED", "账号已在其他设备登录，当前设备已退出");
       return null;
     }
-    if (acc.expiresAt && new Date(acc.expiresAt).getTime() < Date.now()) {
+    if (membershipExpired(acc.expiresAt)) {
       sendError(res, 403, "MEMBERSHIP_EXPIRED", "会员已到期，请联系续费");
       return null;
     }
@@ -1410,7 +1414,7 @@ async function handleMemberLogin(req, res) {
   if (account.status === "suspended") {
     return sendError(res, 403, "ACCOUNT_SUSPENDED", "该账号已停用，请联系客服");
   }
-  if (!account.expiresAt || new Date(account.expiresAt).getTime() < nowMs()) {
+  if (membershipExpired(account.expiresAt, nowMs())) {
     return sendError(res, 403, "MEMBERSHIP_EXPIRED", "会员已到期，请联系续费");
   }
 
@@ -2622,7 +2626,7 @@ async function handleChangePassword(req, res) {
 
 function precheckMember(account) {
   if (account.status !== "active") return { code: 403, error: "ACCOUNT_SUSPENDED", message: "该账号已停用，请联系客服" };
-  if (!account.expiresAt || new Date(account.expiresAt).getTime() < nowMs()) {
+  if (membershipExpired(account.expiresAt, nowMs())) {
     return { code: 403, error: "MEMBERSHIP_EXPIRED", message: "会员已到期，请联系续费" };
   }
   const blocked = limitBlocked(account);

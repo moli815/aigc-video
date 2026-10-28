@@ -90,6 +90,10 @@ enum FriendlyError {
     }
 
     static func message(for error: Error, scene: Scene = .generic) -> String {
+        // Structured business failures already carry server-filtered public copy.
+        if let envelope = (error as? APIErrorCarrying)?.envelope {
+            return envelope.message
+        }
         // 第一层：网络类错误按 URLError 细分，给最贴切的行动建议
         if let urlError = error as? URLError {
             switch urlError.code {

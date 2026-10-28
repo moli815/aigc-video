@@ -612,12 +612,14 @@ final class HostedAccount: ObservableObject {
             let message = json["message"] as? String
             // 会员 token 失效：直接清空登录态，UI 会回到登录页
             // 但仅在发起请求的账号仍当前账号时才执行登出，避免旧请求登出新账号
-            if http.statusCode == 401, authorized, startGeneration == sessionGeneration {
+            if authorized, startGeneration == sessionGeneration,
+               http.statusCode == 401 || ["MEMBERSHIP_EXPIRED", "ACCOUNT_SUSPENDED"].contains(code) {
                 // P0-15 单设备：区分"被其他设备顶下线"与普通过期，给出明确提示
+                lastErrorMessage = message ?? "登录状态已失效，请重新登录"
+                await forceLogout()
                 if code == "SESSION_REPLACED" {
                     sessionReplacedNotice = message ?? "账号已在其他设备登录，当前设备已退出"
                 }
-                await forceLogout()
             }
             throw HostedError.server(code: code, status: http.statusCode, message: message)
         }

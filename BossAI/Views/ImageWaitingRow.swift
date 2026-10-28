@@ -1,76 +1,73 @@
 import SwiftUI
 
-// ============================================================================
-// ImageWaitingRow.swift —— 生图等待占位（2026-10-25 重做，ChatGPT 风格）
-//
-// 旧版是 Canvas + TimelineView 的粒子聚合动画：96pt 画布、30fps 重绘、
-// 三行阶段清单 + 进度条 + "约 20 秒" 预估。问题很实在：
-//   · 视觉存在感太强，抢内容；
-//   · 撑大消息气泡；
-//   · 30fps 持续画布在长列表/低电量下纯属浪费；
-//   · 三行"规划画面 ✓ / 生成底图 / 排版文字"其实是**我们的施工进度**，不是用户关心的东西。
-//
-// 现在的做法（克制版）：
-//   · 一行：三个 4pt 圆点呼吸 + 一句状态文案（文案来自 ImageTaskStatus，全项目唯一来源）；
-//   · 没有任何画布/时间轴：动画走 SwiftUI 的 opacity 插值，GPU 合成，列表里不重绘；
-//   · 高度约 22pt，宽度上限 220pt，不撑气泡；
-//   · Reduce Motion 或低电量时**自动变静态点**（不闪、不呼吸）。
-//
-// 规矩：这个视图只接受 ImageWaitState，不接受自由文案。
-// 想要新文案就改 ImageTaskStatus，不要在调用点拼字符串。
-// ============================================================================
-
+/// C: silver-blue particles gather, rest, then unfold. Status remains task-driven.
 struct ImageWaitingRow: View {
     let state: ImageWaitState
-
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var visible = false
+    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    @State private var started = Date()
 
-    /// 低电量模式下不做持续动画（省电，也避免用户觉得"页面在动"）
-    private var isStill: Bool {
-        reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            BreathingDots(isStill: isStill)
-            Text(state.text)
-                .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 3)
-        .frame(maxWidth: 220, alignment: .leading)   // 紧凑：不随气泡拉伸
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(state.text)
-    }
-}
-
-/// 三个点的呼吸：相位差 0.15s，幅度很小（0.3 → 0.75 透明度）。
-/// 不做缩放，避免"跳"；静态模式下三个点亮度一致。
-private struct BreathingDots: View {
-    let isStill: Bool
-    @State private var on = false
+    private var enabled: Bool { HostedAccount.behaviorBool("imageWaitParticles", default: true) }
+    private var isStill: Bool { reduceMotion || lowPower }
+    private var particleCount: Int { min(240, max(60, HostedAccount.behaviorInt("imageWaitParticleCount", default: 200))) }
+    private var cycle: Double { HostedAccount.behaviorDouble("imageWaitCycle", default: 5.8) }
 
     var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(Color.secondary)
-                    .frame(width: 4, height: 4)
-                    .opacity(opacity(for: index))
-                    .animation(isStill ? nil
-                                       : .easeInOut(duration: 0.9)
-                                            .repeatForever(autoreverses: true)
-                                            .delay(Double(index) * 0.15),
-                               value: on)
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkle").font(.system(size: 12))
+                Text(state.text).font(.system(size: 13))
+            }
+            .foregroundStyle(.secondary)
+            if enabled {
+                TimelineView(.animation(minimumInterval: 1.0 / 30,
+                                        paused: isStill || !visible || scenePhase != .active)) { timeline in
+                    Canvas { context, size in
+                        let elapsed = timeline.date.timeIntervalSince(started)
+                        let center = CGPoint(x: size.width * 0.5, y: size.height * 0.51)
+                        let glow = Path(ellipseIn: CGRect(x: center.x - 90, y: center.y - 90,
+                                                         width: 180, height: 180))
+                        context.fill(glow, with: .radialGradient(
+                            Gradient(colors: [Color(red: 0.60, green: 0.71, blue: 0.88).opacity(0.19), .clear]),
+                            center: center, startRadius: 0, endRadius: 90))
+                        let palette: [Color] = colorScheme == .dark
+                            ? [Color(red: 0.80, green: 0.86, blue: 0.96), Color(red: 0.63, green: 0.75, blue: 0.93),
+                               Color(red: 0.84, green: 0.81, blue: 0.93), Color(red: 0.71, green: 0.81, blue: 0.92), .white]
+                            : [Color(red: 0.32, green: 0.45, blue: 0.63), Color(red: 0.37, green: 0.50, blue: 0.67),
+                               Color(red: 0.52, green: 0.46, blue: 0.65), Color(red: 0.36, green: 0.54, blue: 0.62), .gray]
+                        for index in 0..<particleCount {
+                            let p = ImageWaitMotion.frame(index: index, elapsed: elapsed,
+                                width: size.width, height: size.height, cycle: cycle, still: isStill)
+                            if !isStill {
+                                let previous = ImageWaitMotion.frame(index: index, elapsed: max(0, elapsed - 0.06),
+                                    width: size.width, height: size.height, cycle: cycle)
+                                var trail = Path()
+                                trail.move(to: CGPoint(x: previous.x, y: previous.y))
+                                trail.addLine(to: CGPoint(x: p.x, y: p.y))
+                                context.stroke(trail, with: .color(palette[p.tint].opacity(p.opacity * 0.25)), lineWidth: 0.7)
+                            }
+                            context.fill(Path(ellipseIn: CGRect(x: p.x - p.radius, y: p.y - p.radius,
+                                                                width: p.radius * 2, height: p.radius * 2)),
+                                         with: .color(palette[p.tint].opacity(p.opacity)))
+                        }
+                    }
+                    .frame(height: 210)
+                    .background(colorScheme == .dark ? Color(red: 0.09, green: 0.10, blue: 0.13)
+                                                    : Color(red: 0.94, green: 0.95, blue: 0.97))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
             }
         }
-        .onAppear { if !isStill { on = true } }
-    }
-
-    private func opacity(for index: Int) -> Double {
-        if isStill { return 0.45 }
-        return on ? 0.75 : 0.30
+        .frame(maxWidth: 360, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state.text)
+        .onAppear { started = Date(); visible = true }
+        .onDisappear { visible = false }
+        .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+            lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        }
     }
 }

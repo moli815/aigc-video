@@ -614,8 +614,15 @@ async function quotaExhausted(req) {
     const pct = month && month.remainingPct;
     const usedCny = j && j.usage && j.usage.pool && j.usage.pool.usedCny;
     const capCny = j && j.usage && j.usage.pool && j.usage.pool.capCny;
+    if (!Number.isFinite(capCny) || capCny <= 0 || !Number.isFinite(usedCny) || usedCny < 0) {
+      logStage("quota_check_bad_snapshot", {});
+      return { exhausted: true, unavailable: true, reason: "bad-quota", resetAt: null };
+    }
     // 10-24 P1-12：生效中的组图预留也要占额度，否则并发两次组图都能通过预检（超额）。
     const reserved = await activeReservedCny(authSubOf(req));
+    if (!Number.isFinite(reserved) || reserved < 0 || !Number.isFinite(pct)) {
+      return { exhausted: true, unavailable: true, reason: "bad-quota", resetAt: null };
+    }
     if (month && month.enabled && typeof pct === "number" && pct <= 0) {
       return { exhausted: true, resetAt: month.resetAt || null, usedCny, capCny, reservedCny: reserved };
     }
@@ -627,6 +634,9 @@ async function quotaExhausted(req) {
     const remainingCny = (typeof capCny === "number" && typeof usedCny === "number")
       ? Number((capCny - usedCny - reserved).toFixed(4))
       : undefined;
+    if (remainingCny <= 0) {
+      return { exhausted: true, resetAt: (month && month.resetAt) || null, usedCny, capCny, reservedCny: reserved };
+    }
     return { exhausted: false, remainingPct: pct, usedCny, capCny, reservedCny: reserved, remainingCny };
   } catch (e) {
     // 超时 / 网络异常：无法确认授权与额度 → 拒绝，避免成本敞口

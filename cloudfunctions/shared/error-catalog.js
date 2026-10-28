@@ -101,6 +101,11 @@ const CATALOG = {
   },
 
   // ── 额度 / 计费 ──
+  POOL_EXHAUSTED: {
+    category: "billing", retryable: false,
+    message: "本月额度已用完，可以查看额度或续费后继续使用。",
+    actions: ["view_quota", "renew"],
+  },
   QUOTA_EXCEEDED: {
     category: "billing", retryable: false,
     message: "当前额度已经用完，额度重置后可以继续使用。",

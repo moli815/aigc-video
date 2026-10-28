@@ -40,6 +40,13 @@ final class ImageQualityPolicyTests: XCTestCase {
         XCTAssertFalse(ImageDesignGuidance.suggestions(for:"不要动漫，要水墨").contains{$0.id=="anime-story"})
     }
     func testLogoReplacementCannotFallThroughToGenerativeRedrawing() {
+        for request in ["把海报左上角旧Logo换成我上传的原素材", "将标志替换为这张原图", "Please replace the logo with the uploaded original"] {
+            XCTAssertTrue(ImageToolArguments.requiresOriginalAsset(request))
+            XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换标识\",\"source\":\"both\"}", toolName: "image_edit", userText: request))
+        }
+        for request in ["设计一个新Logo", "把Logo换成红色", "给这张照片换个背景"] {
+            XCTAssertFalse(ImageToolArguments.requiresOriginalAsset(request))
+        }
         XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换logo\",\"source\":\"last\"}",
             toolName:"image_edit",userText:"把你生成的海报中的logo换成我们的logo"))
         XCTAssertThrowsError(try ImageToolArguments.decode("{\"prompt\":\"替换logo\",\"source\":\"attached\"}",

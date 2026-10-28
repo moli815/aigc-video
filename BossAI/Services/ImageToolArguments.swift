@@ -16,8 +16,8 @@ enum ImageToolArguments {
               var args = value as? [String: Any] else { throw InputError.invalid("JSON") }
         let modern = toolName != "generate_image"
         let lower = userText.lowercased()
-        let exactAssetReplacement = ["换成我们的logo", "换成我们的 logo", "替换成我们的logo", "换成这个logo", "换成上传的logo", "替换为上传的", "用我们的logo"].contains { lower.contains($0) }
-        let replacingExistingAsset = exactAssetReplacement && ["换成","替换"].contains { lower.contains($0) }
+        let exactAssetReplacement = requiresOriginalAsset(userText)
+        let replacingExistingAsset = exactAssetReplacement && ["换", "替换", "replace"].contains { lower.contains($0) }
         if modern, toolName != "image_edit", replacingExistingAsset {
             throw InputError.invalid("原样替换标识请用image_edit及原素材合成，不得用普通生图重画")
         }
@@ -32,7 +32,7 @@ enum ImageToolArguments {
             guard args["source"] as? String == "both" || historicalPair,
                   let fields = args["structured"] as? [String:Any],
                   let assets = fields["preserve_assets"] as? [[String:Any]], !assets.isEmpty else {
-                throw InputError.invalid("原样替换标识需要source=both及structured.preserve_assets，不得重绘相似Logo")
+                throw InputError.invalid("原样替换上传Logo必须使用source=both、structured.preserve_assets=[{reference_index:2,kind:logo,background:auto,box:{x,y,width,height}}]；box根据底图预览估算旧Logo区域的归一化坐标，不要猜固定坐标。除Logo外保留原图：preserve_outside=true、text=[]，不要把已有标题再画一次。尚未调用作图模型，请补全参数后重新调用image_edit")
             }
         }
         if let reason = args["quality_reason"] {
@@ -84,5 +84,14 @@ enum ImageToolArguments {
             }
         }
         return args
+    }
+
+    /// Detect the asset + operation + supplied-original relationship, not a fixed phrase.
+    static func requiresOriginalAsset(_ text: String) -> Bool {
+        let value = text.lowercased().replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
+        let asset = ["logo", "标志", "标识", "商标", "二维码", "qrcode"].contains { value.contains($0) }
+        let operation = ["换", "替换", "改用", "粘贴", "贴上", "放上", "replace", "paste"].contains { value.contains($0) }
+        let original = ["上传", "我们的", "这个", "这张", "原图", "原素材", "原样", "一模一样", "uploaded", "provided", "ourlogo", "thislogo"].contains { value.contains($0) }
+        return asset && operation && original
     }
 }

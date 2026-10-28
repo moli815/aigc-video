@@ -52,6 +52,7 @@ enum ImageDesignGuidance {
     7. 将版式骨架（例如非对称编排/主视觉跨栏/上下信息带/信息图结构）、色板、表现手法、文字密度分开判断，不把行业等同于固定审美。信息多时优先完整性与可读性，不能为艺术化删掉用户文案。写给Seedream的视觉描述尽量简洁连贯，中文约300字以内为目标；用户必需原文不能为凑长度被截断，不另加一次LLM提示词改写。
     8. 原样替换上传Logo/二维码时，image_edit必须source=both（图1海报底图，图2上传原素材），structured.preserve_assets指定reference_index=2和归一化替换区域，默认preserve_outside=true。模型只清理旧区域，程序合成原素材；不能把品牌重画成相似图，也不凭文字臆造Logo。替换区域必须有依据，位置不清楚时只确认该位置。
     9. preserve_assets的Logo素材标kind=logo，默认background=auto：先在本机把背景抠成透明再贴回原图形，不让Seedream重画Logo；复杂背景自动采用可用的最佳抠图结果，不因置信度反复询问。用户明确保留底色用keep。二维码用kind=qr，保护扫码所需的浅色留白，不当Logo去底。没有可用输出的技术失败不能谎报成功。
+    原素材替换的执行契约：只在prompt里写“贴入上传Logo”不会粘贴原图，反而会触发重绘。必须实际输出structured.preserve_assets非空数组，每项含reference_index、kind、background和box四个归一化数值；用预览测量旧标识完整范围，不能输出示例坐标。其余内容不变时preserve_outside=true，structured.text=[]，不要重复叠写底图已有文字。参数校验退回时修正工具参数，不重试相同参数，不让用户重传已有素材。
     10. 为图片工具选择quality_tier和quality_reason：草稿、简单插画/图标、简单背景改色可fast；信息密集布局、人物保真、品牌精确、复杂编辑、正式终稿选high。不按“海报/名片”类别一刀切，不因故障静默降档。保留用户明确要求的高质量；不确定时选high。该选择只影响图片模型，不改变聊天模型。
     """
 }

@@ -55,11 +55,12 @@ test("IMG-02 旧占位与旧文案已清理（无 prompt 前缀、无施工进�
     "旧粒子占位组件仍在仓库里");
 });
 
-test("IMG-03 等待态只有一个轻量组件，支持 Reduce Motion，无 Canvas/TimelineView", () => {
+test("IMG-03 C版等待使用统一组件，限制帧率并支持后台/低电量/减少动态", () => {
   assert.match(CHATVIEW, /ImageWaitingRow\(state: wait\)/, "ChatView 未使用统一的轻量等待组件");
   assert.match(WAITROW, /accessibilityReduceMotion/, "未处理 Reduce Motion");
   assert.match(WAITROW, /isLowPowerModeEnabled/, "未处理低电量模式");
-  assert.doesNotMatch(WAITROW, /Canvas|TimelineView/, "等待组件里仍有画布/时间轴动画");
+  assert.match(WAITROW, /minimumInterval: 1\.0 \/ 30/);
+  assert.match(WAITROW, /paused: isStill \|\| !visible \|\| scenePhase != \.active/);
   assert.doesNotMatch(WAITROW, /repeatForever[\s\S]{0,40}TimelineView/);
   // 文案唯一来源
   assert.match(STATUS, /case \.generate:\s*return "正在生成图片"/);
