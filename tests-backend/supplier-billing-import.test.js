@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict');
-const {collect,datesOf,normalize}=require('../cloudfunctions/bf-billing/collector');
+const {collect,datesOf,normalize,createReaders,assertBillDates}=require('../cloudfunctions/bf-billing/collector');
 function fakeDb(){const docs=new Map();const db={collection:col=>({doc:id=>({get:async()=>({data:docs.has(col+'/'+id)?[docs.get(col+'/'+id)]:[]}),set:async data=>docs.set(col+'/'+id,data)})})};db.runTransaction=fn=>fn(db);return{db,docs};}
 test('unconfigured finance credentials produce pending status, never fake a zero bill',async()=>{
  const h=fakeDb();const r=await collect({db:h.db,readers:{}});assert.equal(r.providers.volcengine.status,'awaiting_credentials');assert.equal(r.providers['aliyun-bailian'].status,'awaiting_credentials');assert.equal(h.docs.size,1);assert.equal(r.mutatesMemberBalances,false);
@@ -21,4 +21,22 @@ test('partial pagination cannot overwrite previously complete bill',async()=>{
 });
 test('negative adjustments and original official money fields survive without leaking unrelated fields',()=>{
  const row=normalize('volcengine',{PayableAmount:'-0.08',ModelName:'m',BillingItem:'token',UnknownAmount:'0.02',SecretKey:'PRIVATE'});assert.equal(row.officialFields.PayableAmount,'-0.08');assert.equal(row.officialFields.UnknownAmount,'0.02');assert.ok(!JSON.stringify(row).includes('PRIVATE'));
+});
+test('official Volcengine signer compiles a signed HTTPS bill request without exposing keys',async()=>{
+ let captured;
+   const readers=createReaders({VOLC_BILLING_ACCESS_KEY_ID:'test-id',VOLC_BILLING_ACCESS_KEY_SECRET:'test-secret'},
+     {fetch:async(url,options)=>{captured={url,options};return new Response(JSON.stringify({ResponseMetadata:{RequestId:'test-request'},Result:{List:[]}}));}});
+   const result=await readers.volcengine('2026-10-29',null);
+   const url=new URL(captured.url);assert.equal(url.protocol,'https:');assert.equal(url.hostname,'open.volcengineapi.com');
+   assert.equal(url.searchParams.get('Action'),'ListBillDetail');assert.equal(url.searchParams.get('Version'),'2022-01-01');
+   const payload=JSON.parse(captured.options.body);
+   assert.equal(payload.ExpenseDate,'2026-10-29');assert.equal(result.next,null);
+   assert.equal(payload.GroupPeriod,1);assert.equal(payload.GroupTerm,0);
+   assert.match(captured.options.headers.Authorization,/^HMAC-SHA256 Credential=test-id\//);
+   assert.ok(!JSON.stringify(captured).includes('test-secret'));
+});
+test('monthly or out-of-day bills are rejected instead of counted once per queried day',()=>{
+ assertBillDates([],'2026-10-29',row=>row.ExpenseDate);
+ assertBillDates([{ExpenseDate:'2026-10-29'}],'2026-10-29',row=>row.ExpenseDate);
+ for(const value of ['',undefined,'2026-10-28','2026-10']) assert.throws(()=>assertBillDates([{ExpenseDate:value}],'2026-10-29',row=>row.ExpenseDate),{code:'BILL_DATE_MISMATCH'});
 });

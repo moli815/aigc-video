@@ -8,21 +8,24 @@ function datesOf(now) {
 }
 function normalize(provider, row) {
   if (provider === "aliyun-bailian") return {
+    billingDate: text(row.billingDate), billPeriod: text(row.billingCycle),
     instanceId: text(row.instanceID), product: text(row.productCode), modelDescriptor: text(row.instanceSpec),
     item: text(row.billingItemCode), usage: num(row.usage), usageUnit: text(row.usageUnit), currency: text(row.currency),
     payableAmount: num(row.pretaxAmount), cashPaidAmount: num(row.cashAmount),
     resourcePackageDeduction: num(row.deductedByResourcePackage), couponDeduction: num(row.deductedByCashCoupons),
   };
   return {
+    billingDate: text(row.ExpenseDate), billPeriod: text(row.BillPeriod), billDetailId: text(row.BillDetailId),
     instanceId: text(row.InstanceNo || row.InstanceID), product: text(row.Product), item: text(row.BillingItem),
-    usage: num(row.Usage), usageUnit: text(row.UsageUnit), currency: text(row.Currency),
+    usage: num(row.Usage ?? row.Count), usageUnit: text(row.UsageUnit || row.Unit), currency: text(row.Currency),
+    payableAmount: num(row.PayableAmount), cashPaidAmount: num(row.PaidAmount),
     // No guessed monetary field names: preserve the official row for inspection.
     officialFields: Object.fromEntries(Object.entries(row).filter(([key,value]) =>
       /(amount|price|usage|quantity|count|unit|currency|bill|instance|product|model|apikey|resourcepackage|deduct|discount|coupon|split)/i.test(key)
       && ["string","number","boolean"].includes(typeof value))),
   };
 }
-function createReaders(env) {
+function createReaders(env, { fetch: transport = globalThis.fetch } = {}) {
   const readers = {};
   if (env.ALIYUN_BILLING_ACCESS_KEY_ID && env.ALIYUN_BILLING_ACCESS_KEY_SECRET) {
     const sdk = require("@alicloud/bssopenapi20171214"), { Config } = require("@alicloud/openapi-client");
@@ -36,25 +39,41 @@ function createReaders(env) {
       if (r.body?.code !== "Success") { const error = new Error("Bill read rejected"); error.code = r.body?.code || "INVALID_RESPONSE"; throw error; }
       const data = r.body?.data;
       if (!data || !Array.isArray(data.items)) throw Object.assign(new Error("Missing billing rows"),{code:"INVALID_RESPONSE"});
+      assertBillDates(data.items, day, row => row.billingDate);
       return { rows: data.items, next: data.nextToken || null, requestId: r.body.requestId || "" };
     };
   }
   if (env.VOLC_BILLING_ACCESS_KEY_ID && env.VOLC_BILLING_ACCESS_KEY_SECRET) {
-    const { Service } = require("@volcengine/openapi");
-    const service = new Service({ serviceName: "billing", region: "cn-north-1", protocol: "https", host: "open.volcengineapi.com",
-      defaultVersion: "2022-01-01", accessKeyId: env.VOLC_BILLING_ACCESS_KEY_ID,
-      secretKey: env.VOLC_BILLING_ACCESS_KEY_SECRET, sessionToken: env.VOLC_BILLING_SECURITY_TOKEN || undefined });
-    const query = service.createJSONAPI("ListBillDetail");
+    const { Signer } = require("@volcengine/openapi");
     readers.volcengine = async (day, cursor) => {
-      const offset = Number(cursor || 0), r = await query({ BillPeriod: day.slice(0,7), ExpenseDate: day,
-        Limit: 100, Offset: offset, NeedRecordNum: 1, IgnoreZero: 0 }, { timeout: 20000 });
+      const offset = Number(cursor || 0);
+      const url = new URL("https://open.volcengineapi.com/");
+      url.search = new URLSearchParams({Action:"ListBillDetail",Version:"2022-01-01"}).toString();
+      const request = { region:"cn-north-1", method:"POST", pathname:"/", params:Object.fromEntries(url.searchParams),
+        headers:{"Content-Type":"application/json",Host:url.hostname},
+        body:JSON.stringify({BillPeriod:day.slice(0,7),ExpenseDate:day,GroupTerm:0,GroupPeriod:1,
+          Limit:100,Offset:offset,NeedRecordNum:1,IgnoreZero:0}) };
+      // Keep the vendor's official signer; use the same native HTTPS transport as
+      // our working model integrations, without the SDK's Axios/proxy defaults.
+      new Signer(request,"billing").addAuthorization({accessKeyId:env.VOLC_BILLING_ACCESS_KEY_ID,
+        secretKey:env.VOLC_BILLING_ACCESS_KEY_SECRET,sessionToken:env.VOLC_BILLING_SECURITY_TOKEN || undefined});
+      const response = await transport(url,{method:request.method,headers:request.headers,body:request.body,
+        signal:AbortSignal.timeout(20000)});
+      const r = await response.json();
       if (r.ResponseMetadata?.Error) throw Object.assign(new Error("Bill read rejected"),{code:r.ResponseMetadata.Error.Code || "ACCESS_ERROR"});
+      if (!response.ok) throw Object.assign(new Error("Bill HTTP error"),{code:"BILL_HTTP_"+response.status});
       if (!Array.isArray(r.Result?.List)) throw Object.assign(new Error("Missing billing rows"),{code:"INVALID_RESPONSE"});
       const rows = r.Result.List;
+      assertBillDates(rows, day, row => row.ExpenseDate);
       return { rows, next: rows.length === 100 ? offset+100 : null, requestId: r.ResponseMetadata.RequestId || "" };
     };
   }
   return readers;
+}
+function assertBillDates(rows, day, dateOf) {
+  if (rows.some(row => String(dateOf(row) || "").slice(0,10) !== day)) {
+    throw Object.assign(new Error("Provider returned bills outside requested day"), {code:"BILL_DATE_MISMATCH"});
+  }
 }
 async function collect({ db, env = process.env, now = Date.now(), readers = createReaders(env), log = () => {} }) {
   const deadline = Date.now() + 150000;
@@ -95,4 +114,4 @@ async function collect({ db, env = process.env, now = Date.now(), readers = crea
   await db.collection("bf_config").doc("billing_import_status").set(run);
   return run;
 }
-module.exports = { collect, createReaders, normalize, datesOf, COLLECTION };
+module.exports = { collect, createReaders, normalize, datesOf, assertBillDates, COLLECTION };
