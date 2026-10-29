@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>中防AI 管理台</title>
 <link rel="stylesheet" href="admin-readability-20261029.css">
-<link rel="stylesheet" href="admin-console-20261029.css">
+<link rel="stylesheet" href="admin-console-20261029.css?v=2">
 </head>
 <body>
 <a href="#tab8" class="skip-link" onclick="tab(8);document.getElementById('tab8').focus()">跳到工作区</a>
@@ -18,7 +18,7 @@
         <span class="logo">中防AI <i>管理台</i></span>
         <span class="admin-subtitle">客户、AI服务与账单</span><span class="sp"></span>
         <details class="reading-panel"><summary>阅读设置</summary><div class="reading-options">
-          <label>字号<select id="readingSize" onchange="saveReadingPreferences()"><option value="18">标准 · 18</option><option value="20">大字 · 20</option><option value="22">更大 · 22</option></select></label>
+          <label>字号<select id="readingSize" onchange="saveReadingPreferences()"><option value="16">标准 · 16</option><option value="18">大字 · 18</option><option value="20">更大 · 20</option></select></label>
           <label>行距<select id="readingSpacing" onchange="saveReadingPreferences()"><option value="normal">舒适</option><option value="relaxed">更宽松</option></select></label>
           <p>只调整本浏览器的阅读方式。</p>
         </div></details>
@@ -40,7 +40,7 @@
       </nav>
 
       <main class="pbody hide" id="tab8" tabindex="-1" aria-label="工作台">
-        <div class="blk"><h3>今天需要处理什么</h3><p>先看客户与支出，再进入需要调整的功能。</p><div id="overviewData"></div></div>
+        <div class="blk overview-block"><div class="overview-banner"><div><div class="eyebrow">OPERATIONS / 运营概览</div><h3>工作台</h3><p>客户状态、额度与支出，一眼掌握。</p></div><button onclick="renderAdminOverview()" class="refresh-overview">刷新概览</button></div><div id="overviewData"></div></div>
         <div class="blk"><h3>常用操作</h3><div class="quick-grid">
           <button class="quick-action" onclick="tab(1)"><strong>管理客户</strong><span>开通、续费、额度与到期状态</span></button>
           <button class="quick-action" onclick="tab(4)"><strong>调整AI服务</strong><span>图片质量分流、模型与服务开关</span></button>
@@ -255,7 +255,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="admin-finance-console-20261029.js"></script>
-<script src="admin-console-20261029.js"></script>
+<script src="admin-console-20261029.js?v=2"></script>
 <script>
 // 10-24 配置治理（审计 P0-1 / P1-9）：API 地址不再只靠一处硬编码。
 // 解析优先级：① 部署时注入的 window.BOSSAI_API_BASE → ② 与本页同域的 /api（页面托管在同一网关时）
@@ -415,21 +415,7 @@ function loadAccounts(){
       var dl=a.daysLeft==null?'—':(a.daysLeft>=0?'还剩 '+a.daysLeft+' 天':'已过期 '+(-a.daysLeft)+' 天');
       var tierKey=TIER_NAME[a.tier]?a.tier:'plus';
       var tierCell='<span class="st '+(tierKey==='ultra'?'st-warn':'st-ok')+'">'+TIER_NAME[tierKey]+'</span>';
-      var pct=(a.poolPct==null)?null:a.poolPct;
-      // P0-25 修正：月池大时一位小数被取整成 100% 会掩盖真实用量 → 用 quota 精确值显示 99.6% 这种形态
-      var pctCell;
-      if(a.quota&&a.quota.monthCap){
-        var mp=(1-a.quota.monthUsed/a.quota.monthCap)*100;
-        var mpTxt=(mp>=99.95?100:mp.toFixed(1));
-        var mcol=(mp<=20)?'var(--rd)':(mp<=50?'#79521c':'var(--t1)');
-        pctCell='<b style="color:'+mcol+'">'+mpTxt+'%</b>'
-          +'<div style="font-size:11px;color:var(--t3)">已用 ¥'+(Math.round(a.quota.monthUsed*100)/100)+' / ¥'+a.quota.monthCap+'</div>'
-          +(a.poolBand==='limited'?' <span class="st st-bad">已用完</span>':a.poolBand==='notice'?' <span class="st st-warn">偏高</span>':'');
-      } else {
-        pctCell=pct==null?'—':('<b style="color:'+(pct<=20?'var(--rd)':'var(--t1)')+'">'+pct+'%</b>'
-          +(a.poolBand==='limited'?' <span class="st st-bad">已用完</span>'
-            :a.poolBand==='notice'?' <span class="st st-warn">偏高</span>':''));
-      }
+      var pctCell=quotaVisual(a);
       // P0-25 日/周用量两行小字（带小.cap），超过 80% 黄字、100% 红字
       function dw(used,cap){ if(cap==null) return '—';
         var p=cap>0?used/cap:0;
@@ -440,8 +426,8 @@ function loadAccounts(){
           +'<br>周 '+dw(a.quota.weekUsed,a.quota.weekCap)+'</div>'
         : '—';
       var info=(a.realName||a.phone)?'<br><small style="color:var(--t3)">'+esc(a.realName||'')+(a.realName&&a.phone?' · ':'')+esc(a.phone||'')+'</small>':'';
-      h+='<tr><td><b>'+esc(a.displayName)+'</b><div class="mono">'+esc(a.username)+'</div>'+info+'</td><td>'+tierCell+'<br>'+st+'</td>'
-        +'<td style="color:var(--t2)">'+dl+'</td>'
+      h+='<tr><td><b>'+esc(a.displayName)+'</b><div class="mono">'+esc(a.username)+'</div>'+info+'</td><td>'+'<div class="member-state">'+tierCell+st+'</div></td>'
+        +'<td class="expiry-cell '+(a.daysLeft!=null&&a.daysLeft<=7?'expiry-soon':'')+'">'+dl+'</td>'
         +'<td>'+pctCell+'<details><summary class="quiet">日 / 周用量</summary>'+dwCell+'</details></td>'
         +'<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
         +'<button class="o-main" data-act="edit" data-id="'+esc(a.id)+'">编辑</button>'
