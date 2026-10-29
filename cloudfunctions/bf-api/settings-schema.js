@@ -114,7 +114,7 @@ const META = {
     enumLabels: { auto: "自动（按任务）", flash_only: "全部快速档", pro_only: "全部高质量档" },
     description: "运维止损用。flash_only 可在高质量模型故障时立刻把全站切到快速档；pro_only 用于临时提质量对比。" },
   IMAGE_AUTO_POLICY: { title: "自动作图 · 升级策略 JSON", widget: "json", risk: "medium", maxLength: 6000,
-    description: "auto 默认 Flash。可配置 defaultTier、honorClientHigh、proTaskKinds、proReasons、minReferencesForPro、nativeTextCharsForPro、retryQualityToPro、capabilityFallback、fallbackCodes。客户端旧 high 推荐默认不强制升级；超时或不确定结果不会重复生图。" },
+    description: "auto 普通任务用 Flash，高质量/复杂任务升 Pro，不强凑比例。honorUserQuality 尊重用户明确高质量要求；proPromptTerms 为缺少用户意图标记的旧请求提供关键词兜底。另可配置 defaultTier、honorClientHigh、proTaskKinds、proReasons（不要求有参考图）、minReferencesForPro、nativeTextCharsForPro、retryQualityToPro、capabilityFallback、fallbackCodes。旧客户端默认 high 不等于用户高质量要求；不因网络超时盲目重画。" },
   IMAGE_LEGACY_BRAND_POLICY: { title: "旧包 Logo 规划 · 启用范围", widget: "json", risk: "medium", maxLength: 6000,
     description: '全员启用：{"enabled":true,"audience":"all"}；指定账号：{"enabled":true,"accountIds":["内部ID"]}；关闭：{"enabled":false}。仅对手机已声明兼容工具的标识任务生效，原素材仍在手机合成。约30秒更新，不改变正在执行的任务。' },
   IMAGE_FAST_MODE: { title: "生图提速模式", widget: "toggle", risk: "medium",
