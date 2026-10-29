@@ -97,7 +97,7 @@ test("aggregation counts mixed timestamp types and reports revenue", () => {
   ];
   const report = aggregateCostRows(rows, { startMs: now - 86400e3, endMs: now + 1000 });
   assert.equal(report.ledgerEvents, 3, "Date 与数字两种 ts 都必须计入");
-  assert.equal(report.totalCny, 0.62, "按分聚合：0.0158→2 分、0.6→60 分");
+  assert.equal(report.totalCny, 0.6158, "保留逐笔 Token 小额费用，不能把 0.0158 预先舍入为 0.02");
   assert.equal(report.imageCount, 1);
   assert.equal(report.revenueCny, 1.2, "售价缺失的行不进收入统计");
   assert.equal(report.marginCny, 0.6);

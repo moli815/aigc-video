@@ -21,6 +21,13 @@ const { aggregateCostRows, tsMsOf } = require(path.join(
 const T0 = Date.parse("2026-10-20T00:00:00+08:00");
 const WINDOW = { startMs: T0, endMs: T0 + 3 * 86400000 }; // 10/20 ~ 10/22（不含 10/23）
 
+test("micro-token costs are summed before display rounding instead of discarded per call", () => {
+  const rows = Array.from({length:500},(_,i)=>({_id:String(i),requestId:String(i),kind:"chat",costCny:0.0000035,priceCny:0.000007,ts:new Date(T0+1)}));
+  const r=aggregateCostRows(rows,WINDOW);
+  assert.equal(r.totalCny,0.00175); assert.equal(r.revenueCny,0.0035); assert.equal(r.marginCny,0.00175);
+  assert.equal(r.avgCnyPerRequest,0.0000035); assert.equal(r.zeroCostEvents,0); assert.equal(r.byKind.chat,0.00175);
+});
+
 // 说明：usageEventId 默认跟随 _id —— 每行代表一个独立账务事件。
 // 只有显式传 usageEventId 时才会触发去重（COST-02 用它构造重复事件）。
 function row(over) {
