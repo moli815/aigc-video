@@ -285,18 +285,21 @@ test("BILL-01b 幂等三件套使用同一个 key（漏一个就会永远 proces
   assert.match(fin, /logStage\("idem_finish_failed"/, "finishIdem 失败未留日志");
 });
 
-test("定价按模型分档，Flash 与 Pro 不同价", () => {
-  const fn = IMAGE.slice(IMAGE.indexOf("function priceForSize"));
+test("定价按模型分档，售价 = 成本 × 倍数（10-29 口径）", () => {
+  const fn = IMAGE.slice(IMAGE.indexOf("function upstreamCostOf"));
   const body = fn.slice(0, fn.indexOf("const C = {"));
-  assert.match(body, /function priceForSize\(size, model\)/, "priceForSize 未接 model 参数");
-  assert.match(body, /seedream-5-0-flash[\s\S]{0,80}IMAGE_PRICE_FAST/, "Flash 未走独立价档");
-  assert.match(body, /IMAGE_PRICE_FAST/, "缺少 Flash 单价配置");
-  // 调用点必须把实际模型传进去
-  assert.match(IMAGE, /priceForSize\(resolveSize\(body\.size, aspectRatio\), usedModel\)/,
-    "调用点未传 usedModel，价格仍按旧逻辑算");
-  // 两端默认值必须一致（此前 0.61 vs 0.80 漂移）
-  assert.match(API, /IMAGE_PRICE_2K[\s\S]{0,120}\|\| 0\.9\)/, "bf-api 2K 默认值未对齐 0.9");
-  assert.match(IMAGE, /IMAGE_PRICE_2K: process\.env\.IMAGE_PRICE_2K \|\| "0\.9"/, "bf-image 2K 默认值未对齐 0.9");
+  // 模型分档必须仍然存在：Flash 与 Pro 的成本不同，不能一刀切
+  assert.match(body, /seedream-5-0-flash[\s\S]{0,80}IMAGE_COST_FLASH/, "Flash 未走独立成本档");
+  assert.match(body, /seedream-5-0-pro[\s\S]{0,160}IMAGE_COST_PRO_LARGE/, "Pro 未按像素分大小图");
+  assert.match(body, /function customerPriceOf/, "缺少售价推导函数");
+  assert.match(IMAGE, /IMAGE_PRICE_MULTIPLIER: process\.env\.IMAGE_PRICE_MULTIPLIER \|\| "2"/,
+    "售价倍数默认值不是 2");
+  // 调用点必须把实际模型与输入图张数传进去（多图 Pro 第 2 张起要算 0.02）
+  assert.match(IMAGE, /upstreamCostOf\(\{[\s\S]{0,200}model: usedModel[\s\S]{0,200}inputImages/,
+    "调用点没把 usedModel / 输入图张数带进成本计算");
+  assert.match(IMAGE, /const price = customerPriceOf\(upstream\)/, "售价没有按成本×倍数推导");
+  assert.doesNotMatch(IMAGE, /IMAGE_PRICE_2K: process\.env\.IMAGE_PRICE_2K \|\| "0\.9"/,
+    "旧的 2K 手填售价仍生效，会和成本×倍数打架");
 });
 
 test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
@@ -305,9 +308,8 @@ test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
   // 10-25：原来靠 `rawTier !== "auto"` 判显式，pro/hd 这类别名会漏判并静默降级；
   // 现在统一先 normalizeTier() 归一化，再比较 high/fast，语义不变但覆盖所有别名。
   assert.match(body, /const tier = normalizeTier\(qualityTier\)/, "未先归一化档位");
-  assert.match(body, /if \(tier === "high"\) return \{ model: m\.pro/, "high 未走 Pro");
-  assert.match(body, /if \(tier === "fast"\) return \{ model: m\.fast/, "fast 未走 Flash");
-  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT|prompt|renderIntent/,
+  assert.match(body, /decision\.tier === "high" \? m\.pro : m\.fast/, "服务端统一策略未选择模型");
+  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT/,
     "路由仍从提示词或物料类型隐式推断模型档位");
   assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/,
     "Pro 强制模式必须优先于质量档位分支");

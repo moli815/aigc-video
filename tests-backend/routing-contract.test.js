@@ -49,7 +49,7 @@ test("ROUTE-05 路由按任务与质量档分支，且能力优先", () => {
   const body = fn.slice(0, fn.indexOf("\nlet _rtLoadedAt", 10));
   assert.match(body, /kind === "series"[\s\S]{0,220}series-unsupported/, "组图无模型时未明确拒绝");
   assert.match(body, /kind === "decompose"[\s\S]{0,200}layers/, "图层任务未按能力选择");
-  assert.match(body, /tier === "high"[\s\S]{0,80}m\.pro/, "高质量档未路由到 Pro");
+  assert.match(body, /decision\.tier === "high"[\s\S]{0,80}m\.pro/, "服务端策略高质量档未路由到 Pro");
   assert.match(body, /mode === "flash_only"[\s\S]{0,80}m\.fast/, "缺少运维强制快速档");
   assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/, "缺少运维强制高质量档");
 });
@@ -64,8 +64,9 @@ test("ROUTE-06 能力不支持时前置拦截，不发上游", () => {
 test("ROUTE-07 记账与响应记录真实模型", () => {
   assert.match(IMAGE, /const usedModel = String\(out\.model \|\| RT\.IMAGE_MODEL \|\| ""\)/,
     "未记录实际使用模型");
-  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel\)/,
-    "台账仍写默认模型");
+  // 10-29：台账除了售价还要记上游成本，签名多了 { upstreamCostCny }
+  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel, \{ upstreamCostCny: upstream \}\)/,
+    "台账仍写默认模型，或没把上游成本落账");
   assert.match(IMAGE, /model: usedModel, route_reason: out\.routeReason/,
     "响应未回传模型与路由原因");
 });
