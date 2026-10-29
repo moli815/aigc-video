@@ -5,8 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>中防AI 管理台</title>
 <link rel="stylesheet" href="admin-readability-20261029.css">
+<link rel="stylesheet" href="admin-console-20261029.css">
 </head>
 <body>
+<a href="#tab8" class="skip-link" onclick="tab(8);document.getElementById('tab8').focus()">跳到工作区</a>
 
 <!-- 登录已由入口页 index.html 统一完成，此处只承载管理员界面 -->
 <div id="app">
@@ -14,19 +16,38 @@
     <div class="shell glass">
       <div class="bar">
         <span class="logo">中防AI <i>管理台</i></span>
-        <span class="admin-subtitle">客户 · 服务 · 财务，一处管理</span><span class="sp"></span>
+        <span class="admin-subtitle">客户、AI服务与账单</span><span class="sp"></span>
+        <details class="reading-panel"><summary>阅读设置</summary><div class="reading-options">
+          <label>字号<select id="readingSize" onchange="saveReadingPreferences()"><option value="18">标准 · 18</option><option value="20">大字 · 20</option><option value="22">更大 · 22</option></select></label>
+          <label>行距<select id="readingSpacing" onchange="saveReadingPreferences()"><option value="normal">舒适</option><option value="relaxed">更宽松</option></select></label>
+          <p>只调整本浏览器的阅读方式。</p>
+        </div></details>
         <button onclick="openM('mLogout')">退出</button>
       </div>
-      <div class="tabs">
-        <button class="on" id="tabBtn0" onclick="tab(0)">待审核<span class="num hide" id="pendNum">0</span></button>
-        <button id="tabBtn1" onclick="tab(1)">会员管理</button>
-        <button id="tabBtn2" onclick="tab(2)">发放记录</button>
-        <button id="tabBtn3" onclick="tab(3)">员工管理</button>
-        <button id="tabBtn4" onclick="tab(4)">系统设置</button>
-        <button id="tabBtn5" onclick="tab(5)">专家配置</button>
-        <button id="tabBtn6" onclick="tab(6)">运营配置</button>
-        <button id="tabBtn7" onclick="tab(7)">账单与成本</button>
-      </div>
+      <nav class="tabs" aria-label="管理员导航">
+        <div class="nav-label">日常管理</div>
+        <button id="tabBtn8" onclick="tab(8)">工作台</button>
+        <button id="tabBtn1" onclick="tab(1)">客户与会员</button>
+        <button id="tabBtn7" onclick="tab(7)">账单与用量</button>
+        <button id="tabBtn4" onclick="tab(4)">AI与出图</button>
+        <button id="tabBtn6" onclick="tab(6)">套餐与收款</button>
+        <details class="nav-extra" id="moreNavigation"><summary>更多管理</summary>
+          <button id="tabBtn0" onclick="tab(0)">开通审核<span class="num hide" id="pendNum">0</span></button>
+          <button id="tabBtn2" onclick="tab(2)">发放记录</button>
+          <button id="tabBtn3" onclick="tab(3)">员工账号</button>
+          <button id="tabBtn5" onclick="tab(5)">专家与开场白</button>
+        </details>
+      </nav>
+
+      <main class="pbody hide" id="tab8" tabindex="-1" aria-label="工作台">
+        <div class="blk"><h3>今天需要处理什么</h3><p>先看客户与支出，再进入需要调整的功能。</p><div id="overviewData"></div></div>
+        <div class="blk"><h3>常用操作</h3><div class="quick-grid">
+          <button class="quick-action" onclick="tab(1)"><strong>管理客户</strong><span>开通、续费、额度与到期状态</span></button>
+          <button class="quick-action" onclick="tab(4)"><strong>调整AI服务</strong><span>图片质量分流、模型与服务开关</span></button>
+          <button class="quick-action" onclick="tab(7)"><strong>查看消费</strong><span>平台账单、用户用量与逐笔记录</span></button>
+          <button class="quick-action" onclick="tab(6)"><strong>调整套餐</strong><span>会员价格、额度与收款码</span></button>
+        </div></div>
+      </main>
 
       <div class="pbody" id="tab0">
         <div class="blk">
@@ -45,6 +66,8 @@
       <div class="pbody hide" id="tab1">
         <div class="blk">
           <h3>会员管理<span class="sp"></span><button class="btnNew" onclick="openNewAcc()">＋ 新建账号</button></h3>
+          <div class="client-links"><button onclick="tab(0)">处理开通与续费申请</button><button onclick="tab(2)">查看发放记录</button></div>
+          <label class="account-toolbar"><input id="accountSearch" type="search" aria-label="搜索当前客户列表" placeholder="搜索姓名、登录账号或状态" oninput="filterAccountRows()"><span class="quiet" id="accountCount">当前列表最多200人</span></label>
           <div id="accBox"><div class="empty">加载中…</div></div>
         </div>
       </div>
@@ -65,11 +88,11 @@
 
       <div class="pbody hide" id="tab4">
         <div class="blk">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
-            <input id="cfgSearch" class="mi" placeholder="搜索配置项（名称 / 键名 / 用途）" style="max-width:340px;padding:8px 12px;font-size:12.5px" oninput="renderSettings()">
-            <span style="font-size:11.5px;color:var(--t3)">只提交改动项；保存后约 30 秒全端生效</span>
-            <span id="cfgVersion" style="font-size:11.5px;color:var(--t3)"></span>
-          </div>
+          <h3>AI与出图</h3><p>常用设置放在前面。模型、记忆、额度和技术配置按用途分组。</p>
+          <div id="configViews" class="config-views" role="group" aria-label="配置分类"></div>
+          <label class="config-search">搜索所有设置<input id="cfgSearch" type="search" placeholder="例如：分流、超时、记忆、扣费" oninput="renderSettings()"></label>
+          <div class="config-status" id="configStatus" role="status"></div>
+          <p class="quiet">只保存本组修改。大部分配置约30秒生效。<span id="cfgVersion"></span></p>
           <div id="cfgSections"></div>
           <div id="cfgResult" style="margin-top:10px"></div>
           <details class="cfgwrap" style="margin-top:16px"><summary>配置变更历史（可回滚）</summary><div id="cfgHistory"></div></details>
@@ -78,7 +101,7 @@
 
       <div class="pbody hide" id="tab6">
         <div class="blk">
-          <h3>档位运营配置（价格 / 额度 / 显示 / 收款码 / 功能开关）<span class="sp"></span>
+          <h3>套餐与收款<span class="sp"></span>
             <button class="btnNew" id="tiersSave" onclick="saveTiers()">保存并生效</button></h3>
           <div style="font-size:11.5px;color:var(--t3);margin-bottom:10px">
             保存后约 30 秒全端生效（App 权益页 / 员工端开单 / 管理台同步）。"显示开关"关闭 = 客户端与员工端不再展示该档，管理台仍可手动指定。
@@ -90,7 +113,7 @@
 
       <div class="pbody hide" id="tab7">
         <div class="blk">
-          <h3>账单与成本<span class="sp"></span>
+          <h3>账单与用量<span class="sp"></span>
             <button onclick="loadCostReport(7)" id="cr7">近 7 天</button>
             <button onclick="loadCostReport(14)" id="cr14">近 14 天</button>
             <button onclick="loadCostReport(30)" id="cr30">近 30 天</button>
@@ -231,7 +254,8 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="admin-finance-20261029.js"></script>
+<script src="admin-finance-console-20261029.js"></script>
+<script src="admin-console-20261029.js"></script>
 <script>
 // 10-24 配置治理（审计 P0-1 / P1-9）：API 地址不再只靠一处硬编码。
 // 解析优先级：① 部署时注入的 window.BOSSAI_API_BASE → ② 与本页同域的 /api（页面托管在同一网关时）
@@ -245,7 +269,7 @@ var API = (function () {
   if (sameGateway) return location.origin + "/api";
   return "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
 })();
-var TOKEN = null, ME = null;
+var TOKEN = null, ME = null, MODAL_RETURN_FOCUS=null;
 var ACCOUNTS = [], PENDING = [], STAFF = [], NOTE_TARGET = null, RS_COPY = '', CUR = {};
 
 function q(id){ return document.getElementById(id); }
@@ -253,10 +277,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 function toast(m){ var t=q('toast'); t.textContent=m; t.classList.add('show');
   clearTimeout(t._t); t._t=setTimeout(function(){t.classList.remove('show');},2600); }
-function openM(id){ q('ov').classList.add('show');
-  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');}); q(id).classList.add('show'); }
-function closeM(){ q('ov').classList.remove('show');
-  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');}); }
+function openM(id){ MODAL_RETURN_FOCUS=document.activeElement;q('ov').classList.add('show');
+  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');m.setAttribute('aria-hidden','true');});
+  var m=q(id);m.classList.add('show');m.setAttribute('aria-hidden','false');m.setAttribute('role','dialog');m.setAttribute('aria-modal','true');
+  var head=m.querySelector('.mh');if(head){head.id=head.id||id+'Title';m.setAttribute('aria-labelledby',head.id);}
+  var first=m.querySelector('input:not([type=hidden]),select,textarea,button');if(first)first.focus(); }
+function closeM(){ var wasOpen=q('ov').classList.contains('show');q('ov').classList.remove('show');
+  document.querySelectorAll('.modal').forEach(function(m){m.classList.remove('show');m.setAttribute('aria-hidden','true');});
+  if(wasOpen&&MODAL_RETURN_FOCUS&&MODAL_RETURN_FOCUS.isConnected)MODAL_RETURN_FOCUS.focus(); }
 function busy(b,on,label){ if(!b) return; b.disabled=on;
   if(on){ b._t=b.innerHTML; b.innerHTML='<span class="spin"></span>'+(label||'处理中'); }
   else if(b._t){ b.innerHTML=b._t; } }
@@ -264,8 +292,10 @@ function api(path,opt){ opt=opt||{}; var h={'Content-Type':'application/json'};
   if(TOKEN) h.Authorization='Bearer '+TOKEN;
   return fetch(API+path,{method:opt.method||'GET',headers:h,body:opt.body?JSON.stringify(opt.body):undefined})
     .then(function(r){ if(r.status===401&&TOKEN) logout();
-      return r.json().catch(function(){return {};}); })
-    .then(function(j){ if(!j||j.ok===false) throw new Error((j&&j.message)||'请求失败'); return j; }); }
+      return r.json().catch(function(){return {};}).then(function(j){
+        if(!r.ok||!j||j.ok===false)throw new Error((j&&j.message)||(r.status===403?'当前账号没有此项权限':'服务暂时无法读取，请稍后再试'));
+        return j;
+      }); }); }
 function p2(n){ return n<10?'0'+n:''+n; }
 function fmtTime(v){ if(!v) return '—'; var d=new Date(v); if(isNaN(d)) return '—';
   return (d.getMonth()+1)+'-'+p2(d.getDate())+' '+p2(d.getHours())+':'+p2(d.getMinutes()); }
@@ -294,11 +324,12 @@ function logout() {
 
 /* ── 切换 tab ── */
 function tab(i){
-  for(var k=0;k<8;k++){ q('tab'+k).classList.toggle('hide',k!==i); q('tabBtn'+k).classList.toggle('on',k===i); }
-  if(i===4) loadSettings();
-  if(i===5 && !EXPLOADED) loadExperts();
-  if(i===6 && !TIERSCFG) loadTiersConfig();
-  if(i===7) loadCostReport(30);
+  if(!Number.isInteger(i)||i<0||i>8)return;
+  for(var k=0;k<9;k++){q('tab'+k).classList.toggle('hide',k!==i);q('tabBtn'+k).classList.toggle('on',k===i);if(k===i)q('tabBtn'+k).setAttribute('aria-current','page');else q('tabBtn'+k).removeAttribute('aria-current');}
+  document.body.dataset.adminTab=String(i);
+  if([0,2,3,5].indexOf(i)>=0)q('moreNavigation').open=true;
+  if(i===0)loadPending();if(i===1)loadAccounts();if(i===2)loadDeliveries();if(i===3)loadStaff();
+  if(i===4)loadSettings();if(i===5&&!EXPLOADED)loadExperts();if(i===6&&!TIERSCFG)loadTiersConfig();if(i===7)loadCostReport(30);if(i===8)renderAdminOverview();
 }
 
 /* ── 加载 ── */
@@ -376,7 +407,7 @@ function loadAccounts(){
   api('/admin/accounts').then(function(j){
     ACCOUNTS=j.list||[];
     if(!ACCOUNTS.length){ q('accBox').innerHTML='<div class="empty">还没有会员账号</div>'; return; }
-    var h='<table><thead><tr><th>显示名</th><th>登录账号</th><th>档位</th><th>状态</th><th>到期</th><th>月额度剩余</th><th>日 / 周用量</th><th style="text-align:right">操作</th></tr></thead><tbody>';
+    var h='<table><thead><tr><th>客户</th><th>会员状态</th><th>有效期</th><th>额度</th><th style="text-align:right">操作</th></tr></thead><tbody>';
     var TIER_NAME={plus:'Plus',pro:'Pro',ultra:'Ultra'};
     ACCOUNTS.forEach(function(a){
       var st=a.status==='active'?'<span class="st st-ok">正常</span>'
@@ -409,19 +440,18 @@ function loadAccounts(){
           +'<br>周 '+dw(a.quota.weekUsed,a.quota.weekCap)+'</div>'
         : '—';
       var info=(a.realName||a.phone)?'<br><small style="color:var(--t3)">'+esc(a.realName||'')+(a.realName&&a.phone?' · ':'')+esc(a.phone||'')+'</small>':'';
-      h+='<tr><td>'+esc(a.displayName)+info+'</td><td class="mono">'+esc(a.username)+'</td><td>'+tierCell+'</td><td>'+st+'</td>'
+      h+='<tr><td><b>'+esc(a.displayName)+'</b><div class="mono">'+esc(a.username)+'</div>'+info+'</td><td>'+tierCell+'<br>'+st+'</td>'
         +'<td style="color:var(--t2)">'+dl+'</td>'
-        +'<td>'+pctCell+'</td>'
-        +'<td>'+dwCell+'</td>'
+        +'<td>'+pctCell+'<details><summary class="quiet">日 / 周用量</summary>'+dwCell+'</details></td>'
         +'<td style="text-align:right"><span class="op" style="justify-content:flex-end">'
         +'<button class="o-main" data-act="edit" data-id="'+esc(a.id)+'">编辑</button>'
         +'<button data-act="renew" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">续费</button>'
-        +'<button data-act="reset" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">重置密码</button>'
+        +'<details class="row-more"><summary>更多操作</summary><div><button data-act="reset" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">重置密码</button>'
         +'<button class="o-danger" data-act="suspend" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">停用</button>'
         +'<button class="o-danger" data-act="del" data-kind="acc" data-id="'+esc(a.id)+'" data-name="'+esc(a.displayName)+'">删除</button>'
-        +'</span></td></tr>';
+        +'</div></details></span></td></tr>';
     });
-    q('accBox').innerHTML=h+'</tbody></table>';
+    q('accBox').innerHTML=h+'</tbody></table>';filterAccountRows();
   }).catch(function(e){ q('accBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
 }
 
@@ -769,7 +799,7 @@ function fieldHtml(s){
     var list=(s.enum||[]).slice();
     if(cur && list.indexOf(cur)<0) list.unshift(cur);
     var opts=list.map(function(o){
-      return '<option value="'+esc(o)+'"'+(cur===o?' selected':'')+'>'+esc(o)+(s.enum.indexOf(o)<0?'（当前值）':'')+'</option>';
+      return '<option value="'+esc(o)+'"'+(cur===o?' selected':'')+'>'+esc(adminEnumLabel(s.key,o))+(s.enum.indexOf(o)<0?'（当前值）':'')+'</option>';
     }).join('');
     input='<select '+common+' onchange="markDirty(this)" style="width:100%;padding:7px 10px">'+opts+'</select>';
   } else if(s.widget==='textarea'||s.widget==='json'){
@@ -788,13 +818,13 @@ function fieldHtml(s){
   }
   var hint='';
   if(s.widget==='number') hint='范围 '+s.min+'~'+s.max+(s.unit?(' '+s.unit):'');
-  else if(s.enum) hint='可选：'+s.enum.join(' / ');
+  else if(s.enum) hint='选择后，保存本组修改即可生效';
   else if(s.widget==='textarea'||s.widget==='json') hint='最多 '+(s.maxLength||20000)+' 字符';
   if(s.secret) hint+=(hint?' · ':'')+'留空表示不修改';
   return '<div class="crow" data-row="'+key+'">'
     +'<div class="clabel">'+esc(s.title||s.label)+' '+sourceBadge(s)
     +(s.risk==='high'?'<span class="cbadge cb-warn">高风险</span>':'')+'</div>'
-    +(s.description?'<div style="font-size:11.5px;color:var(--t3);margin:2px 0 6px">'+esc(s.description)+'</div>':'')
+    +(adminFieldDescription(s)?'<div style="font-size:11.5px;color:var(--t3);margin:2px 0 6px">'+esc(adminFieldDescription(s))+'</div>':'')
     +input
     +'<div style="font-size:11px;color:var(--t3);margin-top:4px">'+esc(hint)
     +' · <a href="javascript:;" onclick="toggleTech(\''+key+'\')" style="color:var(--t3)">技术详情</a></div>'
@@ -802,36 +832,7 @@ function fieldHtml(s){
     +'键名 <code>'+key+'</code> · 内置默认 <code>'+esc(s.builtinDefault==null?'-':String(s.builtinDefault).slice(0,60))+'</code></div>'
     +'</div>';
 }
-function renderSettings(){
-  var wrap=q('cfgSections'); if(!wrap) return;
-  var kw=(q('cfgSearch')&&q('cfgSearch').value.trim().toLowerCase())||'';
-  var bySec={};
-  CFG_DATA.forEach(function(s){ (bySec[s.section]=bySec[s.section]||[]).push(s); });
-  var h='';
-  CFG_SECTIONS.forEach(function(sec){
-    var rows=(bySec[sec.id]||[]).filter(function(s){
-      var hay=(s.title+' '+s.key+' '+(s.description||'')).toLowerCase();
-      return !kw || hay.indexOf(kw)>=0;
-    });
-    if(!rows.length) return;
-    var dirty=rows.filter(function(s){ return CFG_DIRTY[s.key]!==undefined; }).length;
-    h+='<details class="cfgwrap" open><summary>'+esc(sec.title)+' <span style="font-size:11px;color:var(--t3)">（'
-      +(dirty?dirty+' 项待保存 · ':'')+rows.length+' 项）</span></summary>'
-      +'<div style="font-size:11.5px;color:var(--t3);margin:0 0 8px">'+esc(sec.desc)+'</div>'
-      +rows.map(fieldHtml).join('')
-      +'<div style="margin-top:10px"><button class="btnNew" data-save="'+sec.id+'">保存本区变更</button></div></details>';
-  });
-  wrap.innerHTML = h || '<div class="empty">没有匹配的配置项</div>';
-  document.querySelectorAll('#cfgSections [data-save]').forEach(function(b){
-    b.onclick=function(){ saveSection(b.getAttribute('data-save')); };
-  });
-  // 恢复用户尚未保存的输入（搜索/重渲染不应丢草稿）
-  Object.keys(CFG_DIRTY).forEach(function(k){
-    var el=document.querySelector('#cfgSections [data-k="'+k+'"]'); if(!el) return;
-    if(el.type==='checkbox') el.checked=(CFG_DIRTY[k]==='1'); else el.value=CFG_DIRTY[k];
-  });
-  renderHistory();
-}
+function renderSettings(){renderFocusedSettings();}
 function renderHistory(){
   var box=q('cfgHistory'); if(!box) return;
   if(!CFG_SNAPS.length){ box.innerHTML='<div style="font-size:11.5px;color:var(--t3)">暂无历史快照（每次保存前会自动留存一份）</div>'; return; }
@@ -875,10 +876,9 @@ function saveSection(sid){
   var btn=document.querySelector('#cfgSections [data-save="'+sid+'"]');
   busy(btn,true,'保存中'); q('cfgResult').innerHTML='';
   api('/admin/settings',{method:'POST',body:{updates:patch, baseUpdatedAt:CFG_UPDATED}}).then(function(j){
-    busy(btn,false); CFG_DIRTY={};
-    var h='<div class="okbox" style="margin:0">✅ 已生效（'+((j.applied||[]).length)+' 项）：';
-    (j.applied||[]).forEach(function(a){ h+=esc(a)+'；'; });
-    (j.skipped||[]).forEach(function(s){ h+='<span style="opacity:.65">'+esc(s)+'；</span>'; });
+    busy(btn,false); Object.keys(patch).forEach(function(k){delete CFG_DIRTY[k];});
+    var h='<div class="okbox" role="status" style="margin:0">已保存 '+((j.applied||[]).length)+' 项修改。';
+    if((j.skipped||[]).length)h+=' '+j.skipped.length+' 项未改变。';
     q('cfgResult').innerHTML=h+'</div>';
     loadSettings();
   }).catch(function(e){ busy(btn,false); toast(e.message); });
@@ -1198,8 +1198,8 @@ document.addEventListener('click', function(e){
   if(!s.token){ location.replace('index.html'); return; }
   if(s.role!=='admin'){ location.replace('staff.html'); return; }
   TOKEN=s.token;
-  refreshAll();
-  tab(7);
+  tab(8);
+  loadPending();
   setInterval(function(){ if(TOKEN) loadPending(); }, 60000);
 })();
 </script>
