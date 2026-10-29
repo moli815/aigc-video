@@ -5,6 +5,10 @@ test('unconfigured finance credentials produce pending status, never fake a zero
  const h=fakeDb();const r=await collect({db:h.db,readers:{}});assert.equal(r.providers.volcengine.status,'awaiting_credentials');assert.equal(r.providers['aliyun-bailian'].status,'awaiting_credentials');assert.equal(h.docs.size,1);assert.equal(r.mutatesMemberBalances,false);
 });
 test('China day window crosses month correctly',()=>{assert.deepEqual(datesOf(Date.parse('2026-10-31T17:00:00Z')),['2026-11-01','2026-10-31','2026-10-30']);});
+test('30 day backfill crosses month and rejects unbounded dates',()=>{
+ const days=datesOf(Date.parse('2026-10-29T08:00Z'),30);assert.equal(days.length,30);assert.equal(days[0],'2026-10-29');assert.equal(days[29],'2026-09-30');
+ assert.equal(datesOf(Date.parse('2026-10-29T08:00Z'),5,25)[4],'2026-09-30');assert.throws(()=>datesOf(Date.now(),1000));
+});
 test('provider pagination imports complete snapshots and rerun replaces provisional data',async()=>{
  const h=fakeDb();let count=0;const reader=async(day,cursor)=>{count++;return{rows:[{instanceID:'i',usage:cursor?'20':'10',pretaxAmount:cursor?0.2:0.1,currency:'CNY'}],next:cursor?null:'next'};};
  const now=Date.parse('2026-10-29T06:00:00Z');const r=await collect({db:h.db,readers:{'aliyun-bailian':reader},now});assert.equal(r.providers['aliyun-bailian'].rows,6);assert.equal(count,6);

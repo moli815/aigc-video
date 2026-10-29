@@ -42,7 +42,7 @@ const SECTION_OF = {
   ],
   context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES"],
   membership_cost: [
-    "MODEL_COST_RATES",
+    "MODEL_COST_RATES", "USAGE_BILLING_MODE", "USAGE_COST_MULTIPLIER",
     "CHAT_PRICE_IN", "CHAT_PRICE_OUT", "CHAT_PRICE_STANDARD_IN", "CHAT_PRICE_STANDARD_OUT",
     "CHAT_PRICE_HIGH_IN", "CHAT_PRICE_HIGH_OUT", "CHAT_PRICE_ULTRA_IN", "CHAT_PRICE_ULTRA_OUT",
     "CHAT_PRO_PRICE_IN", "CHAT_PRO_PRICE_OUT",
@@ -72,6 +72,12 @@ for (const [sid, keys] of Object.entries(SECTION_OF)) {
 // ── 字段级元数据（未声明的键走按类型推导的默认规则）──
 // widget: text | number | toggle | enum | textarea | password | json
 const META = {
+  USAGE_BILLING_MODE: {title:"额度计费依据",widget:"enum",enum:["legacy","supplier_cost"],risk:"high",
+    description:"supplier_cost 按实际用量×账单核验单价×倍数扣额度；未知成本挂待核账；legacy 仅回滚旧计价。"},
+  USAGE_COST_MULTIPLIER: {title:"供应商成本扣费倍数",widget:"number",min:1,max:10,step:.1,risk:"high",
+    description:"聊天及旧海报接口使用；图片服务对应 IMAGE_PRICE_MULTIPLIER，应保持一致。"},
+  MODEL_COST_RATES: {title:"人工核验供应商单价",widget:"json",risk:"high",
+    description:"按 provider:完整模型ID 配置 peak/offpeak 的 input/output/cachedInput（元/百万Token）；留空用财务账单单价目录。不要填会员售价。"},
   // 模型与服务商
   CHAT_PROVIDER: { title: "对话服务商平台", widget: "enum", enum: ["qwen", "deepseek", "doubao", "zhipu", "moonshot", "openai"], risk: "high",
     description: "决定对话请求发往哪家平台。换平台需同时确认端点与三档模型名，改完约 30 秒生效。" },

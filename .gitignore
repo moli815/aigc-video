@@ -21,3 +21,4 @@ outputs/
 cloudfunctions/bf-api/shared/
 cloudfunctions/bf-image/shared/
 cloudfunctions/bf-jobs/shared/
+cloudfunctions/bf-billing/shared/
