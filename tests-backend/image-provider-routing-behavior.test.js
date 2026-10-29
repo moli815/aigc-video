@@ -3,8 +3,9 @@ const {createRequire}=require('node:module');
 const file=path.resolve(__dirname,'../cloudfunctions/bf-image/index.js');
 function harness(responses, policy) {
  const source=fs.readFileSync(file,'utf8'),localRequire=createRequire(file),calls=[];
- const context={require:name=>name==='http'?{createServer:()=>({listen(){}})}:name==='@cloudbase/node-sdk'?{}:localRequire(name),module:{exports:{}},exports:{},process:{env:{}},Buffer,URL,AbortController,setTimeout,clearTimeout,console:{log(){}},fetch:async(url,opts)=>{
-  calls.push(JSON.parse(opts.body));const response=responses.shift();if(response instanceof Error)throw response;return {ok:response.status===200,status:response.status,json:async()=>response.body};
+ const db={collection:()=>({add:async()=>{},doc:()=>({update:async()=>{}})})};
+ const context={require:name=>name==='http'?{createServer:()=>({listen(){}})}:name==='@cloudbase/node-sdk'?{init:()=>({database:()=>db})}:localRequire(name),module:{exports:{}},exports:{},process:{env:{}},Buffer,URL,AbortController,setTimeout,clearTimeout,console:{log(){}},fetch:async(url,opts)=>{
+  calls.push(JSON.parse(opts.body));const response=responses.shift();if(response instanceof Error)throw response;return new Response(JSON.stringify(response.body),{status:response.status,headers:{'content-type':'application/json'}});
  }};
  vm.createContext(context);vm.runInContext(source+'\nglobalThis.subject={generate,selectImageRoute,RT};',context);
  Object.assign(context.subject.RT,{IMAGE_API_KEY:'test-placeholder',IMAGE_MODEL_FAST:'doubao-seedream-5-0-flash-260915',IMAGE_MODEL_PRO:'doubao-seedream-5-0-pro-260628',IMAGE_ROUTING_MODE:'auto'});

@@ -52,6 +52,7 @@ const { providerPromptOptions } = require("./shared/image-policy");
 const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGuard } = require("./shared/image-delivery");
 const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
+const { createModelCallLedger } = require("./shared/model-call-ledger");
 // 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
 // 不需要逐层传参。每个请求在入口 enterWith 一次。
 const reqStore = new AsyncLocalStorage();
@@ -124,6 +125,7 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
+  MODEL_COST_RATES: { type: "json", label: "模型供应商成本价（元/百万Token；按完整模型ID配置 input/output/cachedInput，未核价留空）", def: () => "{}" },
   IMAGE_LEGACY_BRAND_POLICY: { type: "json", label: "旧包Logo规划（支持全员开启或指定账号）", def: () => '{"enabled":false,"accountIds":[]}' },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "2K" },
@@ -677,6 +679,13 @@ const db = APP.database();
 const assetStore = createAssetStore({ db, app: APP });
 const eventService = createEventService({ db });
 const syncV2 = createSyncService({ db, assetStore });
+const modelLedger = createModelCallLedger({ db, context: () => reqStore.getStore(), source: "bf-api", log: logSafe,
+  pricing: payload => {
+    let rates = RUNTIME.MODEL_COST_RATES || {};
+    if (typeof rates === "string") { try { rates = JSON.parse(rates); } catch { rates = {}; } }
+    return rates[payload.model] ? { rates: rates[payload.model] } : null;
+  },
+});
 
 // ───────────────────────── 基础工具 ─────────────────────────
 
@@ -926,6 +935,8 @@ async function requireMember(req, res) {
       sendError(res, 403, "MEMBERSHIP_EXPIRED", "会员已到期，请联系续费");
       return null;
     }
+    const callContext = reqStore.getStore();
+    if (callContext) callContext.accountId = payload.sub;
     return payload;
   } catch (e) {
     logSafe({ tag: "auth_unavailable", fn: "bf-api", err: String((e && e.message) || e).slice(0, 120) });
@@ -1112,6 +1123,7 @@ async function addChatCost(accountId, costCny, meta) {
   await db.collection(C.accounts).doc(accountId).update(patch);
   const row = {
     accountId, kind: "chat", costCny,
+    requestId: currentRequestId(), modelCallId: meta.modelCallId || "", priceCny: delta,
     ts: new Date(), model: meta.model, tier: meta.tier || "flash",
     promptTokens: meta.promptTokens || 0,
     completionTokens: meta.completionTokens || 0,
@@ -1120,6 +1132,7 @@ async function addChatCost(accountId, costCny, meta) {
   // 计数与流水分两步写：流水失败重试一次，仍失败不影响计数（账实分离风险极低且可由计数对账）
   try { await db.collection(C.usage).add(row); }
   catch { try { await db.collection(C.usage).add(row); } catch { /* 忽略 */ } }
+  await modelLedger.charge(meta.modelCallId, delta, currentRequestId());
 }
 
 async function addImageCost(accountId, costCny, meta) {
@@ -1142,10 +1155,11 @@ async function addImageCost(accountId, costCny, meta) {
   });
   const row = {
     accountId, kind: "image", costCny, ts: new Date(),
-    model: meta.model, estimated: false,
+    model: meta.model, estimated: false, requestId: currentRequestId(), modelCallId: meta.modelCallId || "", priceCny: delta,
   };
   try { await db.collection(C.usage).add(row); }
   catch { try { await db.collection(C.usage).add(row); } catch { /* 忽略 */ } }
+  await modelLedger.charge(meta.modelCallId, delta, currentRequestId());
 }
 
 /**
@@ -1316,7 +1330,7 @@ async function compactMessages(messages) {
 function fetchWithTimeout(url, options = {}, ms = 120000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), ms);
-  return fetch(url, { ...options, signal: ctl.signal }).finally(() => clearTimeout(timer));
+  return modelLedger.fetch(url, { ...options, signal: ctl.signal }, fetch).finally(() => clearTimeout(timer));
 }
 
 // ───────────────────────── 登录防爆破 ─────────────────────────
@@ -2876,6 +2890,7 @@ async function handleChat(req, res) {
   if (cacheKey) {
     const hit = await cacheGet(cacheKey);
     if (hit) {
+      await modelLedger.cached(tier.model);
       try {
         await db.collection(C.usage).add({
           // 10-29：ts 必须与其它流水一样是 Date。此前这里写数字毫秒，
@@ -2977,7 +2992,7 @@ async function handleChat(req, res) {
     try {
       await addChatCost(auth.sub,
         (pt / 1e6) * tier.priceIn + (ct / 1e6) * tier.priceOut,
-        { model: tier.model, tier: tier.name, promptTokens: pt, completionTokens: ct, estimated: !hasUsage });
+        { model: upstreamBody.model, tier: tier.name, promptTokens: pt, completionTokens: ct, estimated: !hasUsage, modelCallId: upstream.modelCallId });
     } catch { /* 记账失败不影响本次返回 */ }
     if (MODEL_MASK && data && typeof data.model === "string") data.model = MODEL_MASK;   // P0-38 模型名脱敏
     try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary, finalizeImageCalls); }
@@ -3066,7 +3081,7 @@ async function handleChat(req, res) {
 
   try {
     await addChatCost(auth.sub, cost, {
-      model: tier.model, tier: tier.name, promptTokens, completionTokens, estimated,
+      model: upstreamBody.model, tier: tier.name, promptTokens, completionTokens, estimated, modelCallId: upstream.modelCallId,
     });
   } catch { /* 记账失败不影响本次回答 */ }
 
@@ -3132,7 +3147,7 @@ async function callDashscopeImage(payload, apiKey) {
   const j = await r.json().catch(() => null);
   const c = j && j.output && j.output.choices && j.output.choices[0] && j.output.choices[0].message && j.output.choices[0].message.content;
   const img = Array.isArray(c) ? ((c.find((x) => x && x.image) || {}).image || "") : "";
-  return { ok: !!img, status: img ? 200 : 502, url: img };
+  return { ok: !!img, status: img ? 200 : 502, url: img, modelCallId: r.modelCallId };
 }
 
 async function callImageUpstream(payload) {
@@ -3159,7 +3174,7 @@ async function callImageUpstream(payload) {
       const j = await r.json().catch(() => null);
       const item = j && Array.isArray(j.data) ? j.data[0] : null;
       const url = item ? (item.url || (item.b64_json ? "data:image/png;base64," + item.b64_json : "")) : "";
-      if (url) return { ok: true, status: 200, url, fetchMs: Date.now() - __t0 };
+      if (url) return { ok: true, status: 200, url, fetchMs: Date.now() - __t0, modelCallId: r.modelCallId };
     }
   } catch (e) { /* Seedream 超时/异常 → 走降级 */ }
   // Seedream 失败明确返回；不换供应商，也不保留故意触发异常的假兜底。
@@ -3203,7 +3218,7 @@ async function handlePoster(req, res) {
   if (!out.ok) return sendError(res, 502, "UPSTREAM_ERROR", `上游返回异常（${out.status}）`);
   const url = out.url;
 
-  try { await addImageCost(auth.sub, UPSTREAM.image.tiers.pro.price, { model: payload.model, tier: "poster-base" }); } catch { /* ignore */ }
+  try { await addImageCost(auth.sub, UPSTREAM.image.tiers.pro.price, { model: payload.model, tier: "poster-base", modelCallId: out.modelCallId }); } catch { /* ignore */ }
   sendJson(res, 200, {
     ok: true,
     imageUrl: url,
@@ -4678,7 +4693,7 @@ const server = http.createServer(async (req, res) => {
   // 尊重调用方传的 X-Request-Id（便于端到端串联），没有就生成。
   const inboundRid = String(req.headers["x-request-id"] || "").trim().slice(0, 64);
   const rid = inboundRid || ("req_" + crypto.randomBytes(6).toString("hex"));
-  reqStore.enterWith({ requestId: rid });
+  reqStore.enterWith({ requestId: rid, endpoint: String(req.url || "").split("?")[0] });
   res.setHeader("X-Request-Id", rid);
   // 10-22 全局结构化日志：一行搞定所有路由的「方法/路径/状态码/耗时」，排障不再靠猜
   const __t0 = Date.now();
@@ -4931,6 +4946,16 @@ const server = http.createServer(async (req, res) => {
         if (sub.length === 1 && m === "GET") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
           return handleCostReport(req, res, url);
+        }
+      }
+
+      if (sub[0] === "model-calls" && sub.length === 1 && m === "GET") {
+        const staff = await requireStaff(req, res, true); if (!staff) return;
+        try { return sendJson(res, 200, await require("./domains/model-call-report").queryCalls(db, url.searchParams)); }
+        catch (error) {
+          logSafe({ tag: "model_call_report_failed", code: error.code || "QUERY_FAILED" });
+          return sendError(res, error.code === "BAD_QUERY" ? 400 : 503, error.code === "BAD_QUERY" ? "BAD_REQUEST" : "SERVICE_UNAVAILABLE",
+            error.code === "BAD_QUERY" ? error.message : "调用明细暂时无法读取，请稍后重试。");
         }
       }
 

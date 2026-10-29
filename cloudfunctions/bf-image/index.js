@@ -37,6 +37,7 @@ const { providerPromptOptions } = require("./shared/image-policy");
 const { cleanImageRequest } = require("./shared/image-delivery");
 const { autoDecision, parseAutoPolicy, canFallbackToPro } = require("./image-routing");
 const { AsyncLocalStorage } = require("async_hooks");
+const { createModelCallLedger } = require("./shared/model-call-ledger");
 const reqStore = new AsyncLocalStorage();
 function currentRequestId() {
   const st = reqStore.getStore();
@@ -45,6 +46,11 @@ function currentRequestId() {
 
 const PORT = 9000;   // 云函数 HTTP 固定 9000（不要读 process.env.PORT，SCF 可能注入其他值）
 const IMAGE_BASE = "https://ark.cn-beijing.volces.com/api/v3";
+const modelLedger = createModelCallLedger({ db: getDb, context: () => reqStore.getStore(), source: "bf-image", log: logSafe,
+  pricing: payload => ({ unitCostCny: upstreamCostOf({ size: payload.size, model: payload.model,
+    inputImages: Array.isArray(payload.image) ? payload.image.length : payload.image ? 1 : 0,
+    layerDecomposition: payload.layer_decomposition === true }) }),
+});
 
 // ── 10-23：运行时配置统一入口 ─────────────────────────────────────────────
 // 此前 bf-image 只读 process.env，并把 optimize_prompt_options 硬编码成 fast；
@@ -350,14 +356,14 @@ async function runSeriesChild(opts) {
   const upstream = upstreamCostOf({ size: resolved, model, inputImages: 1 });
   const price = customerPriceOf(upstream);
   const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
-    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream,
+    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream, modelCallId: r.modelCallId,
   });
   let costState = persisted ? "queued" : "pending";
   if (!persisted) {
     // 台账写不进去：直接走幂等账务事件（事件 ID 同样由 subRid 派生），避免漏账
     const direct = await addImageCost(accountId, price, {
       model, jobKey: subRid, kind: "series_child", parentJobId: parentRid, index,
-      upstreamCostCny: upstream,
+      upstreamCostCny: upstream, modelCallId: r.modelCallId,
     });
     costState = direct ? "committed" : "pending";
   }
@@ -626,6 +632,8 @@ async function requireMember(req) {
   if (!secrets) return null;
   const payload = verifyToken(bearer(req), secrets.tokenSecret);
   if (!payload || payload.t !== "member") return null;
+  const callContext = reqStore.getStore();
+  if (callContext) callContext.accountId = payload.sub;
   return payload;
 }
 
@@ -856,7 +864,10 @@ async function addImageCost(accountId, chargeCny, meta) {
       logStage("billing_event_read_failed", { eventId: eventId.slice(0, 16) });
       return false;
     }
-    if (ev.state === "committed") return true;   // 已完全提交：幂等命中
+    if (ev.state === "committed") {
+      await modelLedger.charge(m.modelCallId, charge, eventId);
+      return true;
+    }
   }
 
   // ② 账户累计（CAS 抢占，避免重复 inc）
@@ -927,6 +938,7 @@ async function addImageCost(accountId, chargeCny, meta) {
     }
   }
 
+  await modelLedger.charge(accountOk && usageOk ? m.modelCallId : "", charge, eventId);
   if (accountOk && usageOk) {
     try {
       await col.doc(eventId).update({ state: "committed", usageApplied: true, committedAt: Date.now() });
@@ -1004,6 +1016,7 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
   if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
   // 10-29：costCny 是售价，上游成本另存一份，flush 时才能把成本写进流水
   if (ex.upstreamCostCny != null) patch.upstreamCostCny = Number(ex.upstreamCostCny) || 0;
+  if (ex.modelCallId) patch.modelCallId = String(ex.modelCallId);
   if (ex.input) patch.input = ex.input;
   if (Number.isFinite(Number(ex.index))) patch.index = Number(ex.index);
   try {
@@ -1071,6 +1084,7 @@ async function flushJobs(maxJobs) {
         jobKey: String(id),
         kind: d.kind || "image",
         upstreamCostCny: d.upstreamCostCny,
+        modelCallId: d.modelCallId,
         parentJobId: d.parentJobId || "",
         index: d.index,
       });
@@ -1441,11 +1455,11 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const timer = setTimeout(() => controller.abort(), 260000);
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await fetch(IMAGE_BASE + "/images/generations", {
+      const r = await modelLedger.fetch(IMAGE_BASE + "/images/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
         body: JSON.stringify(payload), signal: controller.signal,
-      });
+      }, fetch);
       const j = await r.json().catch(() => null);
       const url = j && j.data && j.data[0] && j.data[0].url;
       if (!r.ok || !url) {
@@ -1468,7 +1482,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
         return { ok: false, code: 502, msg: "上游失败", status: r.status,
           unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
       }
-      return { ok: true, url, model: selectedModel, routeReason: route.reason, caps };
+      return { ok: true, url, model: selectedModel, routeReason: route.reason, caps, modelCallId: r.modelCallId };
     }
   } catch (e) {
     return { ok: false, code: 504, unknownOutcome: true, msg: String((e && e.message) || e).slice(0, 200) };
@@ -1482,7 +1496,7 @@ const server = http.createServer(async (req, res) => {
   // 10-24：requestId 贯穿 + 错误响应统一规范化
   const inboundRid = String(req.headers["x-request-id"] || "").trim().slice(0, 64);
   const rid = inboundRid || ("req_" + crypto.randomBytes(6).toString("hex"));
-  reqStore.enterWith({ requestId: rid });
+  reqStore.enterWith({ requestId: rid, endpoint: String(req.url || "").split("?")[0] });
   res.setHeader("X-Request-Id", rid);
 
   const send = (code, obj) => {
@@ -1940,8 +1954,11 @@ const server = http.createServer(async (req, res) => {
     // 幂等占位：add(_id=rid) 成功才拿到执行权；重复请求复用结果或返回"进行中"。
     // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
     const rid = normalizeRid(body.requestId);
+    if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
     const claim = await claimIdem(rid, auth.sub);
     if (claim.state === "done") {
+      if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
+      await modelLedger.cached(claim.model || "idempotent-cache", "image");
       logStage("idempotent_hit", { sub: auth.sub, rid, kind: claim.kind || "image" });
       // 10-24 P0-3：组图重放必须返回完整 items[]，不能退化成"单图缓存"
       if (claim.result && claim.result.task_kind === "series") {
@@ -1978,6 +1995,7 @@ const server = http.createServer(async (req, res) => {
     // 10-24 路由契约：App 只传业务意图，模型 ID 由服务端决定。
     const taskKind = String(body.task_kind || body.taskKind || "").trim()
       || (body.layer_decomposition === true ? "decompose" : (body.image ? "edit" : "generate"));
+    if (reqStore.getStore()) reqStore.getStore().taskKind = taskKind;
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
     const requestedCount = Number(body.requested_count || body.requestedCount || 1);
     // ── 组图：服务端编排（拆 N 个单图子任务，各自 claim / 记账 / 可部分成功）──
@@ -2111,7 +2129,7 @@ const server = http.createServer(async (req, res) => {
         layerDecomposition: body.layer_decomposition === true,
       });
       const price = customerPriceOf(upstream);
-      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream });
+      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId });
       await flushJobs();
       logStage("image_route", {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,

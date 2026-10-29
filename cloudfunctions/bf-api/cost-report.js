@@ -7,9 +7,10 @@
 // 口径约定（写进代码，别再靠口头解释）：
 //   · 账务事件 = 一行 bf_usage_logs；`ledgerEvents` 是去重后的条数。
 //   · 用户请求 = 唯一 requestId/jobId 的个数；父组图任务通常是 0 元行，**不进均价分母**。
-//   · 金额单位统一人民币元；内部按分（×100 取整）累加，避免浮点误差。
+//   · 金额单位统一人民币元；内部按 1e-8 元整数单位累加，保留小额 Token 费用，避免浮点误差。
 //   · 时间窗半开区间 [start, end)；日期键一律 ISO（YYYY-MM-DD），时区固定 Asia/Shanghai。
 
+const MONEY_SCALE = 1e8; // 每笔不足一分钱的 Token 成本不可先舍入为零。
 const TZ_OFFSET_MS = 8 * 3600 * 1000; // Asia/Shanghai，无夏令时
 
 /** 把任意形态的时间字段归一成毫秒（兼容 Date / number / string / {$date}）。 */
@@ -74,7 +75,7 @@ function daySeries(startMs, endMs) {
 }
 
 function round4(v) { return Number(v.toFixed(4)); }
-function round5(v) { return Number(v.toFixed(5)); }
+function roundMoney(v) { return Number(v.toFixed(8)); }
 
 /**
  * 聚合。
@@ -101,19 +102,19 @@ function aggregateCostRows(rows, opts) {
     events.push(r);
   }
 
-  let totalCents = 0;
+  let totalUnits = 0;
   const byKindC = {}, byTierC = {}, byModelC = {}, byAccountC = {}, byDayC = {};
   const requestIds = new Set();
   let imageCount = 0;
   let failedCount = 0;
   let zeroCostEvents = 0;
-  let revenueCents = 0;
+  let revenueUnits = 0;
   let pricedEvents = 0;
 
   for (const e of events) {
-    const cents = Math.round(e.costCny * 100);
-    totalCents += cents;
-    const add = (bag, key) => { bag[key] = (bag[key] || 0) + cents; };
+    const units = Math.round(e.costCny * MONEY_SCALE);
+    totalUnits += units;
+    const add = (bag, key) => { bag[key] = (bag[key] || 0) + units; };
     add(byKindC, e.kind);
     add(byTierC, e.tier || "unknown");
     add(byModelC, e.model || "unknown");
@@ -122,23 +123,23 @@ function aggregateCostRows(rows, opts) {
     if (e.requestId) requestIds.add(e.requestId);
     if (e.kind === "image") imageCount += 1;
     if (e.state === "failed" || e.state === "reconciliation_required") failedCount += 1;
-    if (cents === 0) zeroCostEvents += 1;
-    if (e.priceCny != null) { revenueCents += Math.round(e.priceCny * 100); pricedEvents += 1; }
+    if (units === 0) zeroCostEvents += 1;
+    if (e.priceCny != null) { revenueUnits += Math.round(e.priceCny * MONEY_SCALE); pricedEvents += 1; }
   }
 
-  const toObj = (bag) => Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, round4(v / 100)]));
-  const totalCny = round4(totalCents / 100);
+  const toObj = (bag) => Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, roundMoney(v / MONEY_SCALE)]));
+  const totalCny = roundMoney(totalUnits / MONEY_SCALE);
 
   const days = daySeries(startMs, endMs);
-  const byDay = days.map((date) => ({ date, cost: round4((byDayC[date] || 0) / 100) }));
+  const byDay = days.map((date) => ({ date, cost: roundMoney((byDayC[date] || 0) / MONEY_SCALE) }));
 
   // TOP 客户：占比是"占全部成本"，同时给出覆盖率，避免把 TOP10 当全体
   const accountEntries = Object.entries(byAccountC).sort((a, b) => b[1] - a[1]);
   const topN = accountEntries.filter(([k]) => k !== "unassigned").slice(0, 10);
-  const topAccountsCostCents = topN.reduce((s, [, v]) => s + v, 0);
-  const unassignedCents = byAccountC.unassigned || 0;
+  const topAccountsCostUnits = topN.reduce((s, [, v]) => s + v, 0);
+  const unassignedUnits = byAccountC.unassigned || 0;
 
-  // 守恒校验：分组之和应等于总额（按分计算，理论上恒等；不等于就是代码出错）
+  // 守恒校验：分组之和应等于总额（按整数单位计算，理论上恒等；不等于就是代码出错）
   const sumKinds = Object.values(byKindC).reduce((a, b) => a + b, 0);
   const sumTiers = Object.values(byTierC).reduce((a, b) => a + b, 0);
   const sumModels = Object.values(byModelC).reduce((a, b) => a + b, 0);
@@ -155,25 +156,25 @@ function aggregateCostRows(rows, opts) {
     zeroCostEvents,
     dropped: { duplicated: input.length - seen.size, outOfWindow, noTimestamp },
     totalCny,
-    avgCnyPerLedgerEvent: events.length ? round5(totalCny / events.length) : 0,
-    avgCnyPerRequest: requestIds.size ? round5(totalCny / requestIds.size) : 0,
+    avgCnyPerLedgerEvent: events.length ? roundMoney(totalCny / events.length) : 0,
+    avgCnyPerRequest: requestIds.size ? roundMoney(totalCny / requestIds.size) : 0,
     // 售价与毛利：只统计带 priceCny 的流水（新版图片流水）。拿不到售价的旧数据不进分母。
-    revenueCny: round4(revenueCents / 100),
-    marginCny: round4((revenueCents - events.filter((e) => e.priceCny != null)
-      .reduce((s2, e) => s2 + Math.round(e.costCny * 100), 0)) / 100),
+    revenueCny: roundMoney(revenueUnits / MONEY_SCALE),
+    marginCny: roundMoney((revenueUnits - events.filter((e) => e.priceCny != null)
+      .reduce((s2, e) => s2 + Math.round(e.costCny * MONEY_SCALE), 0)) / MONEY_SCALE),
     pricedEvents,
     byKind: toObj(byKindC),
     byTier: toObj(byTierC),
     byModel: toObj(byModelC),
     byDay,
-    topAccounts: topN.map(([accountId, cents]) => ({ accountId, cost: round4(cents / 100) })),
-    topAccountsCostCny: round4(topAccountsCostCents / 100),
-    topAccountsCoverage: totalCents ? round4(topAccountsCostCents / totalCents) : 0,
-    unassignedCostCny: round4(unassignedCents / 100),
+    topAccounts: topN.map(([accountId, units]) => ({ accountId, cost: roundMoney(units / MONEY_SCALE) })),
+    topAccountsCostCny: roundMoney(topAccountsCostUnits / MONEY_SCALE),
+    topAccountsCoverage: totalUnits ? round4(topAccountsCostUnits / totalUnits) : 0,
+    unassignedCostCny: roundMoney(unassignedUnits / MONEY_SCALE),
     conservation: {
-      kindsMatch: sumKinds === totalCents,
-      tiersMatch: sumTiers === totalCents,
-      modelsMatch: sumModels === totalCents,
+      kindsMatch: sumKinds === totalUnits,
+      tiersMatch: sumTiers === totalUnits,
+      modelsMatch: sumModels === totalUnits,
     },
     truncated: !!(opts && opts.truncated),
     queryMs: Number((opts && opts.queryMs) || 0),
