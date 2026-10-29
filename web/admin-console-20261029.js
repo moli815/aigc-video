@@ -49,23 +49,41 @@ function renderFocusedSettings(){
     if(el.type==='checkbox'){el.checked=CFG_DIRTY[k]==='1';var label=el.parentNode.querySelector('span');if(label)label.textContent=el.checked?'已开启':'已关闭';}else el.value=CFG_DIRTY[k];
   });renderHistory();
 }
+function adminIcon(name){return '<svg class="nav-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="admin-icons-20261029.svg#'+name+'"></use></svg>';}
+function quotaVisual(a){
+  var cap=Number(a.quota?.monthCap),used=Number(a.quota?.monthUsed),pct=Number(a.poolPct);
+  var hasMoney=a.quota?.monthCap!=null&&a.quota?.monthUsed!=null&&Number.isFinite(cap)&&cap>0&&Number.isFinite(used);
+  if(hasMoney)pct=(1-used/cap)*100;
+  if((!hasMoney&&a.poolPct==null)||!Number.isFinite(pct))return '<span class="quiet">暂无额度数据</span>';
+  var band=pct<=20?'critical':pct<=50?'caution':'healthy',width=Math.max(0,Math.min(100,pct));
+  var label=pct<=0?'额度已用完':pct<=20?'额度偏低':pct<=50?'留意用量':'额度充足';
+  var amount=hasMoney?'¥'+Math.max(0,cap-used).toFixed(2):width.toFixed(1)+'%';
+  return '<div class="quota-visual '+band+'"><div class="quota-top"><strong>'+amount+'</strong><span>'+label+'</span></div><div class="quota-track" role="progressbar" aria-label="月额度剩余" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+width.toFixed(1)+'"><i style="width:'+width+'%"></i></div><div class="quota-caption">剩余 '+width.toFixed(1)+'%'+(hasMoney?' · 总额 ¥'+cap.toFixed(2):'')+'</div></div>';
+}
 function renderAdminOverview(){
   var load=++OVERVIEW_LOAD,box=q('overviewData');box.innerHTML='<div class="empty" role="status">正在读取工作台…</div>';
-  // Isolate failures: a billing issue must not erase the membership/review cards.
   Promise.allSettled([api('/admin/requests'),api('/admin/accounts'),api('/admin/finance?days=30')]).then(function(results){
     if(load!==OVERVIEW_LOAD)return;
-    var cards=[['待审核申请',0],['即将到期 · 7天内',1],['近30天平台应付',7]];
-    var h='<div class="overview-metrics">';
-    cards.forEach(function(card,i){var r=results[i],value='暂时无法读取',sub='点击查看详情';
-      if(r.status==='fulfilled'){
-        if(i===0){value=String((r.value.list||[]).filter(function(x){return x.status==='pending';}).length)+' 件';sub='开通与续费申请';}
-        if(i===1){value=String((r.value.list||[]).filter(function(x){return x.status==='active'&&x.daysLeft!=null&&x.daysLeft>=0&&x.daysLeft<=7;}).length)+' 位';sub='当前客户列表 · 最多200人';}
-        if(i===2){value='¥'+Number(r.value.officialPayableCny).toFixed(2);sub=r.value.coverage?.complete?'两平台日期已覆盖 · 当日仍会补账':'部分日期尚待同步';}
-      }
-      h+='<button class="overview-metric" onclick="tab('+card[1]+')"><span>'+card[0]+'</span><strong>'+esc(value)+'</strong><small>'+esc(sub)+'</small></button>';
-    });
-    box.innerHTML=h+'</div><p class="quiet">数据来自当前服务器记录。进入各页可查看明细。</p>';
+    var requestOk=results[0].status==='fulfilled',accountOk=results[1].status==='fulfilled',financeOk=results[2].status==='fulfilled';
+    var accounts=accountOk?(results[1].value.list||[]):[],pending=requestOk?(results[0].value.list||[]).filter(function(x){return x.status==='pending';}).length:null;
+    var active=accounts.filter(function(x){return x.status==='active';}).length;
+    var expiring=accounts.filter(function(x){return x.status==='active'&&x.daysLeft!=null&&x.daysLeft>=0&&x.daysLeft<=7;}).length;
+    var low=accounts.filter(function(x){return x.status==='active'&&((x.quota&&Number(x.quota.monthCap)>0&&Number(x.quota.monthUsed)/Number(x.quota.monthCap)>=.8)||(x.poolPct!=null&&Number(x.poolPct)<=20));}).length;
+    var bill=financeOk?results[2].value:null;
+    var cards=[['当前可用会员',accountOk?active+' 位':'读取失败','users-round',1,'mint'],['待审核申请',requestOk?pending+' 件':'读取失败','clipboard-check',0,pending?'amber':'sky'],['额度偏低客户',accountOk?low+' 位':'读取失败','wallet',1,low?'amber':'mint'],['近30天平台应付',bill?'¥'+Number(bill.officialPayableCny).toFixed(2):'读取失败','credit-card',7,'sky']];
+    var h='<div class="overview-metrics">';cards.forEach(function(c){h+='<button class="overview-metric tone-'+c[4]+'" onclick="tab('+c[3]+')"><span class="metric-label">'+c[0]+adminIcon(c[2])+'</span><strong>'+esc(c[1])+'</strong><small>查看'+(c[3]===7?'支出明细':c[3]===0?'待处理申请':'客户列表')+' →</small></button>';});h+='</div>';
+    h+='<div class="overview-detail-grid"><section class="overview-chart"><div class="overview-section-head"><h4>平台支出趋势</h4><span>最近7天 · 官方应付</span></div>';
+    if(bill){
+      var end=Date.parse(bill.window.end+'T00:00:00Z'),days=Array.from({length:7},function(_,i){var day=new Date(end-(6-i)*86400000).toISOString().slice(0,10);return{day:day,value:Number(bill.byDay[day]||0),known:bill.coverage.complete||Object.hasOwn(bill.byDay,day)};}),max=Math.max(1,...days.map(function(d){return d.value;}));
+      h+='<div class="spend-chart">';days.forEach(function(d){h+='<div class="chart-day" aria-label="'+esc(d.day)+' '+(d.known?'应付'+d.value.toFixed(2)+'元':'未完成同步')+'"><span class="chart-amount">'+(d.known?'¥'+d.value.toFixed(2):'待同步')+'</span><div class="chart-track"><i class="'+(d.value>0?'has-spend':'')+'" style="height:'+(d.known?Math.max(3,Math.max(0,d.value)/max*100):0)+'%"></i></div><span class="chart-date">'+esc(d.day.slice(5).replace('-','/'))+'</span></div>';});h+='</div><div class="chart-foot"><span>火山 ¥'+Number(bill.byProvider.volcengine||0).toFixed(2)+'</span><span>百炼 ¥'+Number(bill.byProvider['aliyun-bailian']||0).toFixed(2)+'</span><small>30天合计；本日账单仍会补齐</small></div>';
+    }else h+='<p class="quiet">账单暂时无法读取，客户管理仍可正常使用。</p>';
+    h+='</section><section class="overview-health"><div class="overview-section-head"><h4>需要留意</h4><span>客户与额度</span></div><div class="health-row"><span>7天内到期</span><strong class="'+(expiring?'text-amber':'')+'">'+(accountOk?expiring+' 位':'未读取')+'</strong></div><div class="health-row"><span>剩余额度≤20%</span><strong class="'+(low?'text-amber':'')+'">'+(accountOk?low+' 位':'未读取')+'</strong></div><div class="health-row"><span>账单日期同步</span><strong class="'+(bill?.coverage.complete?'text-mint':'text-amber')+'">'+(bill?(bill.coverage.complete?'已覆盖':'待补齐'):'未读取')+'</strong></div><button class="health-action" onclick="tab(1)">检查客户状态 →</button></section></div><p class="quiet">客户统计基于当前列表（最多200人）。金额为平台应付，与用户额度分开核算。</p>';
+    box.innerHTML=h;
   });
+}
+function decorateAdminNavigation(){
+  var icons={8:'layout-dashboard',1:'users-round',7:'wallet',4:'sliders-horizontal',6:'credit-card',0:'clipboard-check',2:'file-clock',3:'user-cog',5:'sparkles'};
+  Object.keys(icons).forEach(function(i){var b=q('tabBtn'+i);if(b&&!b.querySelector('svg'))b.insertAdjacentHTML('afterbegin',adminIcon(icons[i]));});
 }
 function filterAccountRows(){var query=q('accountSearch').value.trim().toLowerCase(),count=0;
   q('accBox').querySelectorAll('tbody tr').forEach(function(row){var show=!query||row.textContent.toLowerCase().indexOf(query)>=0;row.hidden=!show;if(show)count++;});
@@ -73,18 +91,19 @@ function filterAccountRows(){var query=q('accountSearch').value.trim().toLowerCa
 }
 function applyReadingPreferences(){
   var pref={};try{pref=JSON.parse(localStorage.getItem('bf_admin_reading')||'{}');}catch{}
-  var size=[18,20,22].indexOf(Number(pref.size))>=0?Number(pref.size):18;
+  if(!pref||typeof pref!=='object'||Array.isArray(pref))pref={};
+  var size=Number(pref.size);if(pref.version!==2)size=Number.isFinite(size)?Math.max(16,size-2):16;if([16,18,20].indexOf(size)<0)size=16;
   var spacing=pref.spacing==='relaxed'?'relaxed':'normal';
   document.documentElement.style.setProperty('--reading-size',size+'px');
-  document.documentElement.style.setProperty('--reading-line',spacing==='relaxed'?'1.95':'1.75');
+  document.documentElement.style.setProperty('--reading-line',spacing==='relaxed'?'1.85':'1.65');
   document.documentElement.dataset.readingSize=String(size);
   if(q('readingSize'))q('readingSize').value=String(size);if(q('readingSpacing'))q('readingSpacing').value=spacing;
 }
 function saveReadingPreferences(){
-  try{localStorage.setItem('bf_admin_reading',JSON.stringify({size:Number(q('readingSize').value),spacing:q('readingSpacing').value}));}catch{}
+  try{localStorage.setItem('bf_admin_reading',JSON.stringify({version:2,size:Number(q('readingSize').value),spacing:q('readingSpacing').value}));}catch{}
   applyReadingPreferences();
 }
-document.addEventListener('DOMContentLoaded',applyReadingPreferences);
+document.addEventListener('DOMContentLoaded',function(){applyReadingPreferences();decorateAdminNavigation();});
 document.addEventListener('keydown',function(e){
   if(e.key!=='Tab')return;var modal=document.querySelector('.modal.show');if(!modal)return;
   var focusable=Array.from(modal.querySelectorAll('button,input,select,textarea,a[href]')).filter(function(el){return !el.disabled&&el.getClientRects().length;});
