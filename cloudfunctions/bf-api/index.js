@@ -2878,7 +2878,9 @@ async function handleChat(req, res) {
     if (hit) {
       try {
         await db.collection(C.usage).add({
-          accountId: auth.sub, kind: "chat", costCny: 0, ts: nowMs(),
+          // 10-29：ts 必须与其它流水一样是 Date。此前这里写数字毫秒，
+          // 范围查询按类型分桶，导致成本看板只剩这一条零元行可见。
+          accountId: auth.sub, kind: "chat", costCny: 0, ts: new Date(),
           model: "semantic-cache", tier: tier.name, promptTokens: 0, completionTokens: 0, cached: true,
         });
       } catch { /* 忽略 */ }
@@ -4279,8 +4281,13 @@ async function handleCostReport(req, res, url) {
   let truncated = false;
   try {
     for (let page = 0; page * PAGE < MAX_ROWS; page++) {
+      // 10-29 修复：范围内比较按 BSON 类型分桶，只查数字会漏掉全部 Date 行（反之亦然）。
+      // 历史流水里"语义缓存"行是数字毫秒，其余是 Date —— 两种都要查。
       const r = await db.collection(C.usage)
-        .where({ ts: db.command.gte(startMs) })
+        .where(db.command.or([
+          { ts: db.command.gte(new Date(startMs)) },
+          { ts: db.command.gte(startMs) },
+        ]))
         .orderBy("ts", "desc").skip(page * PAGE).limit(PAGE).get();
       const batch = (r && r.data) || [];
       rows = rows.concat(batch);

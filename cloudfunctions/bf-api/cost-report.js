@@ -47,6 +47,8 @@ function normalizeRow(row) {
     tier: String(raw.tier || raw.qualityTier || ""),
     state: String(raw.state || "committed"),
     costCny: Number.isFinite(costCny) && costCny > 0 ? costCny : 0,
+    // 售价（可选）：只有新版图片流水才带。老数据没有这个字段，绝不按成本去猜售价。
+    priceCny: Number.isFinite(Number(raw.priceCny)) && Number(raw.priceCny) > 0 ? Number(raw.priceCny) : null,
     tsMs: tsMsOf(raw.ts) ?? tsMsOf(raw.createdAt),
   };
 }
@@ -105,6 +107,8 @@ function aggregateCostRows(rows, opts) {
   let imageCount = 0;
   let failedCount = 0;
   let zeroCostEvents = 0;
+  let revenueCents = 0;
+  let pricedEvents = 0;
 
   for (const e of events) {
     const cents = Math.round(e.costCny * 100);
@@ -119,6 +123,7 @@ function aggregateCostRows(rows, opts) {
     if (e.kind === "image") imageCount += 1;
     if (e.state === "failed" || e.state === "reconciliation_required") failedCount += 1;
     if (cents === 0) zeroCostEvents += 1;
+    if (e.priceCny != null) { revenueCents += Math.round(e.priceCny * 100); pricedEvents += 1; }
   }
 
   const toObj = (bag) => Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, round4(v / 100)]));
@@ -152,6 +157,11 @@ function aggregateCostRows(rows, opts) {
     totalCny,
     avgCnyPerLedgerEvent: events.length ? round5(totalCny / events.length) : 0,
     avgCnyPerRequest: requestIds.size ? round5(totalCny / requestIds.size) : 0,
+    // 售价与毛利：只统计带 priceCny 的流水（新版图片流水）。拿不到售价的旧数据不进分母。
+    revenueCny: round4(revenueCents / 100),
+    marginCny: round4((revenueCents - events.filter((e) => e.priceCny != null)
+      .reduce((s2, e) => s2 + Math.round(e.costCny * 100), 0)) / 100),
+    pricedEvents,
     byKind: toObj(byKindC),
     byTier: toObj(byTierC),
     byModel: toObj(byModelC),

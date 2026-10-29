@@ -64,8 +64,9 @@ test("ROUTE-06 能力不支持时前置拦截，不发上游", () => {
 test("ROUTE-07 记账与响应记录真实模型", () => {
   assert.match(IMAGE, /const usedModel = String\(out\.model \|\| RT\.IMAGE_MODEL \|\| ""\)/,
     "未记录实际使用模型");
-  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel\)/,
-    "台账仍写默认模型");
+  // 10-29：台账除了售价还要记上游成本，签名多了 { upstreamCostCny }
+  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel, \{ upstreamCostCny: upstream \}\)/,
+    "台账仍写默认模型，或没把上游成本落账");
   assert.match(IMAGE, /model: usedModel, route_reason: out\.routeReason/,
     "响应未回传模型与路由原因");
 });
