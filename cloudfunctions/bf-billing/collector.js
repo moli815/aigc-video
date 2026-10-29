@@ -3,8 +3,9 @@ const crypto = require("node:crypto");
 const COLLECTION = "bf_vendor_bills";
 const num = x => x != null && x !== "" && Number.isFinite(Number(x)) ? Number(x) : null;
 const text = x => String(x || "").slice(0, 500);
-function datesOf(now) {
-  return [0,1,2].map(n => new Date(now + 8*3600000 - n*86400000).toISOString().slice(0,10));
+function datesOf(now, days = 3, offsetDays = 0) {
+  if (!Number.isInteger(days) || days < 1 || days > 31 || !Number.isInteger(offsetDays) || offsetDays < 0 || offsetDays > 366) throw Object.assign(new Error("Invalid bill date window"),{code:"INVALID_DATE_WINDOW"});
+  return Array.from({length:days},(_,n) => new Date(now + 8*3600000 - (n+offsetDays)*86400000).toISOString().slice(0,10));
 }
 function normalize(provider, row) {
   if (provider === "aliyun-bailian") return {
@@ -13,6 +14,9 @@ function normalize(provider, row) {
     item: text(row.billingItemCode), usage: num(row.usage), usageUnit: text(row.usageUnit), currency: text(row.currency),
     payableAmount: num(row.pretaxAmount), cashPaidAmount: num(row.cashAmount),
     resourcePackageDeduction: num(row.deductedByResourcePackage), couponDeduction: num(row.deductedByCashCoupons),
+    prepaidDeduction: num(row.deductedByPrepaidCard), adjustAmount: num(row.adjustAmount),
+    listPrice: text(row.listPrice), listPriceUnit: text(row.listPriceUnit),
+    originalAmount: num(row.pretaxGrossAmount), discountAmount: num(row.invoiceDiscount),
   };
   return {
     billingDate: text(row.ExpenseDate), billPeriod: text(row.BillPeriod), billDetailId: text(row.BillDetailId),
@@ -75,15 +79,17 @@ function assertBillDates(rows, day, dateOf) {
     throw Object.assign(new Error("Provider returned bills outside requested day"), {code:"BILL_DATE_MISMATCH"});
   }
 }
-async function collect({ db, env = process.env, now = Date.now(), readers = createReaders(env), log = () => {} }) {
+async function collect({ db, env = process.env, now = Date.now(), days = 3, offsetDays = 0, readers = createReaders(env), log = () => {} }) {
   const deadline = Date.now() + 150000;
-  const run = { startedAt: new Date(now), providers: {}, billingLagExpected: true, mutatesMemberBalances: false };
+  const dates=datesOf(now,days,offsetDays);
+  const run = { startedAt: new Date(now), providers: {}, billingLagExpected: true, mutatesMemberBalances: false,
+    dateWindow:{start:dates[dates.length-1],end:dates[0],days,offsetDays} };
   for (const provider of ["volcengine","aliyun-bailian"]) {
     const reader = readers[provider];
     if (!reader) { run.providers[provider] = { status: "awaiting_credentials", rows: 0 }; continue; }
     let imported = 0;
     try {
-      for (const day of datesOf(now)) {
+      for (const day of dates) {
         let cursor = null, rows = [], page = 0, requestId = "";
         do {
           if (Date.now() > deadline) throw Object.assign(new Error("Bill import budget exceeded"),{code:"IMPORT_BUDGET_LIMIT"});

@@ -53,6 +53,9 @@ const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGu
 const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
 const { createModelCallLedger } = require("./shared/model-call-ledger");
+const { ratesFor, imageQuote } = require("./shared/supplier-pricing");
+const { settleUsage } = require("./shared/usage-settlement");
+let SUPPLIER_COST_CATALOG = {};
 // 10-24：requestId 贯穿。AsyncLocalStorage 让任意深度的 await 里都能取到同一个 id，
 // 不需要逐层传参。每个请求在入口 enterWith 一次。
 const reqStore = new AsyncLocalStorage();
@@ -126,6 +129,8 @@ const RUNTIME_SPECS = {
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
   MODEL_COST_RATES: { type: "json", label: "模型供应商成本价（元/百万Token；按完整模型ID配置 input/output/cachedInput，未核价留空）", def: () => "{}" },
+  USAGE_BILLING_MODE: { type: "str", label: "额度计费：supplier_cost=供应商成本×倍数；legacy=旧档位（仅回滚）", def: () => "legacy" },
+  USAGE_COST_MULTIPLIER: { type: "num", label: "用户额度扣减倍数（供应商成本×倍数）", def: () => 2 },
   IMAGE_LEGACY_BRAND_POLICY: { type: "json", label: "旧包Logo规划（支持全员开启或指定账号）", def: () => '{"enabled":false,"accountIds":[]}' },
   // 10-23：尺寸档位与 1.5K 价格纳入统一运行时——bf-image 每 30s 同步这两个值
   IMAGE_SIZE:         { type: "str", label: "生图尺寸档位（1K / 1.5K / 2K）· bf-image 实际读取", def: () => process.env.IMAGE_SIZE || "2K" },
@@ -279,6 +284,10 @@ async function refreshRuntime(force = false) {
     if (qdoc && qdoc.updatedAt) QR_UPLOAD = { plus: 0, pro: 0, ultra: 0 };
     for (const k of TIER_ORDER) if (qdoc && qdoc[k]) QR_UPLOAD[k] = new Date(qdoc.updatedAt).getTime() || Date.now();
   } catch { /* 无上传图 */ }
+  try {
+    const c = await db.collection(C.config).doc("supplier_cost_catalog").get();
+    SUPPLIER_COST_CATALOG = (c.data || [])[0] || {};
+  } catch { /* keep the last verified catalog; never synthesize a price */ }
   applyRuntime();
 }
 
@@ -680,7 +689,8 @@ const assetStore = createAssetStore({ db, app: APP });
 const eventService = createEventService({ db });
 const syncV2 = createSyncService({ db, assetStore });
 const modelLedger = createModelCallLedger({ db, context: () => reqStore.getStore(), source: "bf-api", log: logSafe,
-  pricing: payload => {
+  pricing: (payload, row) => {
+    if (RUNTIME.USAGE_BILLING_MODE === "supplier_cost") return ratesFor(SUPPLIER_COST_CATALOG, RUNTIME, row.provider, payload.model, row.startedAt);
     let rates = RUNTIME.MODEL_COST_RATES || {};
     if (typeof rates === "string") { try { rates = JSON.parse(rates); } catch { rates = {}; } }
     return rates[payload.model] ? { rates: rates[payload.model] } : null;
@@ -1101,6 +1111,11 @@ function bandOf(used, cap, notice) {
 }
 
 async function addChatCost(accountId, costCny, meta) {
+  if (RUNTIME.USAGE_BILLING_MODE === "supplier_cost") {
+    const result = await settleUsage({db,accountId,callId:meta.modelCallId,catalog:SUPPLIER_COST_CATALOG,runtime:RUNTIME,meta});
+    if (result.state !== "committed") logSafe({tag:"usage_charge_pending",modelCallId:meta.modelCallId,state:result.state});
+    return;
+  }
   // 三层额度：除月池外同步累计「当日/当周」计数（跨自然日/周自动归零）
   const dayKey = cnDayKey();
   const weekKey = cnWeekKey();
@@ -1136,6 +1151,12 @@ async function addChatCost(accountId, costCny, meta) {
 }
 
 async function addImageCost(accountId, costCny, meta) {
+  if (RUNTIME.USAGE_BILLING_MODE === "supplier_cost") {
+    const result = await settleUsage({db,accountId,callId:meta.modelCallId,catalog:SUPPLIER_COST_CATALOG,runtime:RUNTIME,meta,
+      imageQuote:imageQuote(meta.model,meta.size,meta.inputImages,RUNTIME)});
+    if (result.state !== "committed") logSafe({tag:"usage_charge_pending",modelCallId:meta.modelCallId,state:result.state});
+    return;
+  }
   const dayKey = cnDayKey();
   const weekKey = cnWeekKey();
   let prev = null;
@@ -2993,7 +3014,7 @@ async function handleChat(req, res) {
       await addChatCost(auth.sub,
         (pt / 1e6) * tier.priceIn + (ct / 1e6) * tier.priceOut,
         { model: upstreamBody.model, tier: tier.name, promptTokens: pt, completionTokens: ct, estimated: !hasUsage, modelCallId: upstream.modelCallId });
-    } catch { /* 记账失败不影响本次返回 */ }
+    } catch { logSafe({tag:"usage_charge_pending",modelCallId:upstream.modelCallId,state:"storage_error"}); }
     if (MODEL_MASK && data && typeof data.model === "string") data.model = MODEL_MASK;   // P0-38 模型名脱敏
     try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary, finalizeImageCalls); }
     catch (e) {
@@ -3083,7 +3104,7 @@ async function handleChat(req, res) {
     await addChatCost(auth.sub, cost, {
       model: upstreamBody.model, tier: tier.name, promptTokens, completionTokens, estimated, modelCallId: upstream.modelCallId,
     });
-  } catch { /* 记账失败不影响本次回答 */ }
+  } catch { logSafe({tag:"usage_charge_pending",modelCallId:upstream.modelCallId,state:"storage_error"}); }
 
   // P1 语义缓存写入：仅在单轮非个性化、回答完整且不含引用编号时（cachePut 内部二次校验）
   if (streamCompleted && cacheKey) { await cachePut(cacheKey, textOut); }
@@ -3218,7 +3239,9 @@ async function handlePoster(req, res) {
   if (!out.ok) return sendError(res, 502, "UPSTREAM_ERROR", `上游返回异常（${out.status}）`);
   const url = out.url;
 
-  try { await addImageCost(auth.sub, UPSTREAM.image.tiers.pro.price, { model: payload.model, tier: "poster-base", modelCallId: out.modelCallId }); } catch { /* ignore */ }
+  try { await addImageCost(auth.sub, UPSTREAM.image.tiers.pro.price, { model: payload.model, tier: "poster-base", size: payload.size,
+    inputImages:Array.isArray(payload.image)?payload.image.length:payload.image?1:0, modelCallId: out.modelCallId }); }
+  catch { logSafe({tag:"usage_charge_pending",modelCallId:out.modelCallId,state:"storage_error"}); }
   sendJson(res, 200, {
     ok: true,
     imageUrl: url,
@@ -4942,6 +4965,11 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      if (sub[0] === "finance" && sub.length === 1 && m === "GET") {
+        const staff = await requireStaff(req,res,true); if(!staff)return;
+        try {return sendJson(res,200,await require("./domains/finance-report").queryFinance(db,url.searchParams));}
+        catch(error){logSafe({tag:"finance_report_failed",code:error.code||"QUERY_FAILED"});return sendError(res,error.code==="BAD_QUERY"?400:503,"FINANCE_UNAVAILABLE",error.code==="BAD_QUERY"?error.message:"财务数据暂时无法读取，请稍后再试。");}
+      }
       if (sub[0] === "cost-report") {
         if (sub.length === 1 && m === "GET") {
           const staff = await requireStaff(req, res, true); if (!staff) return;

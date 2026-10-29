@@ -124,7 +124,7 @@ function createModelCallLedger({ db, context, source, log, pricing = () => null 
         : kind === "image" && outputImages > 0 && priceSnapshot?.unitCostCny != null ? Number((priceSnapshot.unitCostCny * outputImages).toFixed(10)) : null;
       await write(id, { status, endedAt: new Date(), durationMs: Date.now() - started, model: responseModel,
         vendorRequestId: vendorId, providerResponseId, ...lastUsage, outputImages, supplierCostEstimateCny: estimate,
-        costBasis: estimate == null ? "unknown" : "configured_rate", rateSnapshot: priceSnapshot || null,
+        costBasis: estimate == null ? "unknown" : priceSnapshot?.costBasis || "configured_rate", rateSnapshot: priceSnapshot || null,
         errorCode, finishReason, ...extra });
     }
     let response;
