@@ -1,0 +1,13 @@
+{
+  "defaultTier": "fast",
+  "honorClientHigh": false,
+  "honorUserQuality": true,
+  "proPromptTerms": ["高质量", "高品质", "高精度", "专业级", "商业级", "印刷级", "精美", "精细排版", "精致排版", "正式印刷", "商业印刷"],
+  "proTaskKinds": [],
+  "proReasons": ["complex_edit", "identity_sensitive", "detailed_layout", "explicit_quality"],
+  "minReferencesForPro": 3,
+  "nativeTextCharsForPro": 100,
+  "retryQualityToPro": true,
+  "capabilityFallback": true,
+  "fallbackCodes": ["ModelNotSupport", "ModelCapabilityNotSupported", "UnsupportedOperation"]
+}
