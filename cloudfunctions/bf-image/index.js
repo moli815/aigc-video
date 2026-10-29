@@ -61,9 +61,25 @@ const RT = {
   IMAGE_AUTO_POLICY: process.env.IMAGE_AUTO_POLICY || "{}",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
-  IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "0.3",   // Flash ≤1.5K（官方成本 0.12）
-  IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "0.45", // Pro ≤1.5K（官方成本 0.30）
-  IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "0.9",        // Pro >1.5K（官方成本 0.60）
+  // ── 10-29 定价改为"成本 × 倍数"：售价不再手填，避免改成本忘了改售价 ──
+  // 上游官方成本（火山方舟 2026-10 核实）：
+  //   Pro   ≤236 万像素 0.30 / >236 万像素 0.60 / 图层拆分 0.15 / 0.30
+  //   Flash 0.12（不分尺寸）· Lite 0.22 · 4.5 0.25 · 4.0 0.20
+  //   多图输入：Pro 首张免费，第 2 张起 0.02/张；Flash/Lite 输入免费
+  IMAGE_COST_PRO_SMALL: process.env.IMAGE_COST_PRO_SMALL || "0.3",
+  IMAGE_COST_PRO_LARGE: process.env.IMAGE_COST_PRO_LARGE || "0.6",
+  IMAGE_COST_PRO_LAYER_SMALL: process.env.IMAGE_COST_PRO_LAYER_SMALL || "0.15",
+  IMAGE_COST_PRO_LAYER_LARGE: process.env.IMAGE_COST_PRO_LAYER_LARGE || "0.3",
+  IMAGE_COST_FLASH: process.env.IMAGE_COST_FLASH || "0.12",
+  IMAGE_COST_LITE: process.env.IMAGE_COST_LITE || "0.22",
+  IMAGE_COST_45: process.env.IMAGE_COST_45 || "0.25",
+  IMAGE_COST_40: process.env.IMAGE_COST_40 || "0.2",
+  IMAGE_COST_EXTRA_INPUT: process.env.IMAGE_COST_EXTRA_INPUT || "0.02",
+  /// 售价 = 成本 × 倍数。2 = 毛利 100%，正好覆盖一次上游重试与调价波动。
+  IMAGE_PRICE_MULTIPLIER: process.env.IMAGE_PRICE_MULTIPLIER || "2",
+  IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "",      // 弃用：仅保留键位兼容
+  IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "",    // 弃用
+  IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "",          // 弃用
   RATE_IMAGE_PER_HOUR: process.env.RATE_IMAGE_PER_HOUR || "120",
   IMAGE_API_KEY: process.env.IMAGE_API_KEY || "",
 };
@@ -72,7 +88,9 @@ const RT = {
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
   "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY",
-  "IMAGE_PRICE_FAST", "IMAGE_PRICE_SMALL", "IMAGE_PRICE_2K", "RATE_IMAGE_PER_HOUR",
+  "IMAGE_COST_PRO_SMALL", "IMAGE_COST_PRO_LARGE", "IMAGE_COST_PRO_LAYER_SMALL", "IMAGE_COST_PRO_LAYER_LARGE",
+  "IMAGE_COST_FLASH", "IMAGE_COST_LITE", "IMAGE_COST_45", "IMAGE_COST_40", "IMAGE_COST_EXTRA_INPUT",
+  "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR",
 ];
 /**
  * 10-24 模型能力表。**未知 model ID 一律走保守默认**（不传 fast、不支持组图/图层），
@@ -201,22 +219,63 @@ async function refreshRuntime() {
  * 现行售价（用户 2026-10-24 拍板）：
  *   Flash ≤1.5K 0.30（2.5×成本） / Pro ≤1.5K 0.45（1.5×） / Pro >1.5K 0.90（1.5×）
  */
-function priceForSize(size, model) {
-  const s = String(size || RT.IMAGE_SIZE || "1.5K").toUpperCase();
-  const mdl = String(model || "");
-
-  // 先判像素档
+/**
+ * 上游真实成本（元/张）。这是记账口径，不是售价。
+ *
+ * 为什么单独存在：旧实现把"售价"同时当成本写进流水，
+ * 成本看板显示的其实是售价，毛利永远算不出来；改成本时也容易忘改售价。
+ * 现在唯一事实源是官方单价，售价由 cost × multiplier 推导。
+ */
+function upstreamCostOf(opts) {
+  const o = opts || {};
+  const s = String(o.size || RT.IMAGE_SIZE || "1.5K").toUpperCase();
+  const mdl = String(o.model || "");
   let px = 2_250_000;                        // 1.5K 视为约 225 万像素
   if (s === "2K") px = 4_000_000;
   else {
     const m = /^(\d+)\s*[X×]\s*(\d+)$/.exec(s);
     if (m) px = Number(m[1]) * Number(m[2]);
   }
-  if (px > 2_360_000) return Number(RT.IMAGE_PRICE_2K);
+  // 官方档位分界是 261 万像素（不是旧代码里的 236 万）：
+  // 1.5K 3:4 = 1344×1792 = 241 万 → 0.30；2K 3:4 = 1776×2368 = 421 万 → 0.60。
+  // 用 236 万当界会把 1.5K 也划进大图，每张多记 0.30 成本。
+  const large = px > 2_610_000;
+  const layers = o.layerDecomposition === true;
+  let cost;
+  if (/seedream-5-0-pro/i.test(mdl)) {
+    cost = Number(layers
+      ? (large ? RT.IMAGE_COST_PRO_LAYER_LARGE : RT.IMAGE_COST_PRO_LAYER_SMALL)
+      : (large ? RT.IMAGE_COST_PRO_LARGE : RT.IMAGE_COST_PRO_SMALL));
+  } else if (/seedream-5-0-flash/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_FLASH);
+  } else if (/seedream-5-0-lite/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_LITE);
+  } else if (/seedream-4-5/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_45);
+  } else if (/seedream-4-0/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_40);
+  } else {
+    cost = Number(RT.IMAGE_COST_PRO_SMALL);   // 未知模型按 Pro 小图保守计
+  }
+  // 多图输入附加费：官方仅 Pro 收（首张免费，第 2 张起 0.02/张）
+  if (/seedream-5-0-pro/i.test(mdl)) {
+    const extra = Math.max(0, Number(o.inputImages || 0) - 1);
+    cost += extra * Number(RT.IMAGE_COST_EXTRA_INPUT || 0);
+  }
+  return Math.max(0, Number(cost.toFixed(4)));
+}
 
-  // 再判模型：Flash 单独一档
-  if (/seedream-5-0-flash/i.test(mdl)) return Number(RT.IMAGE_PRICE_FAST);
-  return Number(RT.IMAGE_PRICE_SMALL);
+/** 售价 = 成本 × 倍数（默认 2），四舍五入到分，且绝不低于成本。 */
+function customerPriceOf(costCny) {
+  const cost = Math.max(0, Number(costCny) || 0);
+  const mult = Math.max(1, Number(RT.IMAGE_PRICE_MULTIPLIER) || 2);
+  const price = Math.round(cost * mult * 100) / 100;
+  return Math.max(price, Math.round(cost * 100) / 100);
+}
+
+/** 兼容旧调用点：只需要"该收多少钱"的地方走这里。 */
+function priceForSize(size, model, opts) {
+  return customerPriceOf(upstreamCostOf(Object.assign({ size: size, model: model }, opts || {})));
 }
 
 /**
@@ -287,15 +346,18 @@ async function runSeriesChild(opts) {
   }
 
   const model = String(r.model || RT.IMAGE_MODEL || "");
-  const price = priceForSize(resolved, model);
+  // 成本与售价分开算：子任务按实际尺寸与 1 张输入计
+  const upstream = upstreamCostOf({ size: resolved, model, inputImages: 1 });
+  const price = customerPriceOf(upstream);
   const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
-    kind: "series_child", parentJobId: parentRid, index,
+    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream,
   });
   let costState = persisted ? "queued" : "pending";
   if (!persisted) {
     // 台账写不进去：直接走幂等账务事件（事件 ID 同样由 subRid 派生），避免漏账
     const direct = await addImageCost(accountId, price, {
       model, jobKey: subRid, kind: "series_child", parentJobId: parentRid, index,
+      upstreamCostCny: upstream,
     });
     costState = direct ? "committed" : "pending";
   }
@@ -761,9 +823,12 @@ async function readOne(coll, id) {
  * 残余风险（已在交付说明中标注）：CAS 成功后、inc 完成前进程被杀，这一笔会少计。
  * 这里选择「宁可少收、不可重复扣用户」；对账可用事件表重算账户累计。
  */
-async function addImageCost(accountId, costCny, meta) {
-  const cost = Math.max(0, Number(costCny) || 0);
+async function addImageCost(accountId, chargeCny, meta) {
+  // 10-29 账实分离：账户扣的是**售价**，流水记的是**上游成本**。
+  // 旧实现两者混为一个参数，导致成本看板把售价当成本、毛利永远是 0。
+  const charge = Math.max(0, Number(chargeCny) || 0);
   const m = meta || {};
+  const upstream = Math.max(0, Number(m.upstreamCostCny != null ? m.upstreamCostCny : charge) || 0);
   const jobKey = String(m.jobKey || m.jobId || "");
   const eventId = billingEventIdOf(
     accountId,
@@ -777,7 +842,9 @@ async function addImageCost(accountId, costCny, meta) {
   let ev = null;
   try {
     await col.add({
-      _id: eventId, accountId, costCny: cost, model: m.model || "", kind: m.kind || "image",
+      _id: eventId, accountId, costCny: upstream, priceCny: charge,
+      marginCny: Number((charge - upstream).toFixed(4)),
+      model: m.model || "", kind: m.kind || "image",
       jobId: jobKey, parentJobId: m.parentJobId || "",
       index: Number.isFinite(Number(m.index)) ? Number(m.index) : null,
       state: "pending", accountApplied: false, usageApplied: false, ts: new Date(),
@@ -816,15 +883,16 @@ async function addImageCost(accountId, costCny, meta) {
       }
       try {
         await getDb().collection(C.accounts).doc(accountId).update({
-          imageUsedCny: getDb().command.inc(cost),
-          dayUsedCny: getDb().command.inc(cost),
-          weekUsedCny: getDb().command.inc(cost),
+          // 用户侧扣减 = 售价（成本 × 倍数）；流水里另有成本，两者不能混
+          imageUsedCny: getDb().command.inc(charge),
+          dayUsedCny: getDb().command.inc(charge),
+          weekUsedCny: getDb().command.inc(charge),
         });
         accountOk = true;
       } catch (e) {
         try { await col.doc(eventId).update({ accountApplied: false }); } catch (e2) { /* 忽略 */ }
         logStage("billing_account_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: cost,
+          accountId: String(accountId).slice(0, 24), costCny: charge,
           err: String((e && e.message) || e).slice(0, 120),
         });
       }
@@ -839,7 +907,10 @@ async function addImageCost(accountId, costCny, meta) {
   if (!usageOk) {
     try {
       await getDb().collection(C.usage).add({
-        _id: eventId, accountId, kind: "image", costCny: cost, ts: new Date(),
+        _id: eventId, accountId, kind: "image",
+        // costCny = 上游真实成本（成本看板口径）；priceCny = 向用户收的钱；margin = 毛利
+        costCny: upstream, priceCny: charge,
+        marginCny: Number((charge - upstream).toFixed(4)), ts: new Date(),
         model: m.model || "unknown", estimated: false, source: "bf-image",
         jobId: jobKey, parentJobId: m.parentJobId || "",
       });
@@ -849,7 +920,7 @@ async function addImageCost(accountId, costCny, meta) {
       usageOk = !!(await readOne(C.usage, eventId));
       if (!usageOk) {
         logStage("billing_usage_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: cost,
+          accountId: String(accountId).slice(0, 24), costCny: charge,
           err: String((e && e.message) || e).slice(0, 120),
         });
       }
@@ -862,7 +933,7 @@ async function addImageCost(accountId, costCny, meta) {
     } catch (e) { /* 状态位失败不影响账务正确性 */ }
     return true;
   }
-  logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), accountOk, usageOk, costCny: cost });
+  logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), accountOk, usageOk, costCny: charge });
   return false;
 }
 
@@ -931,6 +1002,8 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
   if (ex.kind) patch.kind = String(ex.kind).slice(0, 24);
   if (ex.result) patch.result = ex.result;
   if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
+  // 10-29：costCny 是售价，上游成本另存一份，flush 时才能把成本写进流水
+  if (ex.upstreamCostCny != null) patch.upstreamCostCny = Number(ex.upstreamCostCny) || 0;
   if (ex.input) patch.input = ex.input;
   if (Number.isFinite(Number(ex.index))) patch.index = Number(ex.index);
   try {
@@ -997,6 +1070,7 @@ async function flushJobs(maxJobs) {
         model: d.model || "unknown",
         jobKey: String(id),
         kind: d.kind || "image",
+        upstreamCostCny: d.upstreamCostCny,
         parentJobId: d.parentJobId || "",
         index: d.index,
       });
@@ -2028,8 +2102,16 @@ const server = http.createServer(async (req, res) => {
     if (out.ok) {
       // 10-24：台账记录**实际使用的模型**（此前写死 RT.IMAGE_MODEL，混合路由后会导致成本归因错误）
       const usedModel = String(out.model || RT.IMAGE_MODEL || "");
-      const price = priceForSize(resolveSize(body.size, aspectRatio), usedModel);
-      await finishIdem(rid, auth.sub, out.url, price, usedModel);
+      // 成本口径要带上输入图张数与图层拆分：Pro 多图第 2 张起每张 0.02，图层拆分是另一档价
+      const inputImages = Array.isArray(body.image) ? body.image.length : (body.image ? 1 : 0);
+      const upstream = upstreamCostOf({
+        size: resolveSize(body.size, aspectRatio),
+        model: usedModel,
+        inputImages,
+        layerDecomposition: body.layer_decomposition === true,
+      });
+      const price = customerPriceOf(upstream);
+      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream });
       await flushJobs();
       logStage("image_route", {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,
