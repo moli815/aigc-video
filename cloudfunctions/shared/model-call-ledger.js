@@ -47,7 +47,7 @@ function createModelCallLedger({ db, context, source, log, pricing = () => null 
       } catch (error) {
         if (attempt === 1) {
           // A pending row remains recoverable if finalization fails. Never log content/keys.
-          log({ tag: "model_call_ledger_write_failed", callId: id, operation: insert ? "insert" : "update", code: safeId(error.code || error.name), record: value });
+          log({ tag: "model_call_ledger_write_failed", callId: id, operation: insert ? "insert" : "update", code: safeId(error.code || error.name), record: JSON.parse(JSON.stringify(value)) });
         }
       }
     }
@@ -89,7 +89,7 @@ function createModelCallLedger({ db, context, source, log, pricing = () => null 
       priceCny: null, chargeState: "not_recorded", ...usageOf(null),
     };
     const persisted = await write(id, row, true);
-    if (!persisted) log({ tag: "model_call_ledger_fallback", callId: id, record: row });
+    if (!persisted) log({ tag: "model_call_ledger_fallback", callId: id, record: JSON.parse(JSON.stringify(row)) });
     const priceSnapshot = pricing(payload, row);
     let completed = false, lastUsage = usageOf(null), responseModel = row.model, vendorId = "", providerResponseId = "", json = "", line = "", outputImages = null;
     let tooLarge = false, errorCode = "", finishReason = "", streamDone = false, truncated = false, cancelled = false;

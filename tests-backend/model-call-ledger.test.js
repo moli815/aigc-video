@@ -67,7 +67,11 @@ test('truncated stream, SSE error and consumer cancel do not become successful g
 });
 test('database finalization failures retain pending row and diagnostic; provider reply survives', async()=>{
   const h=harness({failUpdate:true}); const r=await h.ledger.fetch('https://dashscope.aliyuncs.com/chat/completions',h.options,async()=>new Response('{"usage":{"prompt_tokens":1,"completion_tokens":1}}'));
-  await r.json(); assert.equal([...h.rows.values()][0].status,'pending'); assert.equal(h.logs.length,1);
+  await r.json(); assert.equal([...h.rows.values()][0].status,'pending'); assert.equal(h.logs.length,1); assert.equal(typeof h.logs[0].record.endedAt,'string');
+});
+test('provider token-limit truncation remains a charged partial response with exact usage',async()=>{
+  const h=harness();const r=await h.ledger.fetch('https://dashscope.aliyuncs.com/chat/completions',h.options,async()=>new Response(JSON.stringify({choices:[{finish_reason:'length'}],usage:{prompt_tokens:100,completion_tokens:40}})));
+  await r.json();const row=h.rows.get(r.modelCallId);assert.equal(row.status,'partial');assert.equal(row.outputTokens,40);assert.equal(row.finishReason,'length');
 });
 test('cache replay is zero-charge event under stable business order and another account cannot collide', async()=>{
   const h=harness(); h.ctx.businessRequestId='client-uuid';await h.ledger.cached('m','image');h.ctx.requestId='another-trace';await h.ledger.cached('m','image');
