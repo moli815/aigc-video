@@ -6,7 +6,7 @@ const DEFAULT_POLICY = Object.freeze({
   defaultTier: "fast", honorClientHigh: false, proTaskKinds: [],
   proReasons: ["complex_edit", "identity_sensitive"], minReferencesForPro: 3,
   nativeTextCharsForPro: 180, retryQualityToPro: true, capabilityFallback: true,
-  honorUserQuality: false, proPromptTerms: [],
+  honorUserQuality: false, proPromptTerms: [], commercialFinalToPro: true,
   fallbackCodes: ["ModelNotSupport", "ModelCapabilityNotSupported", "UnsupportedOperation"],
 });
 function parseAutoPolicy(raw) {
@@ -15,7 +15,7 @@ function parseAutoPolicy(raw) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...DEFAULT_POLICY };
   const out = { ...DEFAULT_POLICY };
   if (["fast", "high"].includes(value.defaultTier)) out.defaultTier = value.defaultTier;
-  for (const key of ["honorClientHigh", "honorUserQuality", "retryQualityToPro", "capabilityFallback"]) if (typeof value[key] === "boolean") out[key] = value[key];
+  for (const key of ["honorClientHigh", "honorUserQuality", "retryQualityToPro", "capabilityFallback", "commercialFinalToPro"]) if (typeof value[key] === "boolean") out[key] = value[key];
   for (const key of ["proTaskKinds", "proReasons", "fallbackCodes", "proPromptTerms"]) {
     if (Array.isArray(value[key]) && value[key].length <= 30 && value[key].every(x => typeof x === "string" && x.trim().length > 0 && x.length <= 80)) out[key] = value[key];
   }
@@ -45,6 +45,13 @@ function autoDecision(input, rawPolicy) {
   // composites can still use Flash unless the Agent explicitly classifies them.
   if (policy.proReasons.includes(routing.reason)) return { tier: "high", reason: "auto:" + routing.reason };
   const copy = Array.isArray(fields.text) ? fields.text.map(x => x && x.text || "").join("") : String(fields.text || "");
+  // Older shipped clients transmit quality_tier but not their quality reason.
+  // Respect an explicit commercial final-art brief without turning every
+  // image request into Pro. A user-requested draft remains on the fast path.
+  const commercialFinal = /(?:展会|招商|产品|企业|公司|品牌|商业|活动|宣传)[^。\n]{0,10}(?:海报|宣传图|主视觉|展板|画册|物料)|(?:海报|展板)[^。\n]{0,10}(?:正式|商用|印刷|发布)/.test(text);
+  if (policy.commercialFinalToPro && commercialFinal && !/(?:草稿|初稿|先看大概|快速出一版)/.test(text)) {
+    return { tier: "high", reason: "auto:commercial-final" };
+  }
   if (input.textMode !== "overlay" && policy.nativeTextCharsForPro > 0 && copy.length >= policy.nativeTextCharsForPro) return { tier: "high", reason: "auto:dense-native-text" };
   if (policy.honorClientHigh && ["high", "pro", "quality", "best", "hd", "2k"].includes(String(input.qualityTier || "").toLowerCase())) return { tier: "high", reason: "auto:client-high" };
   return { tier: policy.defaultTier, reason: "auto:default-" + policy.defaultTier };

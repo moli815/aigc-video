@@ -56,8 +56,8 @@ test('natural language streams immediately and DONE flushes complete calls',()=>
  const guard=new d.ToolCallStreamGuard('做海报');assert.equal(event(guard.pushLine(frame({content:'正在准备'}))).choices[0].delta.content,'正在准备');
  guard.pushLine(frame({tool_calls:[{index:0,id:'a',function:{name:'image_generate',arguments:'{"prompt":"新品发布"}'}}]}));assert.ok(guard.pushLine('data: [DONE]').includes('新品发布'));guard.end();
 });
-test('ordinary final posters and simple two-image composites stay Flash',()=>{
- for(const taskKind of ['generate','edit','reference']) assert.equal(p.autoDecision({taskKind,qualityTier:'high',prompt:'品牌Logo海报最终稿'}).tier,'fast');
+test('explicit commercial final posters use Pro while simple two-image composites stay Flash',()=>{
+ for(const taskKind of ['generate','edit','reference']) assert.equal(p.autoDecision({taskKind,qualityTier:'high',prompt:'品牌Logo海报最终稿'}).tier,'high');
  assert.equal(p.autoDecision({image:['a','b'],structured:{routing:{reason:'simple_edit'}}}).tier,'fast');
 });
 test('explicit quality, complex editing and quality retry can upgrade to Pro',()=>{
