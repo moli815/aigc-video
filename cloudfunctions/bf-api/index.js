@@ -50,6 +50,7 @@ const { createAssetStore } = require("./shared/asset-store");
 const { createSyncService } = require("./domains/sync-v2");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGuard } = require("./shared/image-delivery");
+const { injectCommercialImageGuidance } = require("./commercial-image-guidance");
 const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
 const { createModelCallLedger } = require("./shared/model-call-ledger");
@@ -2805,6 +2806,7 @@ async function handleChat(req, res) {
   // newer image-delivery policy, including user-requested disclosure exceptions.
   const imageUserText = latestUserText(body.messages || []);
   messages = injectDeliveryRule(messages);
+  messages = injectCommercialImageGuidance(messages, body.tools, imageUserText);
   const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
     policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });

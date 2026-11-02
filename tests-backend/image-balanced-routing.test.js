@@ -62,3 +62,11 @@ test('malformed policy fields are ignored rather than disabling service', () => 
   assert.equal(parsed.honorUserQuality, false); assert.deepEqual(parsed.proPromptTerms, []);
   assert.deepEqual(parseAutoPolicy({proPromptTerms:['']}).proPromptTerms, []);
 });
+
+test('commercial final art is Pro while a draft and ordinary image stay Flash; runtime switch can disable it', () => {
+  const brief = {prompt: '为企业展会设计海报，展示真实产品与使用场景', qualityTier: 'high'};
+  assert.equal(autoDecision(brief, policy).reason, 'auto:commercial-final');
+  assert.equal(autoDecision({...brief, prompt: brief.prompt + '，先出草稿'}, policy).tier, 'fast');
+  assert.equal(autoDecision({prompt: '一张普通风景配图'}, policy).tier, 'fast');
+  assert.equal(autoDecision(brief, {...policy, commercialFinalToPro: false}).tier, 'fast');
+});
