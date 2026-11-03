@@ -1,7 +1,8 @@
 "use strict";
+const { injectImageDesignPolicy } = require("./image-design-policy");
 
-const VERSION = "commercial-image-guidance-v4";
-const COMMERCIAL_TASK = /(?:海报|展会|展板|宣传图|主视觉|产品图|画册|商用图片|商业图片|广告图)/;
+const VERSION = "commercial-image-guidance-v5";
+const COMMERCIAL_TASK = /(?:海报|展会|参展|观展|逛展|展板|宣传图|主视觉|产品图|画册|商用图片|商业图片|广告图|名片|宣传单|折页|传单)/;
 const IMAGE_TOOLS = new Set(["image_generate", "image_edit", "image_series"]);
 const COMMERCIAL_BRIEF = [
   `[${VERSION}] 仅用于本轮商业图片任务。`,
@@ -19,7 +20,8 @@ const COMMERCIAL_BRIEF = [
 
 function isCommercialTask(messages, userText) {
   if (COMMERCIAL_TASK.test(userText)) return true;
-  const followup = /^(?:[1-9一二三四五六]|第?[一二三四五六1-9]个|继续|就这个|按这个|用这个|选这个|好|好的|可以|开始|生成|出图|再来|换个|改成|改为|更真实|再真实|丰富|再丰富|保持|只改|太简单|信息太少|不够真实|按刚才|重新|把|加上)/;
+  if (/(?:天气|合同|发票|代码|法律|税务|邮件)/.test(userText)) return false;
+  const followup = /^(?:[1-9一二三四五六]|第?[一二三四五六1-9]个|继续|就这个|就按|就照|那就|沿用|还是|按(?:这个|刚才|你|我们|之前|前面|上面|那个)|用这个|选这个|好|好的|可以|开始|生成|出图|再来|换个|改成|改为|更真实|再真实|丰富|再丰富|保持|只改|太简单|信息太少|不够真实|重新|把|加上)/;
   if (userText.length > 140 || !followup.test(userText.trim())) return false;
   const userMessages = messages.filter(m => m?.role === "user").map(m =>
     typeof m.content === "string" ? m.content : (m.content || []).filter(p => p.type === "text").map(p => p.text || "").join("\n"));
@@ -35,7 +37,7 @@ function injectCommercialImageGuidance(messages, tools, userText) {
   const hasImageTool = tools.some(tool => IMAGE_TOOLS.has(tool?.function?.name));
   const businessImage = isCommercialTask(messages, userText);
   if (!hasImageTool || !businessImage || messages.some(m => m?.role === "system" && typeof m.content === "string" && m.content.includes(VERSION))) return messages;
-  return [...messages, { role: "system", content: COMMERCIAL_BRIEF }];
+  return injectImageDesignPolicy([...messages, { role: "system", content: COMMERCIAL_BRIEF }], userText);
 }
 
 module.exports = { VERSION, COMMERCIAL_BRIEF, isCommercialTask, injectCommercialImageGuidance };

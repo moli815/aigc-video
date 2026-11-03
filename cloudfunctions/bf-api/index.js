@@ -50,7 +50,7 @@ const { createAssetStore } = require("./shared/asset-store");
 const { createSyncService } = require("./domains/sync-v2");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGuard } = require("./shared/image-delivery");
-const { injectCommercialImageGuidance } = require("./commercial-image-guidance");
+const { injectCommercialImageGuidance, isCommercialTask } = require("./commercial-image-guidance");
 const { injectAssistantGuidance } = require("./assistant-guidance");
 const { compactConversation } = require("./context-compaction");
 const { withImageToolSchema } = require("./image-tool-schema");
@@ -2871,7 +2871,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(upstreamBody.tools);
+  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(upstreamBody.tools, { commercial: isCommercialTask(messages, imageUserText) });
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;
   delete upstreamBody.tier;   // 自定义路由字段不透传给上游
@@ -2912,7 +2912,9 @@ async function handleChat(req, res) {
   }
 
   // ── P1 语义缓存命中：零上游成本直接回放（记账 0 并留痕，便于统计命中率） ──
-  const cacheKey = semanticCacheKey(body.messages, tier.name);
+  // Cached prose must never replace a new tool plan, or reuse a reply formed
+  // under another memory/style system context.
+  const cacheKey = Array.isArray(body.tools) && body.tools.length ? null : semanticCacheKey(messages, tier.name);
   if (cacheKey) {
     const hit = await cacheGet(cacheKey);
     if (hit) {
@@ -4700,7 +4702,8 @@ function semanticCacheKey(messages, tierName) {
   if (/(我|我们|我的|咱们|刚才|之前|上面|这个|那个|本人|帮我写|改成|继续)/.test(text)) return null;
   const norm = text.toLowerCase().replace(/[\s，。！？、,.!?;；:："'“”()（）]/g, "");
   if (norm.length < 5) return null;
-  return "c" + crypto.createHash("sha1").update(norm + "|" + tierName + "|identity-v2").digest("hex").slice(0, 20);
+  const systemDigest = crypto.createHash("sha256").update(JSON.stringify(messages.filter(m=>m.role==="system"))).digest("hex");
+  return "c" + crypto.createHash("sha1").update(norm + "|" + tierName + "|" + systemDigest + "|design-v1").digest("hex").slice(0, 20);
 }
 
 

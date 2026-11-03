@@ -30,7 +30,7 @@ test("commercial design guidance covers information design and copy consistency"
  assert.match(COMMERCIAL_BRIEF,/同一份定稿文案/);assert.match(COMMERCIAL_BRIEF,/不能编造/);
  const tools=[{function:{name:"image_generate"}}], messages=[{role:"user",content:"做参展路线海报"}];
  const out=injectCommercialImageGuidance(messages,tools,"做参展路线海报");
- assert.equal(out.length,2);assert.equal(injectCommercialImageGuidance(out,tools,"做参展路线海报"),out);
+ assert.equal(out.length,3);assert.equal(injectCommercialImageGuidance(out,tools,"做参展路线海报"),out);
 });
 test("dictionary copy becomes the exact typed array understood by shipped phones",()=>{
  const original={main_title:"参展指南",actions:"第一步\n第二步",hotline:"400-7758-119"};
