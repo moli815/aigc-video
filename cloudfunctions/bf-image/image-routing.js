@@ -1,5 +1,5 @@
 "use strict";
-const { requestsQuality, requestsModel } = require("./shared/image-quality-intent");
+const { requestsQuality, modelPreference } = require("./shared/image-quality-intent");
 
 // Runtime JSON is validated here too: DB writes can bypass the admin form.
 const DEFAULT_POLICY = Object.freeze({
@@ -32,8 +32,9 @@ function autoDecision(input, rawPolicy) {
   const kind = input.taskKind || "generate";
   // Client high is generally a baked-in safety default. In auto mode, it is a
   // recommendation, not proof that the human explicitly requested Pro.
-  if (routing.preference === "pro" || requestsModel(text, "pro")) return { tier: "high", reason: "auto:explicit-pro" };
-  if (routing.preference === "flash") return { tier: "fast", reason: "auto:explicit-flash" };
+  const preference = ["pro", "flash", "auto"].includes(routing.preference) ? routing.preference : modelPreference(text);
+  if (preference === "pro") return { tier: "high", reason: "auto:explicit-pro" };
+  if (preference === "flash") return { tier: "fast", reason: "auto:explicit-flash" };
   if (policy.honorUserQuality && routing.user_quality === "high") return { tier: "high", reason: "auto:user-quality" };
   // Older/direct requests have no user-origin signal. Configured literal terms
   // are a fallback only; Agent-added adjectives cannot override an explicit auto.
@@ -49,7 +50,9 @@ function autoDecision(input, rawPolicy) {
   // Respect an explicit commercial final-art brief without turning every
   // image request into Pro. A user-requested draft remains on the fast path.
   const commercialFinal = /(?:展会|招商|产品|企业|公司|品牌|商业|活动|宣传)[^。\n]{0,10}(?:海报|宣传图|主视觉|展板|画册|物料)|(?:海报|展板)[^。\n]{0,10}(?:正式|商用|印刷|发布)/.test(text);
-  if (policy.commercialFinalToPro && commercialFinal && !/(?:草稿|初稿|先看大概|快速出一版)/.test(text)) {
+  const simpleEdit = kind === "edit" && (routing.reason === "simple_edit" ||
+    /(?:只改|仅改|只修改|仅修改)[^。\n]{0,20}(?:日期|电话|地址|颜色|错字)/.test(text));
+  if (policy.commercialFinalToPro && commercialFinal && !simpleEdit && !/(?:草稿|初稿|先看大概|快速出一版)/.test(text)) {
     return { tier: "high", reason: "auto:commercial-final" };
   }
   if (input.textMode !== "overlay" && policy.nativeTextCharsForPro > 0 && copy.length >= policy.nativeTextCharsForPro) return { tier: "high", reason: "auto:dense-native-text" };

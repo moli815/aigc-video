@@ -652,7 +652,7 @@ async function quotaExhausted(req) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
-    const r = await fetch(BF_API_BASE + "/me", {
+    const r = await fetch(BF_API_BASE + "/me?require_active=1", {
       headers: { Authorization: "Bearer " + bearer(req) },
       signal: ctrl.signal,
     });
@@ -681,6 +681,12 @@ async function quotaExhausted(req) {
     if (!j || j.ok === false) {
       logStage("quota_check_bad_body", { ok: j && j.ok });
       return { exhausted: true, unavailable: true, reason: "bad-response", resetAt: null };
+    }
+    // Defence during rolling releases: /me can be readable for renewal while
+    // paid generation must still deny expiry, even with an older API instance.
+    if (require("./shared/member-access").membershipExpired(j.memberUntil)) {
+      return { exhausted: true, unavailable: false, denied: 403, code: "MEMBERSHIP_EXPIRED",
+        message: "会员已到期，请联系续费", reason: "denied-MEMBERSHIP_EXPIRED" };
     }
     const month = j && j.limits && j.limits.month;
     const pct = month && month.remainingPct;
