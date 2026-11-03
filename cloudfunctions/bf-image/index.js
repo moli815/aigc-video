@@ -1396,6 +1396,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
+  const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode });
+  if (designBrief) basePrompt += "\n\n" + designBrief;
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
@@ -1403,10 +1405,13 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 旧实现会把 missingCopy 追加回 prompt，导致底图出现模型画的乱码小字，排版层再叠一遍。
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
   if (rawPrompt && !overlayMode) {
-    const missingCopy = visibleCopyValues(structured && structured.text)
-      .filter((value) => !rawPrompt.includes(value));
-    if (missingCopy.length) {
-      basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
+    const typedCopy = require("./shared/image-design-brief").compileNativeCopy(structured && structured.text, { taskKind, textMode });
+    if (typedCopy) {
+      basePrompt += "\n\n" + typedCopy;
+    } else {
+      const missingCopy = visibleCopyValues(structured && structured.text)
+        .filter((value) => !rawPrompt.includes(value));
+      if (missingCopy.length) basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
     }
   }
 

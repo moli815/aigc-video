@@ -6,7 +6,7 @@ test('old phone receives business image guidance even when it already carries tr
   const messages = [{role: 'system', content: '数据真实性铁律'}, {role: 'user', content: '做一张展会海报'}];
   const tools = [{type: 'function', function: {name: 'image_generate'}}];
   const once = injectCommercialImageGuidance(messages, tools, '做一张展会海报');
-  assert.equal(once.length, 3);
+  assert.equal(once.length, 4);
   assert.match(once[2].content, /真实使用场景/);
   assert.equal(once[2].content.includes(VERSION), true);
   assert.equal(injectCommercialImageGuidance(once, tools, '做一张展会海报'), once);
