@@ -121,9 +121,10 @@ test("QUOTA-01 额度服务不可用返回 503，不误报「已用完」", () =
 
 test("QUOTA-02 组图先估算再启动，余额不足不跑半套", () => {
   const seg = IMAGE.slice(IMAGE.indexOf('if (taskKind === "series")'));
-  assert.match(seg.slice(0, 1600), /const unitWorst = Math\.max/, "未按最贵档估算");
-  assert.match(seg.slice(0, 1600), /error: "QUOTA_INSUFFICIENT"/, "余额不足时未拒绝");
-  assert.match(seg.slice(0, 1600), /actions: \["single_only", "renew", "cancel"\]/, "未给出可执行降级选项");
+  const preflight = seg.slice(0, seg.indexOf("const items = []"));
+  assert.match(preflight, /const unitWorst = Math\.max/, "未按最贵档估算");
+  assert.match(preflight, /error: "QUOTA_INSUFFICIENT"/, "余额不足时未拒绝");
+  assert.match(preflight, /actions: \["single_only", "renew", "cancel"\]/, "未给出可执行降级选项");
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ test("SERIES-09 四个任务端点都存在且顺序正确", () => {
 
 test("SERIES-10 任务文档持久化请求参数，重启后可续跑", () => {
   const seg = IMAGE.slice(IMAGE.indexOf('u.indexOf("/series/start")'));
-  const body = seg.slice(0, 4200);
+  const body = seg.slice(0, seg.indexOf('u.indexOf("/series/step")'));
   for (const k of ["prompt:", "structured:", "sizeResolved:", "qualityTier", "renderIntent", "aspectRatio"]) {
     assert.ok(body.includes(k), `任务文档缺少 ${k}（重开后无法续跑）`);
   }
