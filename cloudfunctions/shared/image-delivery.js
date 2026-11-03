@@ -1,5 +1,5 @@
 "use strict";
-const { requestsQuality, requestsModel } = require("./image-quality-intent");
+const { requestsQuality, modelPreference, imageQualityReason } = require("./image-quality-intent");
 
 // The same boundary runs before tool arguments reach existing phones and before
 // provider compilation. Never sanitize arbitrary chat/document content.
@@ -69,11 +69,8 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   const result = cleanImageRequest(args, userText);
   args.prompt = result.prompt;
   args.structured = result.structured;
-  const explicitPro = requestsModel(userText, "pro");
-  const explicitFast = requestsModel(userText, "flash");
-  const qualityFeedback = /不满意|效果(?:很)?差|效果不好|(?:上次|上一张|刚才|这张|人物|人脸|文字|排版|Logo)[^，。\n]{0,16}(?:不好|不行|不像|不对|变形|扭曲|乱码|失败)/i.test(userText);
-  args.structured.routing = { reason: qualityFeedback ? "quality_retry" : String(args.quality_reason || ""),
-    preference: explicitPro ? "pro" : explicitFast ? "flash" : "auto",
+  args.structured.routing = { reason: imageQualityReason(userText, args.quality_reason),
+    preference: modelPreference(userText),
     user_quality: requestsQuality(userText) ? "high" : "auto" };
   // Resolve user attachment numbering before the App moves the base to slot 1.
   const indices = args.source_indexes;

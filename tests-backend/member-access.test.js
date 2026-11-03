@@ -15,9 +15,11 @@ test('membership: missing, malformed and exact expiry all deny; a valid future a
   }
 });
 
-test('membership: login, token guard and chat recheck all use the expiry policy', () => {
+test('membership: paid token guard and chat recheck use expiry; login permits renewal', () => {
   const src = fs.readFileSync(require.resolve('../cloudfunctions/bf-api/index.js'), 'utf8');
-  assert.equal((src.match(/if \(membershipExpired\((?:acc|account)\.expiresAt/g) || []).length, 3);
+  assert.match(src, /if \(!allowExpired && membershipExpired\(acc\.expiresAt\)\)/);
+  assert.match(src, /if \(membershipExpired\(account\.expiresAt, nowMs\(\)\)\)/);
+  assert.match(src, /allowExpired = false/);
 });
 
 test('quota exhaustion is actionable billing, not retryable internal failure', () => {
@@ -34,11 +36,12 @@ async function quota(body, status = 200, reserved = 0) {
   const context = { AbortController, setTimeout, clearTimeout, BF_API_BASE: 'https://example.invalid',
     bearer: () => 'test', authSubOf: () => 'canary', logStage: () => {},
     activeReservedCny: async () => reserved,
+    require: () => ({ membershipExpired }),
     fetch: async () => ({ ok: status === 200, status, json: async () => body }) };
   vm.runInNewContext(quotaFn, context);
   return context.quotaExhausted({});
 }
-const snapshot = (used = 0, pct = 100) => ({ ok: true, limits: { month: { enabled: true, remainingPct: pct } },
+const snapshot = (used = 0, pct = 100) => ({ ok: true, memberUntil: '2099-01-01', limits: { month: { enabled: true, remainingPct: pct } },
   usage: { pool: { capCny: 10, usedCny: used } } });
 
 test('image quota: expired and suspended pass through; network service failure stays closed', async () => {
@@ -57,9 +60,10 @@ test('image quota: full pool/reservations deny, remaining budget allows', async 
 });
 
 test('image quota: malformed cost/percentage response cannot permit free generation', async () => {
-  for (const body of [{}, {ok: false}, snapshot(NaN), snapshot(-1), snapshot(0, NaN),
+  for (const body of [{ok: false}, snapshot(NaN), snapshot(-1), snapshot(0, NaN),
                       { ...snapshot(), usage: {pool: {capCny: 0, usedCny: 0}} }]) {
     const result = await quota(body);
     assert.equal(result.exhausted, true); assert.equal(result.unavailable, true);
   }
+  assert.equal((await quota({})).code, 'MEMBERSHIP_EXPIRED');
 });

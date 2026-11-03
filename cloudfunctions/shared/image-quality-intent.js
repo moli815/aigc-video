@@ -33,4 +33,22 @@ function requestsModel(text, model) {
     return false;
   });
 }
-module.exports = { QUALITY_TERMS, requestsQuality, requestsModel };
+// Last explicit instruction wins. A negated model is a real constraint, not
+// merely the absence of a positive preference.
+function modelPreference(text) {
+  const value = String(text || "").toLowerCase();
+  const pattern = /(?:(不要|不用|别|禁止|不许|无需)\s*(?:再|使用|用|切到|改用)?|(必须|指定|使用|切到|改用|换成|用)\s*)\s*(pro|flash)\b/g;
+  let result = "auto", match;
+  while ((match = pattern.exec(value))) {
+    result = match[1] ? (match[3] === "pro" ? "flash" : "pro") : match[3];
+  }
+  return result;
+}
+function imageQualityReason(userText, fallback = "") {
+  const text = String(userText || "");
+  const feedback = /不满意|效果(?:很)?差|效果不好|(?:上次|上一张|刚才|这张|图片|人物|人脸|文字|排版|logo)[^，。\n]{0,16}(?:不好|不行|不像|不对|变形|扭曲|乱码|失败|太简单|过于简单|不够真实|信息太少)/i.test(text);
+  if (feedback) return "quality_retry";
+  if (/(?:保持|保留|不改变|不改|不要改变|不要改)[^，。\n]{0,12}(?:本人|长相|脸|身份)|(?:本人|长相|脸|身份)[^，。\n]{0,8}(?:不变|一致|原样)|把[^，。\n]{0,16}(?:人|人物)[^，。\n]{0,12}(?:放到|放进|合入|合成到|[pP]到)/.test(text)) return "identity_sensitive";
+  return String(fallback || "");
+}
+module.exports = { QUALITY_TERMS, requestsQuality, requestsModel, modelPreference, imageQualityReason };
