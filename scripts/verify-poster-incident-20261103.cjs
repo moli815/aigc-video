@@ -1,0 +1,26 @@
+const fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),assert=require('node:assert/strict');
+const sdk=require(path.resolve('cloudfunctions/bf-api/node_modules/@cloudbase/node-sdk'));const c=JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE,'.config/.cloudbase/auth.json'),'utf8')).credential;
+const db=sdk.init({env:'xmy-test-d5g8c0xcifcefcfd5',region:'ap-shanghai',secretId:c.tmpSecretId,secretKey:c.tmpSecretKey,sessionToken:c.tmpToken}).database();
+const host='https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com',folder='outputs/incident-20261103-poster';const id='poster-incident-'+crypto.randomBytes(5).toString('hex');let token='',created=false;const report={checks:[],at:new Date().toISOString()};
+async function call(url,body){const r=await fetch(host+url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(280000)});const text=await r.text();assert.equal(r.status,200,url+' '+r.status);try{return JSON.parse(text)}catch{return {raw:text}}}
+function check(name,fields={}){const row={name,...fields};report.checks.push(row);console.log(JSON.stringify(row));}
+(async()=>{try{
+const salt=crypto.randomBytes(16).toString('hex'),password=crypto.randomBytes(24).toString('hex'),now=new Date();await db.collection('bf_accounts').doc(id).set({username:id,displayName:'海报回归临时账号',status:'active',tier:'ultra',expiresAt:new Date(Date.now()+3600000),createdAt:now,cycleAnchorAt:now,quotaOverrideCny:10,pwv:0,sv:0,chatUsedCny:0,imageUsedCny:0,passwordHash:'scrypt$'+salt+'$'+crypto.scryptSync(password,salt,64).toString('hex')});created=true;
+token=(await call('/api/login',{username:id,password})).token;
+const small=await call('/api/chat',{stream:true,chatMode:'standard',max_tokens:1,messages:[{role:'user',content:'详细说明企业参展如何筛选合作伙伴。'}]});
+const events=small.raw.split('\n').filter(x=>x.startsWith('data: ')&&x!=='data: [DONE]').map(x=>JSON.parse(x.slice(6)));
+const error=events.find(x=>x.error);assert.ok(error);assert.equal(typeof error.error,'string');assert.match(error.error,/没有写完|没有接收完整/);check('live truncated output returns readable legacy-compatible error',{copy:error.error,requestId:error.requestId});
+const user='我们是中防保全（苏州）科技有限公司，参加安防展。请做9:16竖版信息海报：给安防报警行业老板一份可落地的参展行动指南，要信息全面，不能只是预约广告。包含找合作/找渠道/找场景/找联动的目标，按合作价值安排走访优先级、三天行动安排、合作方类型、现场必问问题、淘汰标准、当天下一步。可以附一个简短角标介绍中防AI能现场生成企业Logo和解决方案。没有提供展馆号和展位位置，不要编造。不要编造具体日期与效果数字。热线逐字保留400-7758-119。';
+const tool={type:'function',function:{name:'image_generate',description:'按用户要求生成图片',parameters:{type:'object',properties:{prompt:{type:'string'},quality_tier:{type:'string'},quality_reason:{type:'string'},source:{type:'string'},aspect_ratio:{type:'string'},structured:{type:'object',additionalProperties:true}},required:['prompt']}}};
+const plan=await call('/api/chat',{stream:false,chatMode:'standard',max_tokens:9000,messages:[{role:'user',content:user}],tools:[tool],tool_choice:{type:'function',function:{name:'image_generate'}}});
+const calls=plan.choices?.[0]?.message?.tool_calls;assert.equal(calls?.length,1);const args=JSON.parse(calls[0].function.arguments);fs.writeFileSync(folder+'/planned-request.json',JSON.stringify({user,args},null,2));
+const items=args.structured?.text||[];assert.ok(Array.isArray(items)&&items.length>=6);const copy=items.map(i=>i.text||'').join('\n');assert.match(copy,/400-7758-119/);assert.match(copy,/必问|问题|怎么|如何/);assert.match(copy,/淘汰|排除|不合作|少停留|不优先|筛选/);const blocks=args.structured.layout?.blocks||[];
+const layoutValid=blocks.length===items.length&&blocks.every(b=>Number.isFinite(b.x)&&Number.isFinite(b.y)&&Number.isFinite(b.width)&&Number.isFinite(b.height)&&b.x>=0.02&&b.y>=0.02&&b.x+b.width<=0.98&&b.y+b.height<=0.98)&&new Set(blocks.map(b=>b.key)).size===items.length;
+const collisions=blocks.flatMap((a,i)=>blocks.slice(i+1).filter(b=>Math.min(a.x+a.width,b.x+b.width)>Math.max(a.x,b.x)&&Math.min(a.y+a.height,b.y+b.height)>Math.max(a.y,b.y)));
+check('live planner retains actionable information and exact contact',{textItems:items.length,copyChars:copy.length,blocks:blocks.length,layoutValid,collisions:collisions.length});
+assert.ok(layoutValid);assert.equal(collisions.length,0);
+const nativePrompt=args.prompt+'\n准确呈现以下定稿文案，按信息层级排版，不重复栏目；这是完整内容，不得画省略占位或空白标识框：\n'+copy;
+const img=await call('/img/image',{requestId:crypto.randomUUID(),task_kind:'generate',prompt:args.prompt,size:'1584x2816',aspect_ratio:'9:16',quality_tier:'high',structured:{text:args.structured.text,routing:{preference:'pro',user_quality:'high',reason:'detailed_layout'}}});assert.ok(img.ok);const media=await fetch(img.url);assert.equal(media.status,200);fs.writeFileSync(folder+'/poster-native-pro.image',Buffer.from(await media.arrayBuffer()));check('native Pro visual sample generated',{model:img.model,reason:img.route_reason,cost:img.cost});
+report.ok=true;
+}catch(e){report.ok=false;report.error=String(e.message).slice(0,300);console.error(report.error);process.exitCode=1;}
+finally{if(created){await db.collection('bf_accounts').doc(id).remove();report.temporaryAccountDeleted=true;}fs.writeFileSync(folder+'/live-validation.json',JSON.stringify(report,null,2));}})();

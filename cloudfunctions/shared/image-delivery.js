@@ -1,5 +1,6 @@
 "use strict";
 const { requestsQuality, modelPreference, imageQualityReason } = require("./image-quality-intent");
+const { fitTextScene } = require("./text-scene");
 
 // The same boundary runs before tool arguments reach existing phones and before
 // provider compilation. Never sanitize arbitrary chat/document content.
@@ -63,12 +64,32 @@ function latestUserText(messages) {
   if (!user) return "";
   return typeof user.content === "string" ? user.content : (Array.isArray(user.content) ? user.content.filter(p => p.type === "text").map(p => p.text || "").join("\n") : "");
 }
+function normalizeVisibleCopy(value) {
+  if (!value || Array.isArray(value) || typeof value !== "object") return value;
+  // Legacy LLMs sometimes emit a field dictionary, which the shipped Swift
+  // TextItem.parse cannot read. Convert at the tool boundary without losing copy.
+  return Object.entries(value).map(([key, entry]) => {
+    const item = typeof entry === "string" ? { text: entry } : entry;
+    if (!item || typeof item.text !== "string") throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" });
+    const role = ["title","subtitle","body","label","contact","footer"].includes(item.role) ? item.role
+      : /hotline|phone|email|contact|电话|热线/i.test(key) ? "contact"
+        : /subtitle|副标题/i.test(key) ? "subtitle"
+          : /main_title|^title$|主标题/i.test(key) ? "title"
+            : /head$|heading|栏目/i.test(key) ? "label" : "body";
+    return { ...item, key, role, text: item.text };
+  });
+}
 function sanitizeToolCall(call, userText, observe = () => {}) {
   if (!call || !call.function || !IMAGE_TOOLS.has(call.function.name)) return call;
-  const args = JSON.parse(call.function.arguments || "{}");
-  const result = cleanImageRequest(args, userText);
+  let args;
+  try { args = JSON.parse(call.function.arguments || "{}"); }
+  catch { throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" }); }
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" });
+  const normalized = args.structured && typeof args.structured === "object" && !Array.isArray(args.structured)
+    ? { ...args, structured: { ...args.structured, text: normalizeVisibleCopy(args.structured.text) } } : args;
+  const result = cleanImageRequest(normalized, userText);
   args.prompt = result.prompt;
-  args.structured = result.structured;
+  args.structured = fitTextScene(result.structured);
   args.structured.routing = { reason: imageQualityReason(userText, args.quality_reason),
     preference: modelPreference(userText),
     user_quality: requestsQuality(userText) ? "high" : "auto" };
@@ -94,7 +115,7 @@ function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => ca
   }) };
 }
 class ToolCallStreamGuard {
-  constructor(userText, observe, finalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.pending = new Map(); this.bytes = 0; }
+  constructor(userText, observe, finalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; }
   flush(index) {
     const calls = this.pending.get(index);
     if (!calls) return [];
@@ -107,12 +128,17 @@ class ToolCallStreamGuard {
     if (!raw) return line;
     if (raw === "[DONE]") {
       const frames = [...this.pending.keys()].map(index => "data: " + JSON.stringify({ choices: [{ index, delta: { tool_calls: this.flush(index) } }] }));
+      this.terminal = true;
       return [...frames, line].join("\n\n");
     }
     let obj;
     try { obj = JSON.parse(raw); } catch { return line; }
+    if (obj.error) throw Object.assign(new Error("UPSTREAM_STREAM_ERROR"), { code: "UPSTREAM_STREAM_ERROR" });
     if (!Array.isArray(obj.choices)) return line;
     for (const choice of obj.choices) {
+      if (choice.finish_reason === "length") throw Object.assign(new Error("OUTPUT_LIMIT"), { code: "OUTPUT_LIMIT" });
+      if (choice.finish_reason === "content_filter") throw Object.assign(new Error("CONTENT_FILTER"), { code: "CONTENT_FILTER" });
+      if (choice.finish_reason) this.terminal = true;
       const index = choice.index || 0, delta = choice.delta;
       if (delta && Array.isArray(delta.tool_calls)) {
         let calls = this.pending.get(index);
@@ -137,6 +163,9 @@ class ToolCallStreamGuard {
     }
     return "data: " + JSON.stringify(obj);
   }
-  end() { if (this.pending.size) throw new Error("TOOL_ARGUMENTS_INCOMPLETE"); }
+  end() {
+    if (this.pending.size) throw Object.assign(new Error("TOOL_ARGUMENTS_INCOMPLETE"), { code: "TOOL_ARGUMENTS_INCOMPLETE" });
+    if (!this.terminal) throw Object.assign(new Error("UPSTREAM_STREAM_INCOMPLETE"), { code: "UPSTREAM_STREAM_INCOMPLETE" });
+  }
 }
-module.exports = { BOUNDARY_VERSION, DELIVERY_RULE, labelOf, cleanText, cleanImageRequest, injectDeliveryRule, latestUserText, sanitizeToolCall, sanitizeCompletion, ToolCallStreamGuard };
+module.exports = { BOUNDARY_VERSION, DELIVERY_RULE, labelOf, cleanText, cleanImageRequest, injectDeliveryRule, latestUserText, normalizeVisibleCopy, sanitizeToolCall, sanitizeCompletion, ToolCallStreamGuard };
