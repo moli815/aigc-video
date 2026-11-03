@@ -290,6 +290,11 @@ function customerPriceOf(costCny) {
 function priceForSize(size, model, opts) {
   return customerPriceOf(upstreamCostOf(Object.assign({ size: size, model: model }, opts || {})));
 }
+function worstSeriesUnitPrice(size, inputImages = 0) {
+  const models = modelsOf();
+  return Math.max(priceForSize(size, models.pro || RT.IMAGE_MODEL, { inputImages }),
+    priceForSize(size, models.fast || RT.IMAGE_MODEL, { inputImages }));
+}
 
 /**
  * 10-24 组图编排器（计划 P0-8）。
@@ -564,12 +569,18 @@ async function executeSeriesStep(task, index, accountId) {
 }
 
 /** Retry v2 tasks through the legacy retry endpoint used by shipped phones. */
-async function retryStoredSeriesTask(task, accountId, rawIndices) {
+async function retryStoredSeriesTask(task, accountId, rawIndices, quota) {
   if (task.accountId !== accountId) return { status: 403, payload: { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" } };
   if (task.status === "cancelled") return { status: 409, payload: { ...seriesTaskPayload(task), error: "TASK_CANCELLED", msg: "这次任务已取消，请重新开始。" } };
   const failed = (task.items || []).filter(i => i && !i.ok).map(i => Number(i.index));
   const wanted = Array.isArray(rawIndices) && rawIndices.length ? rawIndices : failed;
   const targets = [...new Set(wanted.map(Number).filter(i => Number.isInteger(i) && failed.includes(i)))];
+  const resolved = task.sizeResolved || resolveSize(task.size, task.aspectRatio);
+  const need = targets.length * worstSeriesUnitPrice(resolved, task.referenceManifest ? task.referenceManifest.references.length : 0);
+  const remaining = Number.isFinite(quota && quota.remainingCny) ? quota.remainingCny : Infinity;
+  if (remaining + 1e-6 < need) return { status: 402, payload: { ok: false, error: "QUOTA_INSUFFICIENT",
+    msg: "剩余额度不足以补齐这些图片，可以先补一张或续费后再试。", needCny: Number(need.toFixed(4)), remainingCny: remaining,
+    actions: ["single_only", "renew", "cancel"] } };
   for (const i of targets) await executeSeriesStep(task, i, accountId);
   await flushJobs(targets.length + 2);
   const latest = await readSeriesTask(task._id) || task;
@@ -1733,12 +1744,8 @@ const server = http.createServer(async (req, res) => {
       return send(422, { ok: false, error: "IMAGE_REFERENCE_UNAVAILABLE", msg: "这组图需要的原图尚未同步完整，请先同步素材后再试。这次没有生成图片或扣费。" });
     }
 
-    const models = modelsOf();
     const inputImageCount = referenceInput.referenceManifest ? referenceInput.referenceManifest.references.length : 0;
-    const unitWorst = Math.max(
-      priceForSize(resolved, models.pro || RT.IMAGE_MODEL, { inputImages: inputImageCount }),
-      priceForSize(resolved, models.fast || RT.IMAGE_MODEL, { inputImages: inputImageCount })
-    );
+    const unitWorst = worstSeriesUnitPrice(resolved, inputImageCount);
     const need = Number((unitWorst * n).toFixed(4));
     if (typeof q.remainingCny === "number" && q.remainingCny + 1e-6 < need) {
       logStage("series_start_quota_short", { sub: auth.sub, n, remaining: q.remainingCny, need });
@@ -1922,7 +1929,7 @@ const server = http.createServer(async (req, res) => {
     if (!prev || prev.task_kind !== "series" || !input) {
       const task = await readSeriesTask(seriesTaskIdOf(auth.sub, parentRid));
       if (task) {
-        const retry = await retryStoredSeriesTask(task, auth.sub, body.indices);
+        const retry = await retryStoredSeriesTask(task, auth.sub, body.indices, q);
         return send(retry.status, retry.payload);
       }
       return send(404, {
@@ -2088,13 +2095,9 @@ const server = http.createServer(async (req, res) => {
           msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
         });
       }
-      const models = modelsOf();
       // 10-24 P1-12：先按最贵档估算，余额不足就不启动任何子图 ——
       // 否则 4 张跑完才发现额度不够，用户拿到半套、账也乱。
-      const unitWorst = Math.max(
-        priceForSize(resolved, models.pro || RT.IMAGE_MODEL, { inputImages: Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0 }),
-        priceForSize(resolved, models.fast || RT.IMAGE_MODEL, { inputImages: Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0 })
-      );
+      const unitWorst = worstSeriesUnitPrice(resolved, Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0);
       const cap = Number(q.capCny);
       const used = Number(q.usedCny);
       if (Number.isFinite(cap) && cap > 0 && Number.isFinite(used)) {
