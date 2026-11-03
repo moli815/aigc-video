@@ -35,6 +35,13 @@ const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { cleanImageRequest } = require("./shared/image-delivery");
+const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
+const { referenceRequestFingerprint, prepareSeriesReferenceInput, resolveSeriesReferenceInput } = require("./shared/series-reference-input");
+function imageReferenceStoreOf() {
+  const db = getDb();
+  return createSyncedImageReferenceStore({ db,
+    assetStore: require("./shared/asset-store").createAssetStore({ db, app: __APP }) });
+}
 const { autoDecision, parseAutoPolicy, canFallbackToPro } = require("./image-routing");
 const { AsyncLocalStorage } = require("async_hooks");
 const { createModelCallLedger } = require("./shared/model-call-ledger");
@@ -312,8 +319,8 @@ function seriesPrompt(base, index, total) {
  * 任务永远不是 done，flushJobs 永远扫不到，于是这一张既不进账本也不进账务。
  */
 async function runSeriesChild(opts) {
-  const { parentRid, index, total, accountId, prompt, image, size, structured,
-          renderIntent, aspectRatio, qualityTier, resolved } = opts;
+  const { parentRid, index, total, accountId, prompt, size, structured,
+          renderIntent, aspectRatio, qualityTier, resolved, referenceManifest } = opts;
   const subRid = parentRid + "::s" + index;
   const claim = await claimIdem(subRid, accountId);
 
@@ -329,6 +336,16 @@ async function runSeriesChild(opts) {
   }
   if (claim.state !== "new") return { index, ok: false, message: "暂时无法确认生成状态，尚未重复生成。", errorCategory: "storage" };
 
+  let source;
+  try {
+    source = referenceManifest ? await resolveSeriesReferenceInput({ store: imageReferenceStoreOf(),
+      owner: accountId, manifest: referenceManifest, image: opts.image }) : { image: opts.image };
+  } catch {
+    await abortIdem(subRid, accountId, "reference_unavailable");
+    logStage("series_reference_unavailable", { index });
+    return { index, ok: false, message: "需要的原图暂时无法读取，请确认素材已同步后再试。", errorCategory: "reference_unavailable" };
+  }
+  const image = source.image;
   const r = await generate({
     prompt: seriesPrompt(prompt, index, total),
     image, size, structured, renderIntent, aspectRatio,
@@ -336,6 +353,7 @@ async function runSeriesChild(opts) {
     taskKind: "generate",          // 子任务一律按单图生成，路由走 generate 规则
     qualityTier,
     requestedCount: 1,
+    referenceRoles: source.referenceRoles,
   });
 
   if (!r.ok) {
@@ -352,8 +370,8 @@ async function runSeriesChild(opts) {
   }
 
   const model = String(r.model || RT.IMAGE_MODEL || "");
-  // 成本与售价分开算：子任务按实际尺寸与 1 张输入计
-  const upstream = upstreamCostOf({ size: resolved, model, inputImages: 1 });
+  // 成本与售价分开算：子任务按实际尺寸与实际输入图数计。
+  const upstream = upstreamCostOf({ size: resolved, model, inputImages: Array.isArray(image) ? image.length : image ? 1 : 0 });
   const price = customerPriceOf(upstream);
   const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
     kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream, modelCallId: r.modelCallId,
@@ -539,9 +557,30 @@ async function executeSeriesStep(task, index, accountId) {
     structured: task.structured, renderIntent: task.renderIntent,
     aspectRatio: task.aspectRatio, qualityTier: task.qualityTier,
     resolved: task.sizeResolved,
+    referenceManifest: task.referenceManifest,
   });
   await recordSeriesItem(task._id, index, item);
   return item;
+}
+
+/** Retry v2 tasks through the legacy retry endpoint used by shipped phones. */
+async function retryStoredSeriesTask(task, accountId, rawIndices) {
+  if (task.accountId !== accountId) return { status: 403, payload: { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" } };
+  if (task.status === "cancelled") return { status: 409, payload: { ...seriesTaskPayload(task), error: "TASK_CANCELLED", msg: "这次任务已取消，请重新开始。" } };
+  const failed = (task.items || []).filter(i => i && !i.ok).map(i => Number(i.index));
+  const wanted = Array.isArray(rawIndices) && rawIndices.length ? rawIndices : failed;
+  const targets = [...new Set(wanted.map(Number).filter(i => Number.isInteger(i) && failed.includes(i)))];
+  for (const i of targets) await executeSeriesStep(task, i, accountId);
+  await flushJobs(targets.length + 2);
+  const latest = await readSeriesTask(task._id) || task;
+  const items = (latest.items || []).filter(Boolean);
+  await refreshSeriesCostStates(task._id, accountId, items);
+  for (const i of targets) {
+    const item = items.find(item => Number(item.index) === i);
+    if (item) await recordSeriesItem(task._id, i, item);
+  }
+  const updated = await refreshTaskState(task._id) || latest;
+  return { status: 200, payload: { ...seriesTaskPayload(updated), retriedIndices: targets, cached: !targets.length } };
 }
 
 /** flushJobs 之后再读一次子任务，把 queued 更新成真实 committed —— 响应里的金额必须是账本状态 */
@@ -1670,17 +1709,35 @@ const server = http.createServer(async (req, res) => {
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
     const clientRid = normalizeRid(body.requestId);
     const taskId = seriesTaskIdOf(auth.sub, clientRid);
+    let referenceFingerprint;
+    try { referenceFingerprint = referenceRequestFingerprint(body.structured && body.structured.image_references); }
+    catch { return send(422, { ok: false, error: "IMAGE_REFERENCES_INVALID", msg: "参考素材参数尚未完整，请重新选择原图后再试。" }); }
 
     // 幂等：同一 requestId 重复 start 返回同一任务，不新建、不重复预留
     const existing = await readSeriesTask(taskId);
     if (existing) {
+      if (existing.accountId !== auth.sub) return send(403, { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" });
+      if ((existing.referenceFingerprint || "") !== referenceFingerprint) {
+        return send(409, { ok: false, error: "IMAGE_REFERENCE_CONFLICT", msg: "这次任务的素材已经确定，请新建任务来更换素材。" });
+      }
       return send(200, Object.assign(seriesTaskPayload(existing), { idempotent: true, ms: Date.now() - tStart }));
     }
 
+    let referenceInput = { referenceManifest: null, referenceFingerprint: "" };
+    try {
+      if (referenceFingerprint) referenceInput = await prepareSeriesReferenceInput({ store: imageReferenceStoreOf(),
+        owner: auth.sub, structured: body.structured, image: body.image });
+      if (body.image && !referenceInput.referenceManifest) throw Error("IMAGE_REFERENCE_NOT_DURABLE");
+    } catch {
+      logStage("series_reference_preflight_failed", {});
+      return send(422, { ok: false, error: "IMAGE_REFERENCE_UNAVAILABLE", msg: "这组图需要的原图尚未同步完整，请先同步素材后再试。这次没有生成图片或扣费。" });
+    }
+
     const models = modelsOf();
+    const inputImageCount = referenceInput.referenceManifest ? referenceInput.referenceManifest.references.length : 0;
     const unitWorst = Math.max(
-      priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
-      priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
+      priceForSize(resolved, models.pro || RT.IMAGE_MODEL, { inputImages: inputImageCount }),
+      priceForSize(resolved, models.fast || RT.IMAGE_MODEL, { inputImages: inputImageCount })
     );
     const need = Number((unitWorst * n).toFixed(4));
     if (typeof q.remainingCny === "number" && q.remainingCny + 1e-6 < need) {
@@ -1708,6 +1765,7 @@ const server = http.createServer(async (req, res) => {
       sizeResolved: resolved,
       renderIntent, aspectRatio, qualityTier,
       hasImage: !!body.image,
+      ...(referenceInput.referenceManifest ? referenceInput : {}),
       reservedCny: need,
       succeeded: 0,
       failedIndices: [],
@@ -1722,7 +1780,9 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       // 并发 start：另一个请求刚建好 → 返回已有的那份
       const again = await readSeriesTask(taskId);
-      if (again) return send(200, Object.assign(seriesTaskPayload(again), { idempotent: true }));
+      if (again && again.accountId !== auth.sub) return send(403, { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" });
+      if (again && (again.referenceFingerprint || "") === referenceFingerprint) return send(200, Object.assign(seriesTaskPayload(again), { idempotent: true }));
+      if (again) return send(409, { ok: false, error: "IMAGE_REFERENCE_CONFLICT", msg: "这次任务的素材已经确定，请新建任务来更换素材。" });
       logStage("series_start_create_failed", { sub: auth.sub, err: String((e && e.message) || e).slice(0, 120) });
       return send(500, { ok: false, code: 500, error: "INTERNAL", msg: "任务创建失败，请稍后重试。" });
     }
@@ -1860,6 +1920,11 @@ const server = http.createServer(async (req, res) => {
     const prev = rec && rec.result;
     const input = rec && rec.input;
     if (!prev || prev.task_kind !== "series" || !input) {
+      const task = await readSeriesTask(seriesTaskIdOf(auth.sub, parentRid));
+      if (task) {
+        const retry = await retryStoredSeriesTask(task, auth.sub, body.indices);
+        return send(retry.status, retry.payload);
+      }
       return send(404, {
         ok: false, code: 404, error: "SERIES_NOT_FOUND",
         msg: "没有找到这次组图任务的记录，请重新生成。",
@@ -1963,6 +2028,9 @@ const server = http.createServer(async (req, res) => {
     const hasStructured = !!(body.structured && typeof body.structured === "object" && Object.keys(body.structured).length);
 
     // 幂等占位：add(_id=rid) 成功才拿到执行权；重复请求复用结果或返回"进行中"。
+    if (body.structured && body.structured.image_references != null) {
+      return send(422, { ok: false, error: "TASK_UNSUPPORTED", msg: "历史原图组图需要使用分步组图任务，请重新发起组图。这次没有生成图片或扣费。" });
+    }
     // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
     const rid = normalizeRid(body.requestId);
     if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
@@ -2024,8 +2092,8 @@ const server = http.createServer(async (req, res) => {
       // 10-24 P1-12：先按最贵档估算，余额不足就不启动任何子图 ——
       // 否则 4 张跑完才发现额度不够，用户拿到半套、账也乱。
       const unitWorst = Math.max(
-        priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
-        priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
+        priceForSize(resolved, models.pro || RT.IMAGE_MODEL, { inputImages: Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0 }),
+        priceForSize(resolved, models.fast || RT.IMAGE_MODEL, { inputImages: Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0 })
       );
       const cap = Number(q.capCny);
       const used = Number(q.usedCny);

@@ -19,6 +19,21 @@
 
 /** @type {Record<string, Entry>} */
 const CATALOG = {
+  IMAGE_REFERENCES_INVALID: {
+    category: "input", retryable: false,
+    message: "参考素材还没选择完整，请重新选择需要的原图后再试。",
+    actions: ["edit_request"],
+  },
+  IMAGE_REFERENCE_UNAVAILABLE: {
+    category: "storage", retryable: true,
+    message: "这组图需要的原图暂时无法读取，请先确认素材已同步。这次没有生成图片或扣费。",
+    actions: ["retry", "edit_request"],
+  },
+  IMAGE_REFERENCE_CONFLICT: {
+    category: "input", retryable: false,
+    message: "这次任务的素材已经确定，请新建任务来更换素材。",
+    actions: ["edit_request"],
+  },
   // ── 输入 ──
   BAD_REQUEST: {
     category: "input", retryable: false,

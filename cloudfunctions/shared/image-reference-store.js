@@ -6,6 +6,8 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const ID=/^[a-f0-9]{40}$/;
 const IMAGE_TYPES=new Set(["image/png","image/jpeg","image/webp","image/gif"]);
 const MAX_BYTES=24*1024*1024;
+const {syncRecordKey}=require("./sync-identifiers");
+const {documentOf}=require("./document-store");
 function invalid(code="IMAGE_REFERENCES_INVALID") { throw new Error(code); }
 function assetDescriptor(raw) {
   if(!raw||!ID.test(raw.id||"")||!/^[a-f0-9]{64}$/.test(raw.sha256||"")||
@@ -69,4 +71,8 @@ function createImageReferenceStore({readFile,assetStore}) {
     });
   }};
 }
-module.exports={createImageReferenceStore,contractOf,assetDescriptor};
+function createSyncedImageReferenceStore({db,assetStore}) {
+  return createImageReferenceStore({assetStore,readFile:async(owner,id)=>
+    documentOf(await db.collection("bf_sync_v2").doc(syncRecordKey(owner,"file",id)).get())});
+}
+module.exports={createImageReferenceStore,createSyncedImageReferenceStore,contractOf,assetDescriptor};

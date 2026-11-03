@@ -1,6 +1,7 @@
 "use strict";
 const crypto = require("crypto");
 const { documentOf } = require("../shared/document-store");
+const { syncRecordKey } = require("../shared/sync-identifiers");
 const KINDS = new Set(["conversation", "message", "memory", "file"]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 function digest(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
@@ -26,7 +27,7 @@ function normalizeRecord(raw) {
     baseVersion: Number.isSafeInteger(raw.baseVersion) && raw.baseVersion >= 0 ? raw.baseVersion : 0,
     deleted: payload.isDeleted === true };
 }
-function key(owner, kind, id) { return digest(owner + "|" + kind + "|" + id).slice(0, 40); }
+function key(owner, kind, id) { return syncRecordKey(owner, kind, id); }
 function publicRow(row) {
   return { kind: row.kind, refId: row.refId, payload: row.payload, version: row.version,
     revision: row.revision, hash: row.hash, deleted: row.deleted === true };

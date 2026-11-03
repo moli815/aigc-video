@@ -54,6 +54,8 @@ const { injectCommercialImageGuidance, isCommercialTask } = require("./commercia
 const { injectAssistantGuidance } = require("./assistant-guidance");
 const { compactConversation } = require("./context-compaction");
 const { withImageToolSchema } = require("./image-tool-schema");
+const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
+const { prepareSeriesReferenceGuidance } = require("./image-series-reference-guidance");
 const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
 const { createModelCallLedger } = require("./shared/model-call-ledger");
@@ -690,6 +692,7 @@ const UPSTREAM = {
 const APP = tcb.init({ env: process.env.TCB_ENV });
 const db = APP.database();
 const assetStore = createAssetStore({ db, app: APP });
+const imageReferenceStore = createSyncedImageReferenceStore({ db, assetStore });
 const eventService = createEventService({ db });
 const syncV2 = createSyncService({ db, assetStore });
 const modelLedger = createModelCallLedger({ db, context: () => reqStore.getStore(), source: "bf-api", log: logSafe,
@@ -2807,12 +2810,18 @@ async function handleChat(req, res) {
   const imageUserText = latestUserText(body.messages || []);
   messages = injectDeliveryRule(messages);
   messages = injectCommercialImageGuidance(messages, body.tools, imageUserText);
+  const seriesReferences = await prepareSeriesReferenceGuidance({ messages, tools: body.tools,
+    owner: auth.sub, referenceStore: imageReferenceStore });
+  messages = seriesReferences.messages;
+  if (seriesReferences.issuedCount) logSafe({ tag: "image_series_reference_context", requestId: currentRequestId(),
+    recalled: seriesReferences.issuedCount, ready: seriesReferences.readyCount });
   const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
     policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
   const legacyBrandActive = messages !== beforeLegacyBrand;
   const observeBrand = fields => logSafe({ tag: "image_brand_planning", requestId: currentRequestId(), ...fields });
-  const finalizeImageCalls = legacyBrandActive ? calls => guardBrandCalls(calls, observeBrand, imageUserText) : undefined;
+  const finalizeImageCalls = calls => seriesReferences.finalize(
+    legacyBrandActive ? guardBrandCalls(calls, observeBrand, imageUserText) : calls);
   if (legacyBrandActive) observeBrand({ event: "planning_enabled" });
   const observeImageBoundary = fields => logSafe({ tag: "image_tool_copy_cleaned", requestId: currentRequestId(), ...fields });
   if (RUNTIME.CHAT_RULES && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("能力表达铁律"))) {
@@ -2871,7 +2880,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(upstreamBody.tools, { commercial: isCommercialTask(messages, imageUserText) });
+  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(seriesReferences.tools, { commercial: isCommercialTask(messages, imageUserText) });
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;
   delete upstreamBody.tier;   // 自定义路由字段不透传给上游
