@@ -8,12 +8,13 @@ async function harness(){
  const db={...raw,collection(name){const col=raw.collection(name);return {...col,doc(id){const doc=col.doc(id);return {...doc,async update(patch){const row=(await doc.get()).data[0];if(!row)throw Error("NOT_FOUND");for(const [key,value]of Object.entries(patch)){const parts=key.split('.');let at=row;for(const part of parts.slice(0,-1))at=at[part]??={};at[parts.at(-1)]=structuredClone(value);}return doc.set(row);}};}};}};
  const file=path.resolve(__dirname,"../cloudfunctions/bf-image/index.js"),realRequire=createRequire(file),calls=[],charges=[],reservations=[];let handler,epoch=0,failNext=false;
  const app={database:()=>db,async getTempFileURL({fileList}){return {fileList:fileList.map(f=>({fileID:f.fileID,tempFileURL:"https://fixture.myqcloud.com/"+f.fileID+"?epoch="+(++epoch)}))};}};
- const context={require:n=>n==="http"?{createServer(fn){handler=fn;return {listen(){}};}}:n==="@cloudbase/node-sdk"?{init:()=>app}:realRequire(n),module:{exports:{}},exports:{},process:{env:{}},Buffer,URL,AbortController,setTimeout,clearTimeout,console:{log(){}},__fixture:{db,charges,reservations},fetch:async(url,options)=>{
+ const shared={db,charges,reservations,remaining:1000};
+ const context={require:n=>n==="http"?{createServer(fn){handler=fn;return {listen(){}};}}:n==="@cloudbase/node-sdk"?{init:()=>app}:realRequire(n),module:{exports:{}},exports:{},process:{env:{}},Buffer,URL,AbortController,setTimeout,clearTimeout,console:{log(){}},__fixture:shared,fetch:async(url,options)=>{
   calls.push(JSON.parse(options.body));if(failNext){failNext=false;return new Response(JSON.stringify({error:{code:"InvalidParameter"}}),{status:400});}
   return new Response(JSON.stringify({data:[{url:"https://fixture.myqcloud.com/result-"+calls.length+".png"}]}),{status:200});
  }};
  vm.createContext(context);vm.runInContext(fs.readFileSync(file,"utf8")+`
- refreshRuntime=async()=>{};requireMember=async(req)=>({sub:req.owner||"A"});quotaExhausted=async()=>({remainingCny:1000,capCny:1000,usedCny:0});readBody=async(req)=>req.body;
+ refreshRuntime=async()=>{};requireMember=async(req)=>({sub:req.owner||"A"});quotaExhausted=async()=>({remainingCny:__fixture.remaining,capCny:1000,usedCny:1000-__fixture.remaining});readBody=async(req)=>req.body;
  ensureCollection=async()=>{};flushJobs=async()=>{};reserveQuota=async(id,owner,cost)=>{__fixture.reservations.push({id,owner,cost});return true;};releaseQuota=async()=>{};
  finishIdem=async(rid,owner,url,cost,model,extra)=>{await __fixture.db.collection(JOB_COLL).doc(idemKey(rid,owner)).update({state:"done",url,costCny:cost,model,costCommitted:true,...extra});__fixture.charges.push({rid,owner,cost});return true;};
  abortIdem=async(rid,owner)=>__fixture.db.collection(JOB_COLL).doc(idemKey(rid,owner)).update({state:"failed"});
@@ -29,7 +30,7 @@ async function harness(){
   let status,out;const res={setHeader(){},writeHead(code){status=code;},end(text){out=JSON.parse(text);}};
   await handler({url:route,method:"POST",headers:{},body,owner},res);return {status,body:out};
  }
- return {db,calls,charges,reservations,assets,request,failNext(){failNext=true;},taskId:rid=>context.subject.seriesTaskIdOf("A",rid)};
+ return {db,calls,charges,reservations,assets,request,setRemaining(n){shared.remaining=n;},failNext(){failNext=true;},taskId:rid=>context.subject.seriesTaskIdOf("A",rid)};
 }
 const start=(rid,extra={})=>({requestId:rid,prompt:"把人物素材合成到提供的底图，做两张不同构图。",requested_count:2,size:"1536x1536",structured:{image_references:contract()},...extra});
 test("real HTTP start/step/retry sends both owned inputs in order and re-signs retry without duplicate charge",async()=>{
@@ -61,4 +62,9 @@ test("foreign task step and cancelled retry cannot generate",async()=>{
 test("old text-only series still works and unresolved raw start images are never silently discarded",async()=>{
  const h=await harness(),s=await h.request("/series/start",start("legacy",{structured:undefined}));assert.equal(s.status,200);await h.request("/series/step",{taskId:s.body.taskId,index:1});assert.equal(h.calls[0].image,undefined);
  const before=h.calls.length,r=await h.request("/series/start",start("raw",{structured:undefined,image:"data:image/png;base64,AA=="}));assert.equal(r.status,422);assert.equal(h.calls.length,before);
+});
+test("failed-item retry checks complete remaining budget before any new provider attempt",async()=>{
+ const h=await harness(),s=await h.request("/series/start",start("retry-budget"));h.failNext();await h.request("/series/step",{taskId:s.body.taskId,index:1});
+ h.setRemaining(0.1);const attempts=h.calls.length,r=await h.request("/series/retry",{requestId:"retry-budget",indices:[1]});
+ assert.equal(r.status,402);assert.equal(r.body.needCny,0.64);assert.equal(h.calls.length,attempts);assert.equal(h.charges.length,0);
 });
