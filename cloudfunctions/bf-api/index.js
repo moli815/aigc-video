@@ -53,6 +53,7 @@ const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGu
 const { injectCommercialImageGuidance } = require("./commercial-image-guidance");
 const { injectAssistantGuidance } = require("./assistant-guidance");
 const { compactConversation } = require("./context-compaction");
+const { withImageToolSchema } = require("./image-tool-schema");
 const { injectLegacyBrandGuidance, guardBrandCalls } = require("./shared/image-legacy-brand");
 const { AsyncLocalStorage } = require("async_hooks");
 const { createModelCallLedger } = require("./shared/model-call-ledger");
@@ -2667,6 +2668,38 @@ function stripUnsupportedVision(messages, model) {
   return strippedAny ? out : messages;
 }
 
+/**
+ * 流内错误帧（对外契约，11-03 改形）。
+ *
+ * 旧形态 `{ error: { code, message } }` 有个致命问题：老版 App 会把整个对象
+ * `String(describing:)` 成字符串直接上屏，用户看到的是
+ *   `输出尚未完成（{ code = "UPSTREAM_ERROR"; message = "\U8fd9\U6b21..." }）。`
+ * —— 内部错误码 + unicode 转义，完全不可读。
+ *
+ * 新形态把 `error` 换成**中文短句**：
+ *   { "error": "这次回复没有接收完整，请重试一次。", "errorCode": "UPSTREAM_ERROR", "message": 同上 }
+ * 这样即使客户端仍然粗暴地 toString，用户看到的也是一句人话；
+ * 机器可读的 code 挪到 `errorCode`，新客户端照样能分支处理。
+ */
+function streamErrorFrame(reason) {
+  const copy = reason === "BRAND_PLAN_CONFLICT"
+    ? "这次标识编辑方案有冲突，还没有开始生成图片，请再试一次。"
+    : reason === "TOOL_ARGUMENTS_INCOMPLETE"
+      ? "这次方案写到一半断开了，请再试一次。"
+      : reason === "TOOL_ARGUMENTS_TOO_LARGE"
+        ? "这次要处理的内容太多，请把需求拆小一点再试。"
+        : reason === "UPSTREAM_STREAM_ERROR"
+          ? "模型服务这次没有响应完整，请稍后再试一次。"
+          : reason === "OUTPUT_LIMIT"
+            ? "这次设计内容较多，方案还没有写完，请再试一次。"
+            : reason === "TOOL_ARGUMENTS_INVALID"
+              ? "这次图片方案没有整理完整，还没有开始生成图片，请再试一次。"
+              : reason === "CONTENT_FILTER"
+                ? "这次内容暂时无法完成，请调整描述后重试。"
+                : "这次回复没有接收完整，请重试一次。";
+  return { error: copy, errorCode: "UPSTREAM_ERROR", message: copy };
+}
+
 async function handleChat(req, res) {
   const auth = await requireMember(req, res);
   if (!auth) return;
@@ -2838,6 +2871,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
+  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(upstreamBody.tools);
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;
   delete upstreamBody.tier;   // 自定义路由字段不透传给上游
@@ -3024,6 +3058,29 @@ async function handleChat(req, res) {
       buffered += chunk;
       const lines = buffered.split("\n");
       buffered = lines.pop() || "";
+
+      // ── 11-03：上游在流中途下发的 error 帧，必须在这里拦下来 ──
+      // 旧实现有两个漏洞：
+      //   ① 下面的转发循环会把这一行**原样**推给 App，App 解析到 json.error 就崩在错误文案里；
+      //   ② 审计循环用 `try { ... } catch {}` 吞掉一切，于是一条真实的上游限流/额度不足
+      //      在日志里只剩下一个固定 code（STREAM_OR_TOOL_ARGUMENTS_INCOMPLETE），查不出来。
+      // 现在：记录真实原因（不含用户内容）+ 立刻中断，转成我们自己的对外文案。
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith("data:")) continue;
+        const payload = t.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        let peek = null;
+        try { peek = JSON.parse(payload); } catch { continue; }
+        if (!peek || !peek.error) continue;
+        const rawErr = peek.error;
+        const errCode = String((rawErr && (rawErr.code || rawErr.type)) || "UPSTREAM_STREAM_ERROR").slice(0, 60);
+        const errDetail = String((rawErr && (rawErr.message || rawErr.msg)) || "").slice(0, 200);
+        logSafe({ tag: "upstream_stream_error", requestId: currentRequestId(), code: errCode, detail: errDetail });
+        try { await reader.cancel(); } catch { /* ignore */ }
+        throw Object.assign(new Error("UPSTREAM_STREAM_ERROR"), { code: "UPSTREAM_STREAM_ERROR", detail: errCode });
+      }
+
       let outChunk = "";
       for (const line of lines) {
         outChunk += maskModel(toolGuard.pushLine(normalizeStreamLine(line))) + "\n";
@@ -3049,10 +3106,16 @@ async function handleChat(req, res) {
       streamCompleted = true;
     }
   } catch (e) {
-    logSafe({ tag: "chat_stream_incomplete", requestId: currentRequestId(), code: "STREAM_OR_TOOL_ARGUMENTS_INCOMPLETE" });
-    if (!aborted) res.write("data: " + JSON.stringify({ error: { code: "UPSTREAM_ERROR", message: e?.code === "BRAND_PLAN_CONFLICT"
-      ? "这次标识编辑方案有冲突，还没有开始生成图片，请再试一次。" : "这次回复没有接收完整，请再试一次。" } }) + "\n\n");
+    // 真实原因必须进日志：旧实现只记一个固定 code，线上分不清
+    // 「上游限流」「工具参数写到一半断了」「标识方案冲突」——排查全靠猜。
+    const reason = String((e && (e.code || e.message)) || "unknown").slice(0, 80);
+    logSafe({ tag: "chat_stream_incomplete", requestId: currentRequestId(), code: reason,
+      detail: String((e && e.detail) || "").slice(0, 120), completed: streamCompleted });
+    if (!aborted) res.write("data: " + JSON.stringify({ ...streamErrorFrame(reason), requestId: currentRequestId() }) + "\n\n");
   } finally {
+    // Close the tracked upstream on early failure/client disconnect so the call
+    // ledger can finalize as outcome_unknown instead of remaining pending.
+    if (!streamCompleted) { try { await reader.cancel(); } catch {} }
     try { res.end(); } catch { /* ignore */ }
   }
 
