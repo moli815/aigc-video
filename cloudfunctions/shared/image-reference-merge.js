@@ -1,11 +1,26 @@
 "use strict";
-// Preparation only. Not wired to public handlers until the complete old-client
-// contract, idempotency claim and retry path are validated together.
+// Merge only references backed by the caller's durable, owned originals.
 const crypto=require('node:crypto');
 const {contractOf,assetDescriptor}=require('./image-reference-store');
 const extensions={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif'};
 const hash=s=>crypto.createHash('sha256').update(s).digest('hex');
+function mixedReferencesEnabled(raw,owner){
+ let p=raw;if(typeof raw==='string'){if(raw.length>6000)return false;try{p=JSON.parse(raw);}catch{return false;}}
+ return !!(owner&&p?.enabled===true&&(p.audience==='all'||Array.isArray(p.accountIds)&&p.accountIds.length<=100&&p.accountIds.includes(owner)));
+}
 function fail(code){throw Object.assign(new Error(code),{code});}
+function referenceFailure(error){
+ const raw=String(error?.code||error?.message||''),diagnostic=/^[A-Z][A-Z0-9_]{0,79}$/.test(raw)?raw:'REFERENCE_STORAGE_UNAVAILABLE';
+ const invalid=/^IMAGE_REFERENCES_(INVALID|DUPLICATE|LIMIT)$|^IMAGE_REFERENCE_(CURRENT_(INVALID|UNAVAILABLE|REQUIRED)|ROLES_INVALID|NOT_FOUND|CHANGED|CONFLICT)$|^(INVALID_ASSET_ID|ASSET_(NOT_FOUND|NOT_READY|METADATA_CONFLICT))$/.test(diagnostic);
+ return {status:invalid?422:503,diagnostic,msg:invalid?'这次需要的底图或历史原图尚未完整同步，请重新选择原图后再试。这次没有生成图片或扣费。':'暂时无法读取这次需要的原图，请稍后重试。这次没有生成图片或扣费。'};
+}
+function bindReferenceRequest(fingerprint,body){
+ const stable=x=>Array.isArray(x)?x.map(stable):x&&typeof x==='object'?Object.fromEntries(Object.keys(x).sort().map(k=>[k,stable(x[k])])):x;
+ const structured={...(body.structured||{})};delete structured.image_references;
+ return hash(JSON.stringify(stable({version:1,references:fingerprint,prompt:String(body.prompt||''),structured,
+  size:body.size,aspectRatio:body.aspect_ratio||body.aspectRatio,taskKind:body.task_kind||body.taskKind||'edit',qualityTier:body.quality_tier||body.qualityTier||'auto',
+  renderIntent:body.render_intent||body.renderIntent||'',textMode:body.text_mode||'',requestedCount:body.requested_count||body.requestedCount||1})));
+}
 function currentPointer(owner,raw){
  if(typeof owner!=='string'||!owner.trim())fail('IMAGE_REFERENCE_OWNER_REQUIRED');
  if(typeof raw!=='string'||raw.length>16384)fail('IMAGE_REFERENCE_CURRENT_INVALID');
@@ -51,4 +66,4 @@ async function prepareMixedReferenceInput({store,readAsset,owner,structured,imag
  const referenceFingerprint=hash(JSON.stringify({version:1,selection,current}));
  return {referenceManifest,referenceFingerprint};
 }
-module.exports={currentPointer,currentItems,prepareMixedReferenceInput};
+module.exports={currentPointer,currentItems,prepareMixedReferenceInput,mixedReferencesEnabled,referenceFailure,bindReferenceRequest};

@@ -138,6 +138,7 @@ const RUNTIME_SPECS = {
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
   IMAGE_COMPOSITION_POLICY: { type: "json", label: "复杂海报准确排字（开关、灰度账号、阈值、私有字体及SHA256）", def: () => "{}" },
+  IMAGE_MIXED_REFERENCES_POLICY: { type: "json", label: "旧包单图当前与历史原图混合（开关及账号范围）", def: () => "{}" },
   IMAGE_COPY_REVIEW: { type: "str", label: "复杂商业图片文案校对（1启用，0关闭；只处理生成/重设计）", def: () => "0" },
   MODEL_COST_RATES: { type: "json", label: "模型供应商成本价（元/百万Token；按完整模型ID配置 input/output/cachedInput，未核价留空）", def: () => "{}" },
   USAGE_BILLING_MODE: { type: "str", label: "额度计费：supplier_cost=供应商成本×倍数；legacy=旧档位（仅回滚）", def: () => "legacy" },
@@ -2820,6 +2821,9 @@ async function handleChat(req, res) {
   const seriesReferences = await prepareSeriesReferenceGuidance({ messages, tools: body.tools,
     owner: auth.sub, referenceStore: imageReferenceStore });
   messages = seriesReferences.messages;
+  const singleReferences = await require('./image-single-reference-guidance').prepareSingleReferenceGuidance({messages,
+    tools:seriesReferences.tools,owner:auth.sub,referenceStore:imageReferenceStore,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY});
+  messages = singleReferences.messages;
   if (seriesReferences.issuedCount) logSafe({ tag: "image_series_reference_context", requestId: currentRequestId(),
     recalled: seriesReferences.issuedCount, ready: seriesReferences.readyCount });
   const beforeLegacyBrand = messages;
@@ -2827,8 +2831,8 @@ async function handleChat(req, res) {
     policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
   const legacyBrandActive = messages !== beforeLegacyBrand;
   const observeBrand = fields => logSafe({ tag: "image_brand_planning", requestId: currentRequestId(), ...fields });
-  const finalizeImageCalls = calls => seriesReferences.finalize(
-    legacyBrandActive ? guardBrandCalls(calls, observeBrand, imageUserText) : calls);
+  const finalizeImageCalls = calls => seriesReferences.finalize(singleReferences.finalize(
+    legacyBrandActive ? guardBrandCalls(calls, observeBrand, imageUserText) : calls));
   if (legacyBrandActive) observeBrand({ event: "planning_enabled" });
   const observeImageBoundary = fields => logSafe({ tag: "image_tool_copy_cleaned", requestId: currentRequestId(), ...fields });
   if (RUNTIME.CHAT_RULES && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("能力表达铁律"))) {
@@ -2887,7 +2891,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(seriesReferences.tools, { commercial: isCommercialTask(messages, imageUserText) });
+  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText) });
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;
   delete upstreamBody.tier;   // 自定义路由字段不透传给上游

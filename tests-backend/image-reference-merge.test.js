@@ -57,3 +57,9 @@ test('saved manifest does not permit deleted or replaced original on later retry
   const f=fixture(),result=await prepareMixedReferenceInput(f.options);mutate(f);await assert.rejects(f.store.sign(owner,result.referenceManifest));assert.equal(f.signs,0);
  }
 });
+test('storage failures are distinguishable from invalid originals without returning unsafe error messages',()=>{
+ const {referenceFailure,bindReferenceRequest}=require('../cloudfunctions/shared/image-reference-merge');
+ assert.equal(referenceFailure(Error('ASSET_NOT_FOUND')).status,422);const f=referenceFailure(Error('secret-url://token'));assert.equal(f.status,503);assert.doesNotMatch(JSON.stringify(f),/secret-url|token/);
+ assert.equal(bindReferenceRequest('fp',{structured:{a:1,b:2},prompt:'同一图'}),bindReferenceRequest('fp',{prompt:'同一图',structured:{b:2,a:1}}));
+ assert.notEqual(bindReferenceRequest('fp',{prompt:'原图'}),bindReferenceRequest('fp',{prompt:'改图'}));
+});

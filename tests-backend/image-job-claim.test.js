@@ -32,3 +32,8 @@ test("ledger failure and wrong ownership fail closed without overwriting",async(
   assert.equal((await claimImageJob(args(db))).state,"unavailable");
   assert.equal((await db.collection("bf_image_jobs").doc("owned-key").get()).data[0].accountId,"B");
 });
+test('reference binding is atomic across processing, failed and done, and cannot be stripped on replay',async()=>{
+ const db=memoryDatabase(),a='a'.repeat(64),b='b'.repeat(64);assert.equal((await claimImageJob({...args(db),referenceFingerprint:a})).state,'new');
+ for(const state of ['processing','failed','done']){await db.collection('bf_image_jobs').doc('owned-key').update({state});assert.equal((await claimImageJob({...args(db),referenceFingerprint:b})).state,'conflict');assert.equal((await claimImageJob(args(db))).state,'conflict');}
+ assert.equal((await claimImageJob({...args(db),referenceFingerprint:a})).state,'done');
+});
