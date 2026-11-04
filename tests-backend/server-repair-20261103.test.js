@@ -95,7 +95,7 @@ test("image quota denies expired or missing dates even if old /me returns 200",a
   for(const memberUntil of ["2000-01-01",null,undefined]) {
     let target;
     const ctx={BF_API_BASE:"https://example.test/api",AbortController,setTimeout,clearTimeout,bearer:()=>"",logStage:()=>{},require:p=> {
-      assert.equal(p,"./shared/member-access"); return {membershipExpired};
+      if(p==="./quota-read")return require("../cloudfunctions/bf-image/quota-read");assert.equal(p,"./shared/member-access"); return {membershipExpired};
     },fetch:async url=>{target=url;return {ok:true,json:async()=>({ok:true,memberUntil})};}};
     const fn=vm.runInNewContext(productionFunction(IMAGE,"quotaExhausted")+"\nquotaExhausted",ctx);
     const result=await fn({});
@@ -106,7 +106,7 @@ test("image quota denies expired or missing dates even if old /me returns 200",a
 test("image quota still permits active accounts and fails closed on upstream refusal",async()=>{
   for(const status of [200,401,403,503]) {
     const ctx={BF_API_BASE:"https://example.test/api",AbortController,setTimeout,clearTimeout,bearer:()=>"",logStage:()=>{},authSubOf:()=>"test",activeReservedCny:async()=>0,
-      require:()=>({membershipExpired}),fetch:async()=>({ok:status===200,status,json:async()=> status===200 ? {ok:true,memberUntil:"2099-01-01",limits:{month:{enabled:true,remainingPct:50}},usage:{pool:{usedCny:5,capCny:10}}}:{error:status===403?"ACCOUNT_SUSPENDED":"UNAUTHORIZED"}})};
+      require:p=>p==="./quota-read"?require("../cloudfunctions/bf-image/quota-read"):({membershipExpired}),fetch:async()=>({ok:status===200,status,json:async()=> status===200 ? {ok:true,memberUntil:"2099-01-01",limits:{month:{enabled:true,remainingPct:50}},usage:{pool:{usedCny:5,capCny:10}}}:{error:status===403?"ACCOUNT_SUSPENDED":"UNAUTHORIZED"}})};
     const fn=vm.runInNewContext(productionFunction(IMAGE,"quotaExhausted")+"\nquotaExhausted",ctx);
     const out=await fn({});
     assert.equal(out.exhausted,status!==200);

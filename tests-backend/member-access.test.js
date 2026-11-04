@@ -36,7 +36,7 @@ async function quota(body, status = 200, reserved = 0) {
   const context = { AbortController, setTimeout, clearTimeout, BF_API_BASE: 'https://example.invalid',
     bearer: () => 'test', authSubOf: () => 'canary', logStage: () => {},
     activeReservedCny: async () => reserved,
-    require: () => ({ membershipExpired }),
+    require: p => p === "./quota-read" ? require("../cloudfunctions/bf-image/quota-read") : ({ membershipExpired }),
     fetch: async () => ({ ok: status === 200, status, json: async () => body }) };
   vm.runInNewContext(quotaFn, context);
   return context.quotaExhausted({});

@@ -15,6 +15,9 @@ const COMMERCIAL_BRIEF = [
   "版式按内容量设计而非把短句塞进发光节点：长竖幅可用清晰分区、编辑式卡片、对照矩阵、时间轴或图文穿插；主标题/栏目标题/正文有明确层级，相关图示服务信息。避免大块无意义空白、从下到上的倒序步骤、相同文案在主图和底栏重复、装饰器材图抢占信息区。用户要求极简时遵从，不强行高密度。",
   "structured.text与画面简报使用同一份定稿文案，保留用户原文中的电话/公司/产品名称；不要在prompt里写一套、text里再缩成另一套。交付前自检：用户每项需求都有落点、步骤不重不漏、准确字段逐字一致、图文对应；标题不能代替内容。不要把这份自检或构图指令写成可见文字。",
   'structured.text必须是数组，例如[{"key":"main_title","role":"title","text":"用户的准确标题"},{"key":"actions","role":"body","text":"第一步的具体动作\\n第二步的具体动作"},{"key":"phone","role":"contact","text":"用户提供的准确电话"}]。role只用title/subtitle/body/label/contact/footer，禁止输出字段字典。一个栏目内的相关正文可合为一个body的多行文字，不要把每个短句都拆成极小文本框。',
+  "准确正文使用普通文字、数字序号和标点；装饰图标交给视觉层，不自行在文案中加装饰Emoji。用户明确给定的字符原文仍优先。一个主标题，其余栏目标题用label，紧跟对应body；表格按行保留同一列顺序与单位。",
+  "商业生图另写structured.artwork_prompt：只描述独立无字画面的具体主体、真实业务环境、人物动作、材质、光线和风格，不描述海报排版、表格、文字、数据或界面。作战图、战报等管理比喻按实际业务人物与设备表现，不画军事地图或装饰纸面；用户没有要求配图时不强塞无意义图纸。完整文案仍逐字保存在text，整张版式写prompt，三者各司其职；例如园区运维团队在设备旁协作，而不是一张带乱码的风险矩阵或软件截图。",
+  "可在structured.print_style.palette指定background/ink/accent三种#RRGGBB颜色，分别用于底色、正文和强调，须符合用户指定的深浅与品牌风格并保持高对比度；没有明确配色时根据用途选择。composition仍是原有视觉构图描述字符串，不把它改为对象。",
   "需要程序准确排字时，同时给出可执行的structured.layout：preset为editorial/centered/split，fontStyle为sans/serif/rounded；blocks逐项对应text的唯一key，不能缺项或重复。每块用x/y/width/height表示0到1的归一化区域，可带align(left/center/right)、color(#RRGGBB)、fontScale(0.75到1.5)、backdrop(boolean)。所有边界在0.02到0.98以内，width至少0.04、height至少0.025，块不相交；根据全文长度留足正文空间及标题区，不给所有条目同一坐标。背景构图与这些区域一致。只提供视觉prompt而不提供准确文案和布局，旧客户端只能退回默认排版。",
 ].join("\n");
 

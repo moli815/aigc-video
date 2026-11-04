@@ -64,13 +64,18 @@ function latestUserText(messages) {
   if (!user) return "";
   return typeof user.content === "string" ? user.content : (Array.isArray(user.content) ? user.content.filter(p => p.type === "text").map(p => p.text || "").join("\n") : "");
 }
+function toolArgumentError(reason,field) { return Object.assign(new Error("TOOL_ARGUMENTS_INVALID"),{code:"TOOL_ARGUMENTS_INVALID",reason,field}); }
 function normalizeVisibleCopy(value) {
+  if(Array.isArray(value)){
+    if(value.some(t=>!t||typeof t.text!=="string"))throw toolArgumentError("TEXT_ENTRY_INVALID","structured.text["+value.findIndex(t=>!t||typeof t.text!=="string")+"].text");
+    return value;
+  }
   if (!value || Array.isArray(value) || typeof value !== "object") return value;
   // Legacy LLMs sometimes emit a field dictionary, which the shipped Swift
   // TextItem.parse cannot read. Convert at the tool boundary without losing copy.
   return Object.entries(value).map(([key, entry]) => {
     const item = typeof entry === "string" ? { text: entry } : entry;
-    if (!item || typeof item.text !== "string") throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" });
+    if (!item || typeof item.text !== "string") throw toolArgumentError("TEXT_ENTRY_INVALID","structured.text");
     const role = ["title","subtitle","body","label","contact","footer"].includes(item.role) ? item.role
       : /hotline|phone|email|contact|电话|热线/i.test(key) ? "contact"
         : /subtitle|副标题/i.test(key) ? "subtitle"
@@ -83,8 +88,9 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   if (!call || !call.function || !IMAGE_TOOLS.has(call.function.name)) return call;
   let args;
   try { args = JSON.parse(call.function.arguments || "{}"); }
-  catch { throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" }); }
-  if (!args || typeof args !== "object" || Array.isArray(args)) throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), { code: "TOOL_ARGUMENTS_INVALID" });
+  catch { throw toolArgumentError("JSON_SYNTAX","arguments"); }
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw toolArgumentError("ARGUMENTS_NOT_OBJECT","arguments");
+  if(args.prompt!=null&&typeof args.prompt!=="string")throw toolArgumentError("PROMPT_INVALID","prompt");
   const normalized = args.structured && typeof args.structured === "object" && !Array.isArray(args.structured)
     ? { ...args, structured: { ...args.structured, text: normalizeVisibleCopy(args.structured.text) } } : args;
   const result = cleanImageRequest(normalized, userText);
@@ -120,7 +126,9 @@ class ToolCallStreamGuard {
     const calls = this.pending.get(index);
     if (!calls) return [];
     this.pending.delete(index);
-    return this.finalizeCalls([...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe)));
+    const output=this.finalizeCalls([...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe)));
+    this.releasedCalls=(this.releasedCalls||0)+output.length;
+    return output;
   }
   pushLine(line) {
     if (!line.trim().startsWith("data:")) return line;
