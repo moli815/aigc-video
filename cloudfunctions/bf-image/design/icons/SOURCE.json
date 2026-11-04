@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/lucide-icons/lucide",
+  "commit": "1980e3d59b0fa1a2aeb566d5902b25ee98204001",
+  "license": "ISC / Feather-derived MIT as stated in LICENSE.txt",
+  "icons": [
+    "route",
+    "chart-no-axes-combined",
+    "calendar-days",
+    "list-checks",
+    "briefcase-business",
+    "layers"
+  ]
+}

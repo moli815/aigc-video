@@ -37,14 +37,20 @@ function createCommercialComposition({app,assetStore,fetcher=fetch,log=()=>{},en
     async prepare(input,rawPolicy){
       const policy=policyOf(rawPolicy);if(!eligible(input,policy))return null;
       const dimensions=String(input.resolvedSize).match(/^(\d+)x(\d+)$/);
+      const designEngine=require("./commercial-design-plan").designEnabled(policy,input.accountId)?"poster":"legacy";
       const width=dimensions?Number(dimensions[1]):2048,height=dimensions?Number(dimensions[2]):2048;
       return exclusive(async()=>{
         const fonts=await getFonts(policy);
         const {satori,resvg}=await engines();
-        const rendering=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,background:EMPTY,satori,resvg});
-        const fallback=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,satori,resvg});
-        log({event:"prepared",itemCount:rendering.manifest.itemCount,fontSize:rendering.manifest.fontSize,copyHash:rendering.manifest.copyHash});
-        return {input,width,height,fonts,fallback:fallback.png,fallbackManifest:fallback.manifest,manifest:rendering.manifest};
+        let actualEngine=designEngine,rendering;
+        try{rendering=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,background:EMPTY,satori,resvg,designEngine:actualEngine});}
+        catch(e){if(actualEngine!=="poster"||e?.code!=="COMPOSITION_CONTENT_OVERFLOW")throw e;
+          actualEngine="legacy";log({event:"design_fallback",reason:"POSTER_CAPACITY_EXCEEDED"});
+          rendering=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,background:EMPTY,satori,resvg,designEngine:actualEngine});}
+
+        const fallback=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,satori,resvg,designEngine:actualEngine});
+        log({event:"prepared",design:rendering.manifest.design,engine:actualEngine,itemCount:rendering.manifest.itemCount,fontSize:rendering.manifest.fontSize,copyHash:rendering.manifest.copyHash});
+        return {input,width,height,fonts,designEngine:actualEngine,fallback:fallback.png,fallbackManifest:fallback.manifest,manifest:rendering.manifest};
       });
     },
     async finish(prepared,url,owner){
@@ -60,7 +66,7 @@ function createCommercialComposition({app,assetStore,fetcher=fetch,log=()=>{},en
           try{backgroundAsset=await assetStore.archive(owner,bytes,mime);}catch{log({event:"background_archive_unavailable"});}
           artworkStage="render";
           const {satori,resvg}=await engines();
-          const rendered=await compose({structured:prepared.input.structured,prompt:prepared.input.prompt,width:prepared.width,height:prepared.height,fonts:prepared.fonts,
+          const rendered=await compose({structured:prepared.input.structured,prompt:prepared.input.prompt,width:prepared.width,height:prepared.height,fonts:prepared.fonts,designEngine:prepared.designEngine,
             background:"data:"+mime+";base64,"+bytes.toString("base64"),satori,resvg});
           if(rendered.manifest.copyHash!==prepared.manifest.copyHash)throw error("COMPOSITION_COPY_CHANGED");
           png=rendered.png;manifest=rendered.manifest;
@@ -72,7 +78,7 @@ function createCommercialComposition({app,assetStore,fetcher=fetch,log=()=>{},en
         if(!asset)throw error("COMPOSITION_ARCHIVE_UNAVAILABLE");
         if(backgroundAsset)asset={...asset,variants:{background:backgroundAsset}};
         const signed=await assetStore.sign(owner,[asset.id]);if(!signed?.[0]?.url)throw error("COMPOSITION_ARCHIVE_UNAVAILABLE");
-        log({event:"completed",itemCount:manifest.itemCount,fontSize:manifest.fontSize,copyHash:manifest.copyHash,fallback});
+        log({event:"completed",design:manifest.design,engine:prepared.designEngine,itemCount:manifest.itemCount,fontSize:manifest.fontSize,copyHash:manifest.copyHash,fallback});
         return {url:signed[0].url,asset,composition:{version:manifest.version,copyHash:manifest.copyHash,typographyFallback:fallback}};
       });
     }

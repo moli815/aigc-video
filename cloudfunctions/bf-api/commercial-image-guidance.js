@@ -18,7 +18,10 @@ const COMMERCIAL_BRIEF = [
   "准确正文使用普通文字、数字序号和标点；装饰图标交给视觉层，不自行在文案中加装饰Emoji。用户明确给定的字符原文仍优先。一个主标题，其余栏目标题用label，紧跟对应body；表格按行保留同一列顺序与单位。",
   "商业生图另写structured.artwork_prompt：只描述独立无字画面的具体主体、真实业务环境、人物动作、材质、光线和风格，不描述海报排版、表格、文字、数据或界面。作战图、战报等管理比喻按实际业务人物与设备表现，不画军事地图或装饰纸面；用户没有要求配图时不强塞无意义图纸。完整文案仍逐字保存在text，整张版式写prompt，三者各司其职；例如园区运维团队在设备旁协作，而不是一张带乱码的风险矩阵或软件截图。",
   "可在structured.print_style.palette指定background/ink/accent三种#RRGGBB颜色，分别用于底色、正文和强调，须符合用户指定的深浅与品牌风格并保持高对比度；没有明确配色时根据用途选择。composition仍是原有视觉构图描述字符串，不把它改为对象。",
-  "需要程序准确排字时，同时给出可执行的structured.layout：preset为editorial/centered/split，fontStyle为sans/serif/rounded；blocks逐项对应text的唯一key，不能缺项或重复。每块用x/y/width/height表示0到1的归一化区域，可带align(left/center/right)、color(#RRGGBB)、fontScale(0.75到1.5)、backdrop(boolean)。所有边界在0.02到0.98以内，width至少0.04、height至少0.025，块不相交；根据全文长度留足正文空间及标题区，不给所有条目同一坐标。背景构图与这些区域一致。只提供视觉prompt而不提供准确文案和布局，旧客户端只能退回默认排版。",
+  '普通商业生图可用structured.design_plan(version=1)把设计传到渲染层：style_id选data-editorial/organic-craft/hyperreal-product；layout_id按内容选择timeline-sequence/split-vertical/modular-grid/product-shelf/editorial-column/triptych。构图和风格分别选择，不默认瑞士极简，也不把所有图做成正文分栏。blocks用text_keys引用本次真实已有的栏目标题与正文key，kind选metrics/route/timeline/services/checklist/body，不能增删或臆造文案。',
+  '例如展会攻略可选timeline-sequence，用metrics强调原文的目标数值、route表达走访优先级、timeline组织三天行动；六服务宣传选modular-grid并标services；产品宣传选split-vertical突出真实主体；真正的采购对照才选product-shelf。不要把“作战图”画成军事地图。主视觉不应只是无意义装饰小图，字体、图像、图解共同服务信息。',
+  '普通生图无需为每段文案重复编一套坐标。用户明确要求逐字保留且客户端走既有overlay时才沿用structured.layout中的preset/fontStyle/blocks契约，确保key匹配、边界合法且不相交；不要混写成两份不一致的文案。',
+
 ].join("\n");
 
 function isCommercialTask(messages, userText) {

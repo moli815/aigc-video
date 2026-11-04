@@ -1461,7 +1461,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   let basePrompt = rawPrompt || structPrompt;
   const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode:effectiveTextMode });
   if (designBrief&&!composition) basePrompt += "\n\n" + designBrief;
-  if(composition)basePrompt=require("./commercial-artwork").artworkPrompt(structured);
+  if(composition)basePrompt=require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork);
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
@@ -1490,7 +1490,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
   const finalPrompt = multiImageContract(image, referenceRoles, taskKind)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition?
-      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成横向3:1的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
+      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
 
   const resolvedSize = resolveSize(size, aspectRatio);
   if (!resolvedSize) {
@@ -1509,7 +1509,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   };
   if(composition){
     const dims=resolvedSize.match(/^(\d+)x(\d+)$/),pixels=dims?Number(dims[1])*Number(dims[2]):4194304;
-    payload.size=resolveImageSize(pixels>2610000?"2K":"1.5K","3:1");
+    payload.size=resolveImageSize(pixels>2610000?"2K":"1.5K",composition.manifest.artwork?.aspectRatio||"3:1");
   }
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。

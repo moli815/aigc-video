@@ -9,6 +9,7 @@ function policyOf(raw) {
   let p; try { p = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { p = {}; }
   return { enabled: p?.enabled === true, minChars: Math.max(250, Math.min(1200, Number(p?.minChars) || 420)),
     accountIds:Array.isArray(p?.accountIds)?p.accountIds.filter(a=>typeof a==="string").slice(0,20):null,
+    designEngine:p?.designEngine==="poster"?"poster":"legacy",designAccountIds:Array.isArray(p?.designAccountIds)?p.designAccountIds.filter(a=>typeof a==="string").slice(0,20):null,
     fonts: Array.isArray(p?.fonts) ? p.fonts.filter(f => f && /^cloud:\/\//.test(f.fileId || "") && /^[a-f0-9]{64}$/.test(f.sha256 || "") && [400,700].includes(f.weight)).slice(0,2) : [] };
 }
 function eligible(input, policy) {
@@ -108,7 +109,7 @@ function packedMatrix(items) {
   }
   return null;
 }
-function layoutTree({items,width,height,palette,fontSize,background}) {
+function contentOf(items) {
   // A matrix is recognized by an unambiguous four-label header followed by at
   // least five exactly three-cell rows. Generic prose is never guessed as data.
   let matrix=packedMatrix(items);
@@ -120,7 +121,10 @@ function layoutTree({items,width,height,palette,fontSize,background}) {
     if(rows&&labels.every(t=>t.role==="label"&&t.text.length<40)){matrix={labels,rows,start:i-4,end};break;}
   }
   const remaining=matrix?items.filter((_,i)=>i<matrix.start||i>=matrix.end):items;
-  const {header,footer,sections}=sectionsOf(orderSectionLabels(remaining));
+  return {...sectionsOf(orderSectionLabels(remaining)),matrix};
+}
+function layoutTree({items,width,height,palette,fontSize,background}) {
+  const {header,footer,sections,matrix}=contentOf(items);
   const margin=Math.round(Math.min(width,height)*.035),gap=Math.round(fontSize*.8);
   const innerWidth=width-margin*2;
   const ratio=width/height,columns=ratio>=1.2?3:2;
@@ -171,17 +175,18 @@ function layoutTree({items,width,height,palette,fontSize,background}) {
   if(footer.length)rootChildren.push(node("div",{display:"flex",width:innerWidth,flexDirection:footerRow?"row":"column",justifyContent:"space-between",gap:fontSize*.3,marginTop:gap,padding:gap,backgroundColor:palette.ink,color:palette.paper,borderRadius:8,flexShrink:0},footer.map(t=>text(t,t.role==="contact"?1.15:.88,{width:footerRow?(innerWidth-gap*2-fontSize*.3*(footer.length-1))/footer.length:innerWidth-gap*2}))));
   return {tree:node("div",{display:"flex",flexDirection:"column",position:"relative",width,height,padding:margin,fontFamily:"Noto CJK",color:palette.ink,backgroundColor:palette.paper},rootChildren),consumed,margin};
 }
-async function compose({structured,prompt,width,height,fonts,background,satori,resvg}) {
+async function compose({structured,prompt,width,height,fonts,background,satori,resvg,designEngine="legacy"}) {
   const items=structured?.text;
   if(!Array.isArray(items)||!items.length||new Set(items.map(t=>t.key)).size!==items.length)throw fail("COMPOSITION_COPY_INVALID");
   if(items.length>80||items.some(t=>typeof t.text!=="string"||t.text.length>8000)||items.reduce((n,t)=>n+t.text.length,0)>12000)throw fail("COMPOSITION_COPY_LIMIT");
   if(![width,height].every(n=>Number.isInteger(n)&&n>=64&&n<=8192)||width*height>4622220)throw fail("COMPOSITION_CANVAS_INVALID");
-  const palette=paletteOf(structured,prompt);
+  const palette={...paletteOf(structured,prompt),explicit:!!structured?.print_style?.palette};
+  const plan=designEngine==="poster"?require("./commercial-design-plan").planOf({structured,prompt,width,height,content:contentOf(items)}):null;
   if(contrast(palette.paper,palette.ink)<4.5)throw fail("COMPOSITION_CONTRAST_INVALID");
   const short=Math.min(width,height),minimum=Math.max(18,short*.0125,width*.0075);
   const candidates=[];for(let f=short*.023;f>minimum;f*=.93)candidates.push(f);candidates.push(minimum);
   for(const fontSize of candidates){
-    const {tree,consumed,margin}=layoutTree({items,width,height,palette,fontSize,background});
+    const {tree,consumed,margin}=plan?require("./commercial-poster-scene").scene({plan,width,height,palette,fontSize,background,contrast,partition}):layoutTree({items,width,height,palette,fontSize,background});
     if(consumed.length!==items.length||new Set(consumed).size!==items.length||items.some(t=>!consumed.includes(t.key)))throw fail("COMPOSITION_COPY_NOT_CONSUMED");
     const boxes=[];let styleError=false;
     const svg=await satori(tree,{width,height,fonts,embedFont:true,
@@ -199,9 +204,9 @@ async function compose({structured,prompt,width,height,fonts,background,satori,r
     if(contentOverflow)continue;
     const engine=new resvg.Resvg(svg,{font:{loadSystemFonts:false}});
     let png,rendered;try{rendered=engine.render();png=Buffer.from(rendered.asPng());}finally{rendered?.free?.();engine.free?.();}
-    return {png,svg,manifest:{version:VERSION,width,height,fontSize:Number(fontSize.toFixed(2)),itemCount:items.length,
+    return {png,svg,manifest:{version:plan?plan.version:VERSION,...(plan?{design:{styleId:plan.styleId,layoutId:plan.layoutId,reason:plan.reason},artwork:plan.artwork}:{}),width,height,fontSize:Number(fontSize.toFixed(2)),itemCount:items.length,
       copyHash:crypto.createHash("sha256").update(JSON.stringify(items.map(t=>[t.key,t.text]))).digest("hex"),boxes:boxes.filter(b=>b.key)}};
   }
   throw fail("COMPOSITION_CONTENT_OVERFLOW");
 }
-module.exports={VERSION,policyOf,eligible,paletteOf,contrast,sectionsOf,partition,layoutTree,compose,packedMatrix,orderSectionLabels};
+module.exports={VERSION,policyOf,eligible,paletteOf,contrast,sectionsOf,partition,layoutTree,compose,packedMatrix,orderSectionLabels,contentOf};
