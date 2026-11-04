@@ -58,6 +58,11 @@ test('image output count and current model rate yield estimate without inventing
   await r.json(); const row=h.rows.get(r.modelCallId);
   assert.equal(row.outputImages,2); assert.equal(row.supplierCostEstimateCny,0.24); assert.equal(row.inputTokens,null);
 });
+test('native DashScope image ledger counts all nested references and size without storing pixels or prompts',async()=>{
+ const h=harness({pricing:{unitCostCny:.56}});const options={...h.options,body:JSON.stringify({model:'qwen-image-3.0-pro',input:{messages:[{role:'user',content:[{image:'PRIVATE_BASE'},{image:'PRIVATE_PERSON'},{image:'PRIVATE_LOGO'},{text:'PRIVATE_COPY'}]}]},parameters:{size:'1536*2048',n:1}})};
+ const r=await h.ledger.fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',options,async()=>new Response(JSON.stringify({request_id:'qwen-vendor-1',output:{choices:[{message:{content:[{image:'https://example.com/a.png'}]}}]},usage:{input_image_count:3,output_image_count:1}})));
+ await r.json();const row=h.rows.get(r.modelCallId);assert.equal(row.inputImages,3);assert.equal(row.requestedSize,'1536x2048');assert.equal(row.provider,'aliyun-bailian');assert.equal(row.providerResponseId,'qwen-vendor-1');assert.equal(row.supplierCostEstimateCny,.56);assert.equal(row.status,'succeeded');assert.equal(row.inputTokens,null);assert.ok(!JSON.stringify([...h.rows.values()]).includes('PRIVATE'));
+});
 test('truncated stream, SSE error and consumer cancel do not become successful generations', async () => {
   for(const raw of ['data: {"choices":[{"delta":{"content":"hello"}}]}\n\n', 'data: {"error":{"code":"RATE_LIMIT"}}\n\ndata: [DONE]\n\n']){
     const h=harness(); const r=await h.ledger.fetch('https://dashscope.aliyuncs.com/chat/completions',h.options,async()=>new Response(raw,{headers:{'content-type':'text/event-stream'}})); await r.text();assert.equal([...h.rows.values()][0].status,'outcome_unknown');
