@@ -1,0 +1,170 @@
+{
+  "repository": "https://github.com/howardz27/poster-generator-skill",
+  "commit": "fa2a40bf0943c14dbcf2dfd86a2efe66fa8b4cbc",
+  "license": "MIT; original LICENSE retained",
+  "purpose": "reference data only, not installed or executed, not sent to runtime",
+  "styleCount": 20,
+  "layoutCount": 15,
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "3602bf6769dc891cc5f15c7b9ff3dcfd1476ace947a6fc66b65dd87edab774ac"
+    },
+    {
+      "path": "README.md",
+      "sha256": "80e33b9e1fe59195b48d9efe6dd8cab4a80608776505f32bbff64cfa5117b791"
+    },
+    {
+      "path": "references/base-prompt.md",
+      "sha256": "891f397904cbbfce58871f32a26edb5f3138ed50349cc126b4836f13c3e2ba11"
+    },
+    {
+      "path": "references/layouts/badge-seal-system.md",
+      "sha256": "0f125241b618f6c23668097c7bd010f4bf9aaa9eec80d71caff1588b1b70e2ef"
+    },
+    {
+      "path": "references/layouts/big-type-only.md",
+      "sha256": "d9b09c7c088dad82ad3e14fe63146768730f0915348b20d6f68b19e6f9bd6e1b"
+    },
+    {
+      "path": "references/layouts/centered-hero.md",
+      "sha256": "07ea83358a0a4b9a721a102627f4726e37a89428fb0fa886e4c733c51828ca07"
+    },
+    {
+      "path": "references/layouts/collage-montage.md",
+      "sha256": "b0a0e4add35a328c15e74e88fee112d4a74943a5174c9cc25f7e730ed8001194"
+    },
+    {
+      "path": "references/layouts/diagonal-dynamic.md",
+      "sha256": "fa524ffa48be8899cc6f7b68bc741e712e74a2083a5f6965ef99e674cbbc6e89"
+    },
+    {
+      "path": "references/layouts/editorial-column.md",
+      "sha256": "09a2edf13740f84eb2085750b37146ad5a9d743fcfc3ce6082be34383a275d0c"
+    },
+    {
+      "path": "references/layouts/frame-within-frame.md",
+      "sha256": "1d8a7d433c3bc3e11ef85d5a03553386eaa8a0459cd817ac2bc9eb21f6eb1ce8"
+    },
+    {
+      "path": "references/layouts/full-bleed-image-overlay.md",
+      "sha256": "743c2b12933106e4a5c87802a7531ed15e5853dc9ab6168aa43afd1937f1a796"
+    },
+    {
+      "path": "references/layouts/modular-grid.md",
+      "sha256": "1ee6b309bcbd72c4551578fc0179a7d5ba7962db3e5ba932a507caff76d20497"
+    },
+    {
+      "path": "references/layouts/poster-card.md",
+      "sha256": "d46442e230ef80b44e93b7deaff7c25b22b5dd031ed706447ad082f1df0849b5"
+    },
+    {
+      "path": "references/layouts/product-shelf.md",
+      "sha256": "d3a25daadfb1bea34c06f9fe5ade6b2c5e181ae0b12d5416bfd97f078f286ff8"
+    },
+    {
+      "path": "references/layouts/split-horizontal.md",
+      "sha256": "d7d9c7395cd8c7a5fc17c50bfd5aebb55a4a6f7c58eaa7217b997f7926df4c91"
+    },
+    {
+      "path": "references/layouts/split-vertical.md",
+      "sha256": "51603cf03b621fbb28ca8556427ed1538cac5ceaf29a1c986c6b7baadde75dd5"
+    },
+    {
+      "path": "references/layouts/timeline-sequence.md",
+      "sha256": "2998189c72f9e08b3233362fa4f0142020ee9ee7c3ee2611072976cc4bfb2c45"
+    },
+    {
+      "path": "references/layouts/top-headline-stack.md",
+      "sha256": "f2a36e08fc1322d3139897e286a3a530720f495170a90e5d8c559a4a48f11793"
+    },
+    {
+      "path": "references/quality-rubric.md",
+      "sha256": "43488e17bdf2636580bc8280cec145f06bc3077e03fb62083fad842768c91d5c"
+    },
+    {
+      "path": "references/selection-guide.md",
+      "sha256": "8fcb5f8a887ba39d3721a7e2a31734bebd3d6a7f53a34ca33ace395650830a78"
+    },
+    {
+      "path": "references/styles/art-deco-luxe.md",
+      "sha256": "89f742b89201f4548456da3b467a3ba5da7cc375bf6a5987bb4870ab1bdbfa2d"
+    },
+    {
+      "path": "references/styles/bauhaus-modular.md",
+      "sha256": "a834f3052de7aff686f356d8b2aa794aaa14ae24212fb247c86393343dc83613"
+    },
+    {
+      "path": "references/styles/botanical-premium.md",
+      "sha256": "1638447ad2be826933e324d7c1cab6f56ecda3dd146448972c978be186a5f16e"
+    },
+    {
+      "path": "references/styles/cinematic-key-art.md",
+      "sha256": "8a6d6d532af2d72939d3e21122cc746e740d144d89d73470cf720b884549826b"
+    },
+    {
+      "path": "references/styles/constructivist-impact.md",
+      "sha256": "9ecbb7a88d44d09e9427408a2e9bc1ef2c7417eb9c80df4569c0318e8b16f84d"
+    },
+    {
+      "path": "references/styles/data-editorial.md",
+      "sha256": "00385c8ff159ca9dd85fff68dc9f29530afb1a651222a84fdeaf64cfd4f05449"
+    },
+    {
+      "path": "references/styles/editorial-collage.md",
+      "sha256": "9ee7583faecd3a69769e41240f597540242ca7c97d61b1dd76b918141374a6ed"
+    },
+    {
+      "path": "references/styles/futurist-gradient.md",
+      "sha256": "678b8044e45113f517ae6e3e556244ebc730b73fc78fb3d39e6bf5a23cf074c9"
+    },
+    {
+      "path": "references/styles/glassmorphism-ui.md",
+      "sha256": "75ec8642543dc75d877f9ae7a32acf3e5fc7ff15c91e5c8307d04396017c3bc9"
+    },
+    {
+      "path": "references/styles/hyperreal-product.md",
+      "sha256": "7623dce7ce791b6bc5cf98bb480b1175a126a0ffb52f5daf0a6800dd8c5efa04"
+    },
+    {
+      "path": "references/styles/japanese-ma.md",
+      "sha256": "d86a84bc2e53f19fc53839f80334cbae15276697f31403f6628234c47a29a0ad"
+    },
+    {
+      "path": "references/styles/luxury-minimal.md",
+      "sha256": "55dea0086bcb210ee062f9cb5c0f48e94c414c54ca10762195c815fa8640c415"
+    },
+    {
+      "path": "references/styles/monochrome-typographic.md",
+      "sha256": "89886d6da48efbd590c514d54333f696a79c05ea27da1c98cb11d33855a4742b"
+    },
+    {
+      "path": "references/styles/neo-brutalist.md",
+      "sha256": "82f73099b03f199ca2fbace25a77079e8dc117116d9795a91a941c1238cb33a9"
+    },
+    {
+      "path": "references/styles/organic-craft.md",
+      "sha256": "e353e064cc6dfc93576da9392e90d80f6ae23b04f682328cd26eea99c70b7ee2"
+    },
+    {
+      "path": "references/styles/pop-commercial.md",
+      "sha256": "8ab1b52697f7f124f580004ab491a0b66b515d3b9030c12e31b841fb541662c7"
+    },
+    {
+      "path": "references/styles/retro-futurism.md",
+      "sha256": "7f937f321d8c1421c97d3240f86a9d52e9245e98b4b97c051216e159f28a5013"
+    },
+    {
+      "path": "references/styles/risograph-zine.md",
+      "sha256": "413678e63c0c81ac5b7de99861512d01823792893a102ab8a60dfd3817875431"
+    },
+    {
+      "path": "references/styles/surreal-3d-editorial.md",
+      "sha256": "4e270b1e2eb68f1a7937a55ab0f8e56f56b4a78488a855f03dad066585fb7a40"
+    },
+    {
+      "path": "references/styles/swiss-editorial.md",
+      "sha256": "042109d2ad00983f71258479881ae42eb6f9017a53af991d18e65af8c6109c90"
+    }
+  ]
+}
