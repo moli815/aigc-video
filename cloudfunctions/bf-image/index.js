@@ -35,6 +35,13 @@ const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { cleanImageRequest } = require("./shared/image-delivery");
+let __commercialComposition;
+function commercialCompositionOf(){
+  if(!__commercialComposition){getDb();__commercialComposition=require("./commercial-composition-runtime").createCommercialComposition({app:__APP,
+    assetStore:require("./shared/asset-store").createAssetStore({db:__db,app:__APP}),
+    log:fields=>logStage("image_composition",fields)});}
+  return __commercialComposition;
+}
 const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
 const { referenceRequestFingerprint, prepareSeriesReferenceInput, resolveSeriesReferenceInput } = require("./shared/series-reference-input");
 function imageReferenceStoreOf() {
@@ -72,6 +79,7 @@ const RT = {
   IMAGE_MODEL_SERIES: process.env.IMAGE_MODEL_SERIES || "",
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
   IMAGE_AUTO_POLICY: process.env.IMAGE_AUTO_POLICY || "{}",
+  IMAGE_COMPOSITION_POLICY: process.env.IMAGE_COMPOSITION_POLICY || "{}",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
   // ── 10-29 定价改为"成本 × 倍数"：售价不再手填，避免改成本忘了改售价 ──
@@ -100,7 +108,7 @@ const RT = {
 // 避免 bf_config 里遗留的旧值把线上出图整体打挂。其余为非敏感调参项，可从 DB 覆盖。
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
-  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY",
+  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY", "IMAGE_COMPOSITION_POLICY",
   "IMAGE_COST_PRO_SMALL", "IMAGE_COST_PRO_LARGE", "IMAGE_COST_PRO_LAYER_SMALL", "IMAGE_COST_PRO_LAYER_LARGE",
   "IMAGE_COST_FLASH", "IMAGE_COST_LITE", "IMAGE_COST_45", "IMAGE_COST_40", "IMAGE_COST_EXTRA_INPUT",
   "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR",
@@ -358,7 +366,7 @@ async function runSeriesChild(opts) {
     taskKind: "generate",          // 子任务一律按单图生成，路由走 generate 规则
     qualityTier,
     requestedCount: 1,
-    referenceRoles: source.referenceRoles,
+    referenceRoles: source.referenceRoles, accountId,
   });
 
   if (!r.ok) {
@@ -379,7 +387,7 @@ async function runSeriesChild(opts) {
   const upstream = upstreamCostOf({ size: resolved, model, inputImages: Array.isArray(image) ? image.length : image ? 1 : 0 });
   const price = customerPriceOf(upstream);
   const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
-    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream, modelCallId: r.modelCallId,
+    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream, modelCallId: r.modelCallId,asset:r.asset,
   });
   let costState = persisted ? "queued" : "pending";
   if (!persisted) {
@@ -699,13 +707,9 @@ function logStage(stage, extra) {
 // ── 额度拦截：向 bf-api /me 查剩余百分比（复用唯一真相，避免两处各算一套）──
 const BF_API_BASE = process.env.BF_API_BASE || "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
 async function quotaExhausted(req) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
-    const r = await fetch(BF_API_BASE + "/me?require_active=1", {
-      headers: { Authorization: "Bearer " + bearer(req) },
-      signal: ctrl.signal,
-    });
+    const r = await require("./quota-read").readQuotaResponse(BF_API_BASE + "/me?require_active=1",
+      { Authorization: "Bearer " + bearer(req) }, fetch);
     // 10-24 安全修复：授权/额度检查必须 fail-closed。
     // 旧实现 catch 里返回 exhausted:false —— /me 挂掉时所有人都能免费出图（成本敞口）。
     if (!r.ok) {
@@ -770,8 +774,6 @@ async function quotaExhausted(req) {
     // 超时 / 网络异常：无法确认授权与额度 → 拒绝，避免成本敞口
     logStage("quota_check_failed", { err: String((e && e.message) || e).slice(0, 120) });
     return { exhausted: true, unavailable: true, reason: "unreachable", resetAt: null };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -1067,6 +1069,7 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
     patch.archiveState = "pending";
     patch.archiveAttempts = 0;
   }
+  if(ex.asset){patch.asset=ex.asset;patch.archiveState="done";}
   if (ex.kind) patch.kind = String(ex.kind).slice(0, 24);
   if (ex.result) patch.result = ex.result;
   if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
@@ -1378,7 +1381,7 @@ const RENDER_INTENT_RULES = {
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
 };
 
-async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles }) {
+async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles, accountId }) {
   const apiKey = String(RT.IMAGE_API_KEY || "");
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
@@ -1434,20 +1437,31 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     };
   }
 
-  // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
-  const overlayMode = String(textMode || "") === "overlay";
   // 交付物边界兜底：把"数据来源/未核实/仅供参考"这类核对说明从画面文案里剔掉
   const cleanedPrompt = cleanImageRequest({ prompt, structured });
+  const rawPrompt = String(cleanedPrompt.prompt || "").trim();
   structured = cleanedPrompt.structured;
   if (cleanedPrompt.removed > 0) {
     logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
   }
-  const rawPrompt = String(cleanedPrompt.prompt || "").trim();
+  let composition=null;
+  if(accountId){
+    try{composition=await commercialCompositionOf().prepare({prompt,structured,renderIntent,taskKind,textMode,layerDecomposition,accountId,resolvedSize:resolveSize(size,aspectRatio)},RT.IMAGE_COMPOSITION_POLICY);}
+    catch(e){
+      logStage("image_composition_preflight_failed",{reason:e?.code||"COMPOSITION_UNAVAILABLE"});
+      if(e?.code==="COMPOSITION_CONTENT_OVERFLOW"||e?.code==="COMPOSITION_COPY_LIMIT")return {ok:false,code:422,error:"COMPOSITION_CONTENT_TOO_DENSE",msg:"这张画布无法清晰放下全部内容，请增加画布高度或拆成多张；尚未开始生成，也未产生作图费用。"};
+      return {ok:false,code:503,msg:"这张图的文字版式或字体暂时没有准备好，尚未开始生成，请稍后重试。"};
+    }
+  }
+  // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
+  const overlayMode = String(textMode || "") === "overlay" || !!composition;
+  const effectiveTextMode=composition?"overlay":textMode;
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
-  const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode });
-  if (designBrief) basePrompt += "\n\n" + designBrief;
+  const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode:effectiveTextMode });
+  if (designBrief&&!composition) basePrompt += "\n\n" + designBrief;
+  if(composition)basePrompt=require("./commercial-artwork").artworkPrompt(structured);
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
@@ -1475,7 +1489,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
   const finalPrompt = multiImageContract(image, referenceRoles, taskKind)
-    + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
+    + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition?
+      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成横向3:1的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
 
   const resolvedSize = resolveSize(size, aspectRatio);
   if (!resolvedSize) {
@@ -1492,6 +1507,10 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     response_format: "url",
     watermark: false,
   };
+  if(composition){
+    const dims=resolvedSize.match(/^(\d+)x(\d+)$/),pixels=dims?Number(dims[1])*Number(dims[2]):4194304;
+    payload.size=resolveImageSize(pixels>2610000?"2K":"1.5K","3:1");
+  }
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
@@ -1513,7 +1532,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   //   上游模型 260s → 云函数内部 280s → 网关 300s → 客户端 315s
   // 之前这里是 280s，与函数预算贴死：上游一慢，函数超时先触发，客户端只看到网关 504，
   // 拿不到"上游超时"这个可判定的错误码。
-  const timer = setTimeout(() => controller.abort(), 260000);
+  const timer = setTimeout(() => controller.abort(), composition?180000:260000);
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       const r = await modelLedger.fetch(IMAGE_BASE + "/images/generations", {
@@ -1542,6 +1561,12 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
         }
         return { ok: false, code: 502, msg: "上游失败", status: r.status,
           unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
+      }
+      if(composition){
+        try{const artifact=await commercialCompositionOf().finish(composition,url,accountId);
+          return {ok:true,...artifact,model:selectedModel,routeReason:route.reason,caps,modelCallId:r.modelCallId};}
+        catch(e){logStage("image_composition_storage_failed",{reason:e?.code||"COMPOSITION_ARCHIVE_UNAVAILABLE",modelCallId:r.modelCallId});
+          return {ok:false,code:503,unknownOutcome:true,msg:"画面已经生成，成品保存仍在确认中，请稍后查看，暂时不要重复生成。"};}
       }
       return { ok: true, url, model: selectedModel, routeReason: route.reason, caps, modelCallId: r.modelCallId };
     }
@@ -2176,6 +2201,7 @@ const server = http.createServer(async (req, res) => {
       taskKind, qualityTier, requestedCount,
       textMode: String(body.text_mode || ""),
       referenceRoles: body.reference_roles,
+      accountId: auth.sub,
     });
     // 能力不支持：任务已在路由阶段被拦下，这里不再重试、不再吞成 502
     if (!out.ok && out.unsupported) {
@@ -2211,7 +2237,7 @@ const server = http.createServer(async (req, res) => {
         layerDecomposition: body.layer_decomposition === true,
       });
       const price = customerPriceOf(upstream);
-      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId });
+      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId,asset:out.asset });
       await flushJobs();
       logStage("image_route", {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,

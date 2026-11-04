@@ -37,6 +37,7 @@ test("bf-image strips meta copy before building the prompt", () => {
   assert.match(imageFunction, /const cleanedPrompt = cleanImageRequest/);
   const around = imageFunction.slice(imageFunction.indexOf("const cleanedPrompt = cleanImageRequest"), imageFunction.indexOf("const cleanedPrompt = cleanImageRequest") + 450);
   assert.match(around, /const rawPrompt = String\(cleanedPrompt\.prompt/, "清理结果没有进入 rawPrompt");
+  assert.ok(imageFunction.indexOf("const cleanedPrompt = cleanImageRequest") < imageFunction.indexOf("composition=await commercialCompositionOf().prepare"), "元文案清理必须先于成品排字预检");
   assert.match(around, /structured = cleanedPrompt.structured/, "结构化文案未复用同一处理结果");
 });
 

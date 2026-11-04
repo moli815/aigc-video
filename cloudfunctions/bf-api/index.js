@@ -53,6 +53,9 @@ const { injectDeliveryRule, latestUserText, sanitizeCompletion, ToolCallStreamGu
 const { injectCommercialImageGuidance, isCommercialTask } = require("./commercial-image-guidance");
 const { injectAssistantGuidance } = require("./assistant-guidance");
 const { compactConversation } = require("./context-compaction");
+const { prepareImageContext } = require("./confirmed-image-context");
+const { diagnostic: imageToolDiagnostic, repairImageCompletion } = require("./image-tool-repair");
+const { reviewCommercialCalls, enabledFor: copyReviewEnabledFor } = require("./commercial-copy-review");
 const { withImageToolSchema } = require("./image-tool-schema");
 const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
 const { prepareSeriesReferenceGuidance } = require("./image-series-reference-guidance");
@@ -134,6 +137,8 @@ const RUNTIME_SPECS = {
   IMAGE_MODEL_SERIES: { type: "str", label: "作图模型 · 组图档（已弃用：组图改由云端编排，按快速/高质量档逐张生成；留空即可）", def: () => process.env.IMAGE_MODEL_SERIES || "" },
   IMAGE_ROUTING_MODE: { type: "str", label: "生图路由模式（auto=按任务自动 / flash_only=全部走快速档 / pro_only=全部走高质量档）· 运维止损开关", def: () => process.env.IMAGE_ROUTING_MODE || "auto" },
   IMAGE_AUTO_POLICY: { type: "json", label: "生图自动策略 JSON（默认 Flash；复杂场景/质量重试升 Pro）", def: () => process.env.IMAGE_AUTO_POLICY || "{}" },
+  IMAGE_COMPOSITION_POLICY: { type: "json", label: "复杂海报准确排字（开关、灰度账号、阈值、私有字体及SHA256）", def: () => "{}" },
+  IMAGE_COPY_REVIEW: { type: "str", label: "复杂商业图片文案校对（1启用，0关闭；只处理生成/重设计）", def: () => "0" },
   MODEL_COST_RATES: { type: "json", label: "模型供应商成本价（元/百万Token；按完整模型ID配置 input/output/cachedInput，未核价留空）", def: () => "{}" },
   USAGE_BILLING_MODE: { type: "str", label: "额度计费：supplier_cost=供应商成本×倍数；legacy=旧档位（仅回滚）", def: () => "legacy" },
   USAGE_COST_MULTIPLIER: { type: "num", label: "用户额度扣减倍数（供应商成本×倍数）", def: () => 2 },
@@ -2755,7 +2760,10 @@ async function handleChat(req, res) {
   }
 
   // P0-46 上下文压缩（在日期/规则注入之前进行：先瘦身，再注入）
-  messages = await compactMessages(messages);
+  const imageUserText = latestUserText(body.messages || []);
+  messages = await prepareImageContext(messages, { owner:auth.sub,db,
+    enabled:Array.isArray(body.tools)&&body.tools.some(t=>["image_generate","image_series"].includes(t?.function?.name))&&isCommercialTask(messages,imageUserText),
+    compact:compactMessages,observe:fields=>logSafe({tag:"image_confirmed_context",requestId:currentRequestId(),...fields}) });
 
   const totalChars = messages.reduce((sum, m) => sum + textSize(m && m.content), 0);
   if (totalChars > 120000) {
@@ -2807,7 +2815,6 @@ async function handleChat(req, res) {
   }
   // Existing phones carry the legacy truthfulness rule. It must not suppress
   // newer image-delivery policy, including user-requested disclosure exceptions.
-  const imageUserText = latestUserText(body.messages || []);
   messages = injectDeliveryRule(messages);
   messages = injectCommercialImageGuidance(messages, body.tools, imageUserText);
   const seriesReferences = await prepareSeriesReferenceGuidance({ messages, tools: body.tools,
@@ -2992,6 +2999,43 @@ async function handleChat(req, res) {
     }
   }
 
+  const reviewImageCalls = calls=>reviewCommercialCalls(calls,{messages,enabled:String(RUNTIME.IMAGE_COPY_REVIEW)==="1"&&copyReviewEnabledFor(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub)&&isCommercialTask(messages,imageUserText),
+    observe:fields=>logSafe({tag:"image_copy_review",requestId:currentRequestId(),...fields}),
+    request:async reviewMessages=>{
+      const model=UPSTREAM.chat.tiers.utility.model;
+      const r=await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}`},
+        body:JSON.stringify({model,messages:reviewMessages,stream:false,max_tokens:6500,enable_thinking:false,response_format:{type:"json_object"}})},20000);
+      if(!r.ok)throw Error("COPY_REVIEW_UPSTREAM");const data=await r.json(),u=data.usage;
+      if(u&&typeof u.prompt_tokens==="number")await addChatCost(auth.sub,(u.prompt_tokens/1e6)*UPSTREAM.chat.tiers.utility.priceIn+((u.completion_tokens||0)/1e6)*UPSTREAM.chat.tiers.utility.priceOut,
+        {model,tier:"utility",promptTokens:u.prompt_tokens,completionTokens:u.completion_tokens||0,estimated:false,modelCallId:r.modelCallId}).catch(()=>logSafe({tag:"usage_charge_pending",modelCallId:r.modelCallId,state:"storage_error"}));
+      if(data.choices?.[0]?.finish_reason==="length")throw Error("COPY_REVIEW_TRUNCATED");return JSON.parse(data.choices?.[0]?.message?.content||"");
+    }});
+  const reviewImageCompletion=async data=>{
+    for(const choice of data?.choices||[])if(Array.isArray(choice.message?.tool_calls))choice.message.tool_calls=await reviewImageCalls(choice.message.tool_calls);
+    return data;
+  };
+  const reviewImageFrame=async frame=>{
+    if(!frame.startsWith("data: "))return frame;
+    let data;try{data=JSON.parse(frame.slice(6));}catch{return frame;}
+    for(const choice of data?.choices||[])if(Array.isArray(choice.delta?.tool_calls))choice.delta.tool_calls=await reviewImageCalls(choice.delta.tool_calls);
+    return "data: "+JSON.stringify(data);
+  };
+  const repairImageArguments = (error,released=false) => repairImageCompletion({error,body:upstreamBody,released,
+    sanitize:data=>sanitizeCompletion(data,imageUserText,observeImageBoundary,finalizeImageCalls),
+    observe:fields=>logSafe({tag:"image_tool_repair",requestId:currentRequestId(),...fields}),
+    request:async repairedBody=>{
+      const r=await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`,{method:"POST",
+        headers:{"Content-Type":"application/json",Authorization:`Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}`},
+        body:JSON.stringify({...repairedBody,max_tokens:Math.min(6500,repairedBody.max_tokens||6500),enable_thinking:false})},45000);
+      if(!r.ok)throw Error("REPAIR_UPSTREAM_UNAVAILABLE");
+      const data=await r.json();const u=data.usage;
+      if(u&&typeof u.prompt_tokens==="number"){
+        await addChatCost(auth.sub,(u.prompt_tokens/1e6)*tier.priceIn+((u.completion_tokens||0)/1e6)*tier.priceOut,
+          {model:upstreamBody.model,tier:tier.name,promptTokens:u.prompt_tokens,completionTokens:u.completion_tokens||0,estimated:false,modelCallId:r.modelCallId})
+          .catch(()=>logSafe({tag:"usage_charge_pending",modelCallId:r.modelCallId,state:"storage_error"}));
+      }
+      return data;
+    }});
   let upstream;
   try {
     upstream = await fetchWithTransientRetry(`${UPSTREAM.chat.base}/chat/completions`, {
@@ -3034,11 +3078,13 @@ async function handleChat(req, res) {
     if (MODEL_MASK && data && typeof data.model === "string") data.model = MODEL_MASK;   // P0-38 模型名脱敏
     try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary, finalizeImageCalls); }
     catch (e) {
-      logSafe({ tag: "image_tool_arguments_invalid", requestId: currentRequestId(), stage: "non_stream" });
+      logSafe({ tag: "image_tool_arguments_invalid", requestId: currentRequestId(), stage: "non_stream",...imageToolDiagnostic(e) });
+      const repaired=await repairImageArguments(e);
+      if(repaired){if(MODEL_MASK&&typeof repaired.model==="string")repaired.model=MODEL_MASK;return sendJson(res,200,await reviewImageCompletion(repaired));}
       return sendError(res, 502, "UPSTREAM_ERROR", e?.code === "BRAND_PLAN_CONFLICT"
         ? "这次标识编辑方案有冲突，还没有开始生成图片，请再试一次。" : "这次作图参数没有整理完整，请再试一次。");
     }
-    return sendJson(res, 200, data);
+    return sendJson(res, 200, await reviewImageCompletion(data));
   }
 
   res.writeHead(200, {
@@ -3094,7 +3140,11 @@ async function handleChat(req, res) {
 
       let outChunk = "";
       for (const line of lines) {
-        outChunk += maskModel(toolGuard.pushLine(normalizeStreamLine(line))) + "\n";
+        const guarded=toolGuard.pushLine(normalizeStreamLine(line));
+        // DONE may flush multiple SSE frames. Process each independently rather
+        // than parsing concatenated JSON as one frame and skipping the review.
+        const reviewed=[];for(const frame of guarded.split("\n\n"))reviewed.push(await reviewImageFrame(frame));
+        outChunk += maskModel(reviewed.join("\n\n")) + "\n";
       }
       if (outChunk) res.write(outChunk);
       for (const line of lines) {
@@ -3112,7 +3162,11 @@ async function handleChat(req, res) {
       if (aborted) break;
     }
     if (!aborted) {
-      if (buffered.trim()) res.write(maskModel(toolGuard.pushLine(normalizeStreamLine(buffered))) + "\n\n");
+      if (buffered.trim()) {
+        const reviewed=[];
+        for(const frame of toolGuard.pushLine(normalizeStreamLine(buffered)).split("\n\n"))reviewed.push(await reviewImageFrame(frame));
+        res.write(maskModel(reviewed.join("\n\n"))+"\n\n");
+      }
       toolGuard.end();
       streamCompleted = true;
     }
@@ -3121,8 +3175,17 @@ async function handleChat(req, res) {
     // 「上游限流」「工具参数写到一半断了」「标识方案冲突」——排查全靠猜。
     const reason = String((e && (e.code || e.message)) || "unknown").slice(0, 80);
     logSafe({ tag: "chat_stream_incomplete", requestId: currentRequestId(), code: reason,
-      detail: String((e && e.detail) || "").slice(0, 120), completed: streamCompleted });
-    if (!aborted) res.write("data: " + JSON.stringify({ ...streamErrorFrame(reason), requestId: currentRequestId() }) + "\n\n");
+      detail: String((e && e.detail) || "").slice(0, 120), completed: streamCompleted,toolDiagnostic:imageToolDiagnostic(e) });
+    if(!aborted&&e?.code==="TOOL_ARGUMENTS_INVALID"&&!toolGuard.releasedCalls){
+      try{await reader.cancel();}catch{}
+      const repaired=await repairImageArguments(e);
+      if(repaired&&!aborted){
+        const calls=(await reviewImageCalls(repaired.choices[0].message.tool_calls)).map((call,index)=>({...call,index}));
+        res.write("data: "+JSON.stringify({choices:[{index:0,delta:{tool_calls:calls},finish_reason:"tool_calls"}],model:MODEL_MASK||upstreamBody.model})+"\n\n");
+        res.write("data: [DONE]\n\n");streamCompleted=true;
+      }
+    }
+    if (!aborted&&!streamCompleted) res.write("data: " + JSON.stringify({ ...streamErrorFrame(reason), requestId: currentRequestId() }) + "\n\n");
   } finally {
     // Close the tracked upstream on early failure/client disconnect so the call
     // ledger can finalize as outcome_unknown instead of remaining pending.

@@ -16,7 +16,7 @@ const path = require("node:path");
 const { aggregateCostRows } = require("../cloudfunctions/bf-api/cost-report");
 
 const root = path.resolve(__dirname, "..");
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const read = (file) => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g,"\n");
 const imageFunction = read("cloudfunctions/bf-image/index.js");
 const apiFunction = read("cloudfunctions/bf-api/index.js");
 

@@ -1,21 +1,26 @@
 "use strict";
 // Real service evaluation using synthetic businesses. No customer chats, settings,
-// providers or production code are changed. Component replay, not iOS UI testing.
+// providers or production code are changed by the default mode. The explicit
+// --repair-canary mode enables new features only for its temporary account.
 const fs=require("node:fs"),path=require("node:path"),crypto=require("node:crypto"),assert=require("node:assert/strict"),cp=require("node:child_process");
 const {cases}=require("../tests-fixtures/complex-image-eval-20261104.cjs");
 const onlyArg=process.argv.find(a=>a.startsWith("--only="));
 const strictCopyContract=process.argv.includes("--strict-copy-contract");
+const repairCanary=process.argv.includes("--repair-canary");
+const planOnly=process.argv.includes("--plan-only");
+const seedSynced=process.argv.includes("--seed-sync");
+const baselineReference=process.argv.includes("--reference-baseline");
 const selected=onlyArg?cases.filter(e=>e.id===onlyArg.slice(7)):cases;
 assert.ok(selected.length,"Unknown --only case; no account or provider call created");
-assert.ok(!onlyArg||!selected.some(e=>e.referenceCase),"Reference-only replay needs its recorded base; run the complete suite instead");
+assert.ok(!onlyArg||baselineReference||!selected.some(e=>e.referenceCase),"Reference-only replay needs its recorded base; run the complete suite instead");
 const {resolveImageSize}=require("../cloudfunctions/bf-image/image-sizing");
 const sdk=require(path.resolve("cloudfunctions/bf-api/node_modules/@cloudbase/node-sdk"));
 const c=JSON.parse(fs.readFileSync(path.join(process.env.USERPROFILE,".config/.cloudbase/auth.json"),"utf8")).credential;
 const app=sdk.init({env:"xmy-test-d5g8c0xcifcefcfd5",region:"ap-shanghai",secretId:c.tmpSecretId,secretKey:c.tmpSecretKey,sessionToken:c.tmpToken}),db=app.database();
-const root=path.resolve("outputs/complex-image-eval-20261104"),stamp=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(new Date()).replace(/[^0-9]/g,"");
+const root=path.resolve(repairCanary?"outputs/commercial-text-repair-20261104/live":"outputs/complex-image-eval-20261104"),stamp=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(new Date()).replace(/[^0-9]/g,"");
 const folder=path.join(root,"run-"+stamp);fs.mkdirSync(folder,{recursive:true});fs.writeFileSync(path.join(root,"latest-run.json"),JSON.stringify({folder}));
 const id="complex-image-"+crypto.randomBytes(5).toString("hex"),host="https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com";
-const report={at:new Date().toISOString(),timezone:"Asia/Shanghai",scope:"真实前置模型与Seedream接口联调；重放40条/48000字符选择，非真机UI；人工夹具记忆不等于客户端召回验收",cases:[],status:"running"};let token="",created=false;
+const report={at:new Date().toISOString(),timezone:"Asia/Shanghai",scope:"真实前置模型与Seedream接口联调；重放40条/48000字符选择，非真机UI；人工夹具记忆不等于客户端召回验收",cases:[],status:"running"};let token="",created=false,canaryRestore=null;
 const base=fs.readFileSync("BossAI/Services/ImageDesignGuidance.swift","utf8").match(/private static let baseInstructions = """\s*([\s\S]*?)\s*"""/)[1].replace(/^    /gm,"");
 const library=JSON.parse(fs.readFileSync("BossAI/Resources/ImageDesignReferences.json","utf8")).patterns;
 function guidance(request){const matched=library.filter(r=>(r.tags||[]).some(tag=>request.toLowerCase().includes(tag.toLowerCase())&&!["不要","不想要","别用","不要再"].some(n=>request.includes(n+tag))));const refs=matched.length?matched.slice(0,4):["swiss","flat-illustration","art-deco","anime-story","editorial-photo","printmaking"].map(id=>library.find(r=>r.id===id)).filter(Boolean);return base+"\n【设计参考词典】候选风格按本任务选择，不混用；用户新要求优先。\n"+refs.map(r=>r.name+"："+r.principles+" layout="+r.layout+" fontStyle="+r.font).join("\n");}
@@ -49,31 +54,86 @@ async function run(entry,referenceFile){const row={id:entry.id,name:entry.name,s
  row.prompt=args.prompt||"";const items=Array.isArray(args.structured?.text)?args.structured.text:[];row.textItems=items.length;row.copy=items.map(i=>i.text||"").join("\n");row.copyChars=row.copy.length;row.designBrief=args.structured?.design_brief;
  row.requirementChecks=(entry.checks||[]).map(([regex,name])=>({name,present:regex.test(row.copy)}));row.forbiddenHits=(entry.forbidden||[]).filter(t=>row.copy.includes(t));row.planningFlags=row.requirementChecks.filter(t=>!t.present).map(t=>"定稿缺少："+t.name);
  if(row.copyChars<entry.minCopyChars)row.planningFlags.push("内容量低于此压力用例要求");if(row.forbiddenHits.length)row.planningFlags.push("出现被否决内容/需检查否定语境："+row.forbiddenHits.join("、"));if(args.aspect_ratio&&args.aspect_ratio!==entry.ratio)row.planningFlags.push("Agent比例与用户指定不符（按用户显式比例编译）");
+ if(planOnly){row.status="planned_without_image_call";save();return;}
  row.status="generating";save();const imageRid=crypto.randomUUID();row.imageRequestId=imageRid;
  const body={requestId:imageRid,task_kind:referenceFile?"reference":"generate",prompt:args.prompt,structured:args.structured,aspect_ratio:entry.ratio,size:resolveImageSize("2K",entry.ratio),quality_tier:args.quality_tier,render_intent:args.render_intent};
  if(referenceFile){const bytes=fs.readFileSync(referenceFile);body.image="data:"+(bytes[0]===137?"image/png":"image/jpeg")+";base64,"+bytes.toString("base64");}
  const generated=await request("/img/image",body,"eval-img-"+imageRid);assert.ok(generated.data.ok);row.imageMs=generated.ms;row.imageModel=generated.data.model;row.route=generated.data.route_reason;row.customerChargeCny=generated.data.cost;
  const media=await fetch(generated.data.url,{signal:AbortSignal.timeout(45000)});assert.equal(media.status,200);const bytes=Buffer.from(await media.arrayBuffer());row.imageFile=entry.id+(bytes[0]===137?".png":".jpg");fs.writeFileSync(path.join(folder,row.imageFile),bytes);
  const ocrFile=path.join(folder,entry.id+"-ocr.json");try{cp.execFileSync("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-File","scripts/local-image-ocr.ps1","-ImagePath",path.join(folder,row.imageFile),"-OutputPath",ocrFile],{timeout:60000,stdio:"pipe"});const ocr=JSON.parse(fs.readFileSync(ocrFile,"utf8"));row.ocrComparison={engine:ocr.engine,copySequenceRecall:recall(row.copy,ocr.text),required:(entry.checks||[]).map(([regex,name])=>({name,ocrFound:regex.test(ocr.text.replace(/\s/g,""))})),note:"OCR误识别、顺序和标点会造成偏差，必须结合目视检查；此值不是文字准确率。"};}catch{row.ocrError="LOCAL_OCR_FAILED";}
+ if(repairCanary){const replay=await request("/img/image",body,"eval-replay-"+imageRid);assert.equal(replay.data.cached,true);assert.equal(replay.data.cost,0);row.replay={cached:true,cost:0};}
  row.status="generated_pending_visual_review";console.log(JSON.stringify({id:row.id,messages:row.retainedMessages,contextChars:row.sentTextChars,copyChars:row.copyChars,flags:row.planningFlags.length,imageMs:row.imageMs,ocrSequenceRecall:row.ocrComparison?.copySequenceRecall}));
 }catch(e){row.status="failed";row.error=String(e.message).replace(/https?:\/\/\S+/g,"[url]").slice(0,350);row.httpStatus=e.httpStatus;console.log(JSON.stringify({id:row.id,status:row.status,error:row.error}));}finally{save();}}
 async function pool(entries,concurrency){let i=0;await Promise.all(Array.from({length:concurrency},async()=>{while(i<entries.length)await run(entries[i++]);}));}
 (async()=>{try{
  const salt=crypto.randomBytes(16).toString("hex"),password=crypto.randomBytes(24).toString("hex"),now=new Date();await db.collection("bf_accounts").doc(id).set({username:id,displayName:"复杂长上下文隔离测试",status:"active",tier:"ultra",expiresAt:new Date(Date.now()+7200000),createdAt:now,cycleAnchorAt:now,quotaOverrideCny:120,pwv:0,sv:0,chatUsedCny:0,imageUsedCny:0,passwordHash:"scrypt$"+salt+"$"+crypto.scryptSync(password,salt,64).toString("hex")});created=true;
+ if(seedSynced){
+  const {createSyncService}=require("../cloudfunctions/bf-api/domains/sync-v2");const sync=createSyncService({db,assetStore:{verifyReferences:async()=>{}}});
+  const entry=cases.find(c=>c.id==="B-procurement-matrix"),parent=crypto.randomUUID().toUpperCase();
+  await sync.push(id,[{kind:"conversation",refId:parent,baseVersion:0,payload:{id:parent,isDeleted:false,createdAt:Date.now()-100000}}]);
+  const records=entry.messages.map((m,i)=>{const refId=crypto.randomUUID().toUpperCase();return {kind:"message",refId,baseVersion:0,payload:{id:refId,conversationId:parent,role:m.role,text:m.content,createdAt:Date.now()-90000+i,assets:[]}};});
+  for(let i=0;i<records.length;i+=25)await sync.push(id,records.slice(i,i+25));
+  report.seededConversation={scene:entry.id,messages:records.length,scope:"隔离账号内的真实同步记录，未使用客户资料"};
+ }
+ if(repairCanary){
+  const state=JSON.parse(fs.readFileSync("outputs/commercial-text-repair-20261104/operations-state.json","utf8"));
+  const config=(await db.collection("bf_config").doc("runtime").get()).data;const prior=(Array.isArray(config)?config[0]:config).data;const policy=JSON.parse(prior.IMAGE_COMPOSITION_POLICY||"{}");
+  if(policy.enabled===true&&!Array.isArray(policy.accountIds)&&prior.IMAGE_COPY_REVIEW==="1"){
+   report.canaryScope="生产已全员启用，本轮只创建隔离测试账号，不修改任何服务设置。";
+  }else{
+   assert.ok(!Array.isArray(policy.accountIds)||policy.accountIds.every(a=>a.startsWith("complex-image-")),"Another account-scoped rollout is active; no config changed");
+   canaryRestore={policy:prior.IMAGE_COMPOSITION_POLICY||"{}",review:prior.IMAGE_COPY_REVIEW||"0"};
+   await db.collection("bf_config").doc("runtime").update({"data.IMAGE_COMPOSITION_POLICY":JSON.stringify({enabled:true,minChars:420,accountIds:[id],fonts:state.fonts}),"data.IMAGE_COPY_REVIEW":"1"});
+   report.canaryScope="仅本次临时账号启用；结束时确认仍持有此配置后恢复原值，避免影响其他并发配置。";
+  }
+  save();
+  await new Promise(r=>setTimeout(r,32000));
+ }
  token=(await request("/api/login",{username:id,password})).data.token;const me=(await request("/api/me")).data;report.compactThreshold=me.uiConfig?.compactThreshold;save();console.log(JSON.stringify({folder,compactThreshold:report.compactThreshold}));
  await pool(selected.filter(e=>!e.referenceCase),2);
- const f=selected.find(e=>e.referenceCase);if(f){const a=report.cases.find(r=>r.id===f.referenceCase);if(a?.imageFile)await run(f,path.join(folder,a.imageFile));else{report.cases.push({id:f.id,name:f.name,status:"blocked",error:"源案例没有成图，不能伪造参考图重设计结果"});save();}}
+ const f=selected.find(e=>e.referenceCase);if(f){const a=report.cases.find(r=>r.id===f.referenceCase);if(baselineReference)await run(f,path.resolve("outputs/complex-image-eval-20261104/run-20261104111102/A-expo-guide.jpg"));else if(a?.imageFile)await run(f,path.join(folder,a.imageFile));else{report.cases.push({id:f.id,name:f.name,status:"blocked",error:"源案例没有成图，不能伪造参考图重设计结果"});save();}}
+ if(repairCanary){
+  const b=report.cases.find(r=>r.id==="B-procurement-matrix");
+  if(b){
+   const recorded=JSON.parse(fs.readFileSync(path.join(folder,b.inputFile),"utf8"));
+   const rid="eval-stream-"+crypto.randomBytes(6).toString("hex");
+   const response=await fetch(host+"/api/chat",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+token,"X-Request-Id":rid},body:JSON.stringify({messages:recorded.sent,tools,stream:true,chatMode:"standard",max_tokens:10500}),signal:AbortSignal.timeout(200000)});
+   assert.equal(response.status,200);const raw=await response.text(),calls=new Map();let finished=false;
+   for(const line of raw.split("\n")){if(!line.startsWith("data:"))continue;const s=line.slice(5).trim();if(!s||s==="[DONE]")continue;let frame;try{frame=JSON.parse(s);}catch{continue;}assert.ok(!frame.error,"stream returned an error");
+    for(const choice of frame.choices||[]){if(choice.finish_reason==="tool_calls")finished=true;for(const t of choice.delta?.tool_calls||[]){assert.ok(Number.isInteger(t.index));const c=calls.get(t.index)||{name:"",arguments:""};c.name+=t.function?.name||"";c.arguments+=t.function?.arguments||"";calls.set(t.index,c);}}
+   }
+   assert.ok(finished&&calls.size);for(const c of calls.values())JSON.parse(c.arguments);
+   report.streamProbe={status:"passed",requestId:rid,calls:calls.size,scope:"旧App格式的SSE传输检查，不是真机UI验收"};
+  }
+  const before=(await db.collection("bf_model_calls").where({accountId:id}).count()).total;
+  await db.collection("bf_accounts").doc(id).update({expiresAt:new Date(Date.now()-1000)});
+  await request("/api/me",undefined,"expiry-me");await request("/api/chat",{messages:[{role:"user",content:"你好"}],stream:false},"expiry-chat",403);await request("/img/image",{prompt:"画一张树",requestId:crypto.randomUUID()},"expiry-image",403);
+  await db.collection("bf_accounts").doc(id).update({expiresAt:new Date(Date.now()+7200000),quotaOverrideCny:.01,chatUsedCny:1});
+  const quotaChat=await request("/api/chat",{messages:[{role:"user",content:"你好"}],stream:false},"quota-chat",429);assert.equal(quotaChat.data.error,"POOL_EXHAUSTED");await request("/img/image",{prompt:"画一张树",requestId:crypto.randomUUID()},"quota-image",429);
+  const after=(await db.collection("bf_model_calls").where({accountId:id}).count()).total;assert.equal(after,before);
+  report.membershipChecks={expiredMe:200,expiredChat:403,expiredImage:403,exhaustedChat:429,exhaustedImage:429,additionalProviderCalls:after-before};
+ }
  report.status="completed_pending_manual_review";
 }catch(e){report.status="runner_failed";report.error=String(e.message).slice(0,250);process.exitCode=1;}
 finally{if(created){try{
  const ledger=(await db.collection("bf_model_calls").where({accountId:id}).limit(100).get()).data||[];
  report.ledger=ledger.map(r=>Object.fromEntries(["orderId","requestId","clientRequestId","kind","model","status","inputImages","promptTokens","completionTokens","totalTokens","supplierCostEstimateCny","priceCny"].filter(k=>r[k]!==undefined).map(k=>[k,r[k]])));
  const jobs=(await db.collection("bf_image_jobs").where({accountId:id}).limit(30).get()).data||[];
+ if(repairCanary){
+  report.compositionJobs=[];
+  for(const job of jobs){
+   const bgId=job.asset?.variants?.background?.id;const row=report.cases.find(r=>r.imageRequestId&&r.imageRequestId===job.clientRequestId);
+   report.compositionJobs.push({requestId:job.clientRequestId||job._id,hasFinalAsset:!!job.asset?.id,hasArchivedArtwork:!!bgId});
+   if(bgId){try{const assetData=(await db.collection("bf_assets").doc(bgId).get()).data;const asset=Array.isArray(assetData)?assetData[0]:assetData;if(asset?.accountId===id&&asset.fileID){const signed=await app.getTempFileURL({fileList:[asset.fileID]});const url=signed.fileList?.[0]?.tempFileURL;if(url){const response=await fetch(url);assert.equal(response.status,200);const bytes=Buffer.from(await response.arrayBuffer()),name=(row?.id||String(job._id).slice(0,64))+"-artwork."+(bytes[0]===137?"png":"jpg");fs.writeFileSync(path.join(folder,name),bytes);if(row)row.archivedArtworkFile=name;}}}catch{report.artworkExportError=true;}}
+  }
+ }
  const pending=jobs.some(j=>["processing","uncertain"].includes(j.state)||(j.state==="done"&&!j.costCommitted));
  if(pending){report.cleanupDeferred=true;report.deferredAccountId=id;}else{
   const assets=(await db.collection("bf_assets").where({accountId:id}).limit(100).get()).data||[];
   for(const asset of assets){assert.equal(asset.accountId,id);if(asset.fileID)await app.deleteFile({fileList:[asset.fileID]});await db.collection("bf_assets").doc(asset._id).remove();}
+  for(const name of ["bf_sync_v2","bf_sync_meta"]){const rows=(await db.collection(name).where({accountId:id}).limit(100).get()).data||[];for(const row of rows){assert.equal(row.accountId,id);await db.collection(name).doc(row._id).remove();}}
   await db.collection("bf_accounts").doc(id).remove();report.temporaryAccountAndAssetsDeleted=true;
  }
  }catch(e){report.cleanupError=String(e.message).slice(0,180);}}
+ if(canaryRestore){try{const response=await db.collection("bf_config").doc("runtime").get();const data=(Array.isArray(response.data)?response.data[0]:response.data).data;const current=JSON.parse(data.IMAGE_COMPOSITION_POLICY||"{}");if(Array.isArray(current.accountIds)&&current.accountIds.length===1&&current.accountIds[0]===id){await db.collection("bf_config").doc("runtime").update({"data.IMAGE_COMPOSITION_POLICY":canaryRestore.policy,"data.IMAGE_COPY_REVIEW":canaryRestore.review});report.canarySettingsRestored=true;}else report.canaryRestoreSkipped="Configuration changed by another operation; not overwritten";}catch{report.canaryRestoreError=true;process.exitCode=1;}}
  save();console.log(JSON.stringify({folder,status:report.status,images:report.cases.filter(r=>r.imageFile).length,cleanupDeferred:!!report.cleanupDeferred}));}})();

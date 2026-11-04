@@ -20,7 +20,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const API = fs.readFileSync(path.join(__dirname, "../cloudfunctions/bf-api/index.js"), "utf8");
+const API = fs.readFileSync(path.join(__dirname, "../cloudfunctions/bf-api/index.js"), "utf8").replace(/\r\n/g,"\n");
 
 test("stream error frame carries human copy, not a code object", () => {
   const start = API.indexOf("function streamErrorFrame(");
