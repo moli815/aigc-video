@@ -27,7 +27,7 @@ const SECTION_OF = {
     "CHAT_MODEL_STANDARD", "CHAT_MODEL_HIGH", "CHAT_MODEL_ULTRA", "CHAT_MODEL_PRO",
     "CHAT_MODEL_UTILITY", "CHAT_MODEL_UTILITY_LITE", "CHAT_MODEL_VISION", "CHAT_THINKING_STYLE",
     "IMAGE_PROVIDER", "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES",
-    "IMAGE_ROUTING_MODE", "IMAGE_AUTO_POLICY", "IMAGE_LEGACY_BRAND_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_COPY_REVIEW", "EMBED_MODEL",
+    "IMAGE_ROUTING_MODE", "IMAGE_AUTO_POLICY", "IMAGE_LEGACY_BRAND_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_MIXED_REFERENCES_POLICY", "IMAGE_COPY_REVIEW", "EMBED_MODEL",
     "IMAGE_SIZES",
   ],
   generation: [
@@ -72,6 +72,7 @@ for (const [sid, keys] of Object.entries(SECTION_OF)) {
 // ── 字段级元数据（未声明的键走按类型推导的默认规则）──
 // widget: text | number | toggle | enum | textarea | password | json
 const META = {
+  IMAGE_MIXED_REFERENCES_POLICY:{title:'单图 · 当前底图与历史原图混合',widget:'json',risk:'high',maxLength:6000,help:'保留当前底图并追加本账号已同步历史原图；支持enabled、audience=all或accountIds。精确Logo本地合成及当前附件组图仍走原流程。'},
   USAGE_BILLING_MODE: {title:"额度计费依据",widget:"enum",enum:["legacy","supplier_cost"],risk:"high",
     description:"supplier_cost 按实际用量×账单核验单价×倍数扣额度；未知成本挂待核账；legacy 仅回滚旧计价。"},
   USAGE_COST_MULTIPLIER: {title:"供应商成本扣费倍数",widget:"number",min:1,max:10,step:.1,risk:"high",

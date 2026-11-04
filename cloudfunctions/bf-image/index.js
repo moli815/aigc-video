@@ -80,6 +80,7 @@ const RT = {
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
   IMAGE_AUTO_POLICY: process.env.IMAGE_AUTO_POLICY || "{}",
   IMAGE_COMPOSITION_POLICY: process.env.IMAGE_COMPOSITION_POLICY || "{}",
+  IMAGE_MIXED_REFERENCES_POLICY: process.env.IMAGE_MIXED_REFERENCES_POLICY || "{}",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
   // ── 10-29 定价改为"成本 × 倍数"：售价不再手填，避免改成本忘了改售价 ──
@@ -108,7 +109,7 @@ const RT = {
 // 避免 bf_config 里遗留的旧值把线上出图整体打挂。其余为非敏感调参项，可从 DB 覆盖。
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
-  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY", "IMAGE_COMPOSITION_POLICY",
+  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_MIXED_REFERENCES_POLICY",
   "IMAGE_COST_PRO_SMALL", "IMAGE_COST_PRO_LARGE", "IMAGE_COST_PRO_LAYER_SMALL", "IMAGE_COST_PRO_LAYER_LARGE",
   "IMAGE_COST_FLASH", "IMAGE_COST_LITE", "IMAGE_COST_45", "IMAGE_COST_40", "IMAGE_COST_EXTRA_INPUT",
   "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR",
@@ -1031,11 +1032,11 @@ function normalizeRid(raw) {
   return "srv-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex");
 }
 
-async function claimIdem(rid, accountId) {
+async function claimIdem(rid, accountId, referenceFingerprint) {
   const id = normalizeRid(rid);
   const key = idemKey(id, accountId);
   const db = getDb();
-  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId });
+  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId, referenceFingerprint });
   if (claim.state === "done" && claim.asset) {
     try {
       const signed = await require("./shared/asset-store").createAssetStore({ db, app: __APP }).sign(accountId, [claim.asset.id]);
@@ -1077,6 +1078,8 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
   if (ex.upstreamCostCny != null) patch.upstreamCostCny = Number(ex.upstreamCostCny) || 0;
   if (ex.modelCallId) patch.modelCallId = String(ex.modelCallId);
   if (ex.input) patch.input = ex.input;
+  if(ex.referenceFingerprint)patch.referenceFingerprint=ex.referenceFingerprint;
+  if(ex.referenceManifest)patch.referenceManifest=ex.referenceManifest;
   if (Number.isFinite(Number(ex.index))) patch.index = Number(ex.index);
   try {
     const r = await getDb().collection(JOB_COLL).doc(key).update(patch);
@@ -2059,14 +2062,25 @@ const server = http.createServer(async (req, res) => {
     const prompt = String(body.prompt || "").trim();
     const hasStructured = !!(body.structured && typeof body.structured === "object" && Object.keys(body.structured).length);
 
-    // 幂等占位：add(_id=rid) 成功才拿到执行权；重复请求复用结果或返回"进行中"。
-    if (body.structured && body.structured.image_references != null) {
-      return send(422, { ok: false, error: "TASK_UNSUPPORTED", msg: "历史原图组图需要使用分步组图任务，请重新发起组图。这次没有生成图片或扣费。" });
+    // Resolve actual owned originals before claim/cost, without downloading or
+    // persisting temporary input URLs. New single mixed tasks are opt-in.
+    let mixedInput=null;
+    if(body.structured?.image_references!=null){
+      const {prepareMixedReferenceInput,mixedReferencesEnabled}=require('./shared/image-reference-merge');
+      const kind=String(body.task_kind||body.taskKind||'edit');
+      if(!mixedReferencesEnabled(RT.IMAGE_MIXED_REFERENCES_POLICY,auth.sub)||!['edit','reference','generate'].includes(kind)||body.layer_decomposition===true||body.structured?.preserve_assets?.length||body.structured.image_references.mode!=='append'){
+        return send(422,{ok:false,error:'TASK_UNSUPPORTED',msg:'这次素材组合需要使用对应的完整原图流程，请重新选择底图与素材。这次没有生成图片或扣费。'});
+      }
+      try{mixedInput=await prepareMixedReferenceInput({store:imageReferenceStoreOf(),owner:auth.sub,structured:body.structured,image:body.image,referenceRoles:body.reference_roles,
+        readAsset:async(owner,id)=>require('./shared/document-store').documentOf(await getDb().collection('bf_assets').doc(id).get())});}
+      catch(e){const f=require('./shared/image-reference-merge').referenceFailure(e);logStage('mixed_reference_unavailable',{diagnosticCode:f.diagnostic});return send(f.status,{ok:false,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:f.msg});}
+      mixedInput.referenceFingerprint=require('./shared/image-reference-merge').bindReferenceRequest(mixedInput.referenceFingerprint,body);
     }
     // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
     const rid = normalizeRid(body.requestId);
     if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
-    const claim = await claimIdem(rid, auth.sub);
+    const claim = await claimIdem(rid, auth.sub, mixedInput?.referenceFingerprint);
+    if(claim.state==='conflict')return send(409,{ok:false,error:'IMAGE_REFERENCE_CONFLICT',msg:'这次任务使用的素材已确定，请新建任务来更换素材。'});
     if (claim.state === "done") {
       if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
       await modelLedger.cached(claim.model || "idempotent-cache", "image");
@@ -2091,6 +2105,15 @@ const server = http.createServer(async (req, res) => {
     }
     if (claim.state !== "new") return send(503, { ok: false, error: "STORAGE_UNAVAILABLE",
       msg: "暂时无法确认这次生成的状态，尚未重复生成，请稍后重试。" });
+    if(mixedInput){
+      try{const source=await resolveSeriesReferenceInput({store:imageReferenceStoreOf(),owner:auth.sub,manifest:mixedInput.referenceManifest});body={...body,image:source.image,reference_roles:source.referenceRoles};}
+      catch(e){await abortIdem(rid,auth.sub,'reference_unavailable');const f=require('./shared/image-reference-merge').referenceFailure(e);logStage('mixed_reference_sign_failed',{diagnosticCode:f.diagnostic});return send(f.status,{ok:false,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:f.msg});}
+      const resolved=resolveSize(body.size,body.aspect_ratio||body.aspectRatio);
+      if(!resolved){await abortIdem(rid,auth.sub,'image_size_unsupported');return send(422,{ok:false,error:'IMAGE_SIZE_UNSUPPORTED',msg:'当前画布比例暂不支持，请改用常见比例后重试。这次没有生成图片或扣费。'});}
+      const need=worstSeriesUnitPrice(resolved,body.image.length);
+      if(typeof q.remainingCny==='number'&&q.remainingCny+1e-6<need){await abortIdem(rid,auth.sub,'quota_insufficient');return send(402,{ok:false,error:'QUOTA_INSUFFICIENT',msg:'剩余额度不足以完成这次多素材图片，请续费后再试。这次没有生成图片或扣费。'});}
+      logStage('mixed_references_resolved',{inputImages:body.image.length});
+    }
     if (!prompt && !hasStructured) { await abortIdem(rid, auth.sub, "missing_prompt"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" }); }
     if (prompt.length > 1500) { await abortIdem(rid, auth.sub, "prompt_too_long"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "描述过长，请精简到 1500 字以内" }); }
 
@@ -2237,7 +2260,8 @@ const server = http.createServer(async (req, res) => {
         layerDecomposition: body.layer_decomposition === true,
       });
       const price = customerPriceOf(upstream);
-      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId,asset:out.asset });
+      await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId,asset:out.asset,
+        ...(mixedInput?{referenceFingerprint:mixedInput.referenceFingerprint,referenceManifest:mixedInput.referenceManifest}:{}) });
       await flushJobs();
       logStage("image_route", {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,
