@@ -82,9 +82,9 @@ function createModelCallLedger({ db, context, source, log, pricing = () => null 
       schemaVersion: 1, orderId: orderIdOf(c.accountId || "system", c.businessRequestId || c.requestId || id), requestId: safeId(c.requestId), clientRequestId: safeId(c.businessRequestId),
       accountId: c.accountId || "", source, endpoint: c.endpoint || "", provider: providerOf(url),
       kind, model: safeId(payload.model || pathname.split("/").pop()), stream: payload.stream === true, retryIndex,
-      taskKind: c.taskKind || "", inputImages: kind === "chat" ? (payload.messages || []).reduce((n, m) => n + (Array.isArray(m.content) ? m.content.filter(p => p?.type === "image_url").length : 0), 0) : Array.isArray(payload.image) ? payload.image.length : payload.image ? 1 : 0,
+      taskKind: c.taskKind || "", inputImages: kind === "chat" ? (payload.messages || []).reduce((n, m) => n + (Array.isArray(m.content) ? m.content.filter(p => p?.type === "image_url").length : 0), 0) : payload.input?.messages ? payload.input.messages.reduce((n,m)=>n+(Array.isArray(m.content)?m.content.filter(p=>typeof p?.image==='string'&&p.image.length>0).length:0),0) : Array.isArray(payload.image) ? payload.image.length : payload.image ? 1 : 0,
       credentialFingerprint: crypto.createHash("sha256").update(String(new Headers(options.headers).get("authorization") || "")).digest("hex").slice(0, 16),
-      requestedSize: safeId(payload.size), startedAt: new Date(started), status: "pending", currency: "CNY",
+      requestedSize: safeId(String(payload.size || payload.parameters?.size || '').replace('*','x')), startedAt: new Date(started), status: "pending", currency: "CNY",
       supplierCostEstimateCny: null, supplierBilledCny: null, reconciliationState: "pending_vendor_bill",
       priceCny: null, chargeState: "not_recorded", ...usageOf(null),
     };
