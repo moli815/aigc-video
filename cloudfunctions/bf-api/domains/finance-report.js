@@ -7,7 +7,7 @@ function windowOf(days,now=Date.now()) {
   return{days,startMs,endMs:now,start:new Date(startMs+8*3600000).toISOString().slice(0,10),end:endDay};
 }
 function aggregateFinance({bills,calls,usage,window,truncated=false}) {
-  const byProvider={},byProduct={},byDay={},details=[],coverage={};let official=0,estimate=0,unknownCalls=0,debited=0,legacyUnknown=0;
+  const byProvider={},byProduct={},byDay={},details=[],coverage={},attributed={};let official=0,estimate=0,unknownCalls=0,debited=0,legacyUnknown=0;
   for(const s of bills){
     if(!s.complete||s.day<window.start||s.day>window.end)continue;
     coverage[s.provider] ||= new Set();coverage[s.provider].add(s.day);
@@ -15,8 +15,12 @@ function aggregateFinance({bills,calls,usage,window,truncated=false}) {
       const amount=number(r.payableAmount);if(r.currency!=="CNY"||amount==null)continue;
       official+=amount;byProvider[s.provider]=(byProvider[s.provider]||0)+amount;byProduct[r.product||'其他']=(byProduct[r.product||'其他']||0)+amount;byDay[s.day]=(byDay[s.day]||0)+amount;
       const part=String(r.instanceId||'').split(';'),kind=part.find(x=>/^(input_token|output_token)/.test(x));
-      const model=kind?part[part.indexOf(kind)-1]:'';
-      details.push({day:s.day,provider:s.provider,product:r.product,item:kind||r.item||'图片/服务用量',model,usage:r.usage,unit:r.usageUnit,amount,currency:r.currency});
+      const model=r.model||(kind?part[part.indexOf(kind)-1]:'');
+      const imported=s.granularity==='vendor_key_daily';
+      const attribution=imported?{accountId:r.accountId||'',accountLabel:r.accountLabel||'',attributionBasis:r.attributionBasis||'',granularity:s.granularity,requestCount:r.requestCount,inputTokens:r.inputTokens,cachedInputTokens:r.cachedInputTokens,outputTokens:r.outputTokens}:{};
+      details.push({day:s.day,provider:s.provider,product:r.product,item:kind||r.item||'图片/服务用量',model,usage:r.usage,unit:r.usageUnit,amount,currency:r.currency,...attribution});
+      if(imported&&r.accountId){const a=attributed[r.accountId] ||= {accountId:r.accountId,accountLabel:r.accountLabel||r.accountId,costCny:0,requestCount:0,inputTokens:0,cachedInputTokens:0,outputTokens:0,attributionBasis:'owner_instruction',granularity:'vendor_key_daily'};
+        a.costCny+=amount;for(const k of ['requestCount','inputTokens','cachedInputTokens','outputTokens'])a[k]+=number(r[k])||0;}
     }
   }
   for(const c of calls){const at=tsMsOf(c.startedAt);if(at==null||at<window.startMs||at>window.endMs)continue;
@@ -31,9 +35,10 @@ function aggregateFinance({bills,calls,usage,window,truncated=false}) {
   return{ok:true,window,officialPayableCny:round(official),trackedCallEstimateCny:round(estimate),userQuotaDebitedCny:round(debited),
     differenceCny:round(official-estimate),unknownCostCalls:unknownCalls,legacyUnknownCostRows:legacyUnknown,
     byProvider:rounded(byProvider),byProduct:rounded(byProduct),byDay:rounded(byDay),details:details.sort((a,b)=>b.day.localeCompare(a.day)),
+    attributedBillCosts:Object.values(attributed).map(a=>({...a,costCny:round(a.costCny)})),
     coverage:{expectedDays:window.days,daysByProvider:Object.fromEntries(Object.entries(coverage).map(([p,v])=>[p,v.size])),missing,complete:!missing.length},
     dataStatus:truncated?'truncated':'complete',billingLagExpected:true,finalSettlement:false,
-    notes:['官方应付金额不是充值金额，也不一定是已扣现金；当日账单尚未完全出账。','调用台账最近才启用，历史记录不完整；差额不等于错误扣款或利润。','旧聊天流水曾把会员计价当作成本；不再用它冒充供应商真实支出。','额度扣减是会员额度消耗，不代表本期现金收入。'],generatedAt:new Date().toISOString()};
+    notes:['官方应付金额不是充值金额，也不一定是已扣现金；当日账单尚未完全出账。','平台导出补录按日汇总，用户归属由管理员指定；不冒充逐次调用，不自动追扣额度。','调用台账最近才启用，历史记录不完整；差额不等于错误扣款或利润。','旧聊天流水曾把会员计价当作成本；不再用它冒充供应商真实支出。','额度扣减是会员额度消耗，不代表本期现金收入。'],generatedAt:new Date().toISOString()};
 }
 async function queryFinance(db,params,now=Date.now()) {
   const window=windowOf(Number(params.get('days')||30),now);let truncated=false;

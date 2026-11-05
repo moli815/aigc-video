@@ -1,8 +1,8 @@
 /* Uses the existing admin token and API. Never embeds credentials or bill instance IDs. */
 var FINANCE=null,FINANCE_PAGE=0,FINANCE_LOAD=0;
-function financeMoney(n){return n==null?'未核定':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:6});}
-function financeProvider(p){return p==='volcengine'?'火山引擎':p==='aliyun-bailian'?'阿里云百炼':p;}
-function financeProduct(p){return {'sfm':'百炼模型与搜索','Doubao-Seedream':'Seedream 图片生成','ark_bd':'方舟服务 · ark_bd','ark_open_source_llm':'方舟开源模型服务'}[p]||p;}
+function financeMoney(n){return n==null?'未核定':'¥'+Number(n).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:8});}
+function financeProvider(p){return p==='volcengine'?'火山引擎':p==='aliyun-bailian'?'阿里云百炼':p==='deepseek'?'DeepSeek 官方':p;}
+function financeProduct(p){return {'sfm':'百炼模型与搜索','deepseek':'DeepSeek 官方 · 账单补录','Doubao-Seedream':'Seedream 图片生成','ark_bd':'方舟服务 · ark_bd','ark_open_source_llm':'方舟开源模型服务'}[p]||p;}
 function loadCostReport(days){
   var load=++FINANCE_LOAD;days=days||30;
   [7,14,30].forEach(function(d){var b=q('cr'+d);if(b){b.classList.toggle('on',d===days);b.setAttribute('aria-pressed',d===days?'true':'false');}});
@@ -16,7 +16,8 @@ function renderFinance(){
   var h='<div class="finance-hero"><div>近'+j.window.days+'天 · 官方平台应付</div><div class="amount">'+financeSummary(j.officialPayableCny)+'</div><div>'+esc(j.window.start)+' 至 '+esc(j.window.end)+' · 北京时间</div></div>';
   if(j.dataStatus!=='complete'||!j.coverage.complete)h+='<div class="warn" role="alert">当前数据不完整，暂不用于结算。缺少 '+j.coverage.missing.length+' 个平台日期。</div>';
   h+='<p class="finance-summary-note">当日账单会延迟补齐。充值、平台消费和用户额度分别计算。</p><div class="finance-grid">';
-  ['volcengine','aliyun-bailian'].forEach(function(p){var days=j.coverage.daysByProvider[p]||0;h+='<div class="finance-card"><div>'+financeProvider(p)+'</div><strong>'+financeSummary(j.byProvider[p]||0)+'</strong><small>日期已同步 '+days+' / '+j.window.days+' 天</small></div>';});h+='</div>';
+  Array.from(new Set(['volcengine','aliyun-bailian'].concat(Object.keys(j.byProvider)))).forEach(function(p){var days=j.coverage.daysByProvider[p]||0;h+='<div class="finance-card"><div>'+esc(financeProvider(p))+'</div><strong>'+financeSummary(j.byProvider[p]||0)+'</strong><small>'+(p==='deepseek'?'平台导出补录 · '+days+' 天':'日期已同步 '+days+' / '+j.window.days+' 天')+'</small></div>';});h+='</div>';
+  if((j.attributedBillCosts||[]).length){h+='<details class="cfgwrap" open><summary>用户平台支出补录</summary><p>管理员指定归属，按日汇总。包含平台计量的失败请求；未额外追扣客户额度。</p><div class="finance-grid">';j.attributedBillCosts.forEach(function(a){h+='<div class="finance-card"><div>'+esc(a.accountLabel)+'</div><strong>'+financeMoney(a.costCny)+'</strong><small>'+esc(a.requestCount)+' 次请求 · '+esc((a.inputTokens+a.outputTokens).toLocaleString())+' Token</small></div>';});h+='</div></details>';}
   h+='<div class="finance-grid"><div class="finance-card"><div>App 调用成本估算</div><strong>'+financeSummary(j.trackedCallEstimateCny)+'</strong><small>实际用量 × 已核验单价</small></div><div class="finance-card"><div>用户额度已扣减</div><strong>'+financeSummary(j.userQuotaDebitedCny)+'</strong><small>会员消耗的额度，与收款分开看</small></div></div>';
   h+='<details class="cfgwrap"><summary>按产品查看支出</summary><div class="finance-grid">';
   Object.keys(j.byProduct).filter(function(p){return j.byProduct[p]!==0;}).sort(function(a,b){return j.byProduct[b]-j.byProduct[a];}).forEach(function(p){h+='<div class="finance-card"><div>'+esc(financeProduct(p))+'</div><strong>'+financeSummary(j.byProduct[p])+'</strong></div>';});h+='</div></details>';
@@ -37,7 +38,7 @@ function loadFinanceAccounts(){
   }).catch(function(){delete el.dataset.loaded;toast('用户列表暂时无法读取，仍可按订单查询。');});
 }
 function renderBillRows(){var rows=FINANCE.details,start=FINANCE_PAGE*20,limit=Math.ceil(rows.length/20)||1;var h='<div class="bill-scroll"><table><thead><tr><th>日期 / 平台</th><th>产品 / 计费项</th><th>用量</th><th>应付金额</th></tr></thead><tbody>';
-  rows.slice(start,start+20).forEach(function(r){h+='<tr><td>'+esc(r.day)+'<br>'+esc(financeProvider(r.provider))+'</td><td>'+esc(r.model||r.product)+'<br><span class="mono">'+esc(r.item)+'</span></td><td>'+esc(r.usage==null?'未提供':r.usage)+' '+esc(r.unit)+'</td><td>'+financeMoney(r.amount)+'</td></tr>';});
+  rows.slice(start,start+20).forEach(function(r){h+='<tr><td>'+esc(r.day)+'<br>'+esc(financeProvider(r.provider))+'</td><td>'+esc(r.model||r.product)+'<br><span class="mono">'+esc(r.item)+'</span>'+(r.accountLabel?'<br>'+esc(r.accountLabel)+' · 账单补录':'')+'</td><td>'+esc(r.usage==null?'未提供':r.usage)+' '+esc(r.unit)+(r.granularity==='vendor_key_daily'?'<br>输入 '+esc(r.inputTokens)+' / 缓存 '+esc(r.cachedInputTokens)+' / 输出 '+esc(r.outputTokens):'')+'</td><td>'+financeMoney(r.amount)+'</td></tr>';});
   h+='</tbody></table></div><div class="bill-pages"><button onclick="financePage(-1)" '+(FINANCE_PAGE===0?'disabled':'')+'>上一页</button><span>第 '+(FINANCE_PAGE+1)+' / '+limit+' 页</span><button onclick="financePage(1)" '+(FINANCE_PAGE+1>=limit?'disabled':'')+'>下一页</button></div>';q('billRows').innerHTML=h;
 }
 function financePage(n){FINANCE_PAGE=Math.max(0,Math.min(Math.ceil(FINANCE.details.length/20)-1,FINANCE_PAGE+n));renderBillRows();}
