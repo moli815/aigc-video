@@ -25,6 +25,13 @@ const COMMERCIAL_BRIEF = [
 ].join("\n");
 
 function isCommercialTask(messages, userText) {
+  // Exhibition/background words alone must not turn a writing task into image planning.
+  if (typeof userText !== "string") return false;
+  const imageAction = /(?:生成|制作|设计|画|做|出)(?:一|两|三|几|[1-9])?(?:张|幅|组|套)?(?:海报|图片|展板|宣传图|封面)/.test(userText);
+  if (!imageAction && /口播|脚本|纯文案|短视频文案|只补充说明/.test(userText)) return false;
+  const backgroundOnly = /给你|发给你|给你的|发给你的/.test(userText) && /了解|背景|资料|展板上的内容/.test(userText);
+  if (!imageAction && backgroundOnly && messages.filter(m => m?.role === "user").slice(-5).some(m =>
+    /口播|脚本|纯文案|短视频文案/.test(typeof m.content === "string" ? m.content : (Array.isArray(m.content) ? m.content.filter(p => p?.type === "text").map(p => p.text || "").join("\n") : "")))) return false;
   if (COMMERCIAL_TASK.test(userText)) return true;
   if (/(?:天气|合同|发票|代码|法律|税务|邮件)/.test(userText)) return false;
   const followup = /^(?:[1-9一二三四五六]|第?[一二三四五六1-9]个|继续|就这个|就按|就照|那就|沿用|还是|按(?:这个|刚才|你|我们|之前|前面|上面|那个)|用这个|选这个|好|好的|可以|开始|生成|出图|再来|换个|改成|改为|更真实|再真实|丰富|再丰富|保持|只改|太简单|信息太少|不够真实|重新|把|加上)/;

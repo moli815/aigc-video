@@ -63,7 +63,8 @@ test("SEED-04 短视频脚本专家（short_video）必须存在且职责边界�
   assert.ok(e.role.includes("流量策划"), "缺少与流量策划的分工说明");
   assert.ok(e.role.includes("营销策划"), "缺少与营销策划的分工说明");
   assert.ok(e.role.includes("顶级演讲"), "缺少与演讲专家的分工说明");
-  assert.ok(e.steps.some((s) => s.includes("3 个")), "缺少「3 个差异化角度/钩子」步骤");
+  assert.ok(e.steps.some((s) => s.includes("纯口播") && s.includes("一份完整正文")), "纯口播必须直接交付正文");
+  assert.ok(e.steps.some((s) => s.includes("只有用户要求策划或多选时")), "不能再默认强制输出三个角度");
   assert.ok(e.steps.some((s) => s.includes("speech_duration")), "缺少口播时长核算步骤");
   assert.ok(e.checklist.some((s) => s.includes("播放量")), "缺少「不承诺播放量」自检项");
 });

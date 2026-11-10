@@ -40,7 +40,7 @@ const SECTION_OF = {
     "IMAGE_MAX_EDGE", "IMAGE_QUALITY", "IMAGE_MAX_PIXELS", "IMAGE_2K_PIXELS",
     "IMGPROG_STAGE1", "IMGPROG_STAGE2", "IMGPROG_STAGE3", "IMGPROG_ETA",
   ],
-  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES"],
+  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES", "CHAT_STYLE_POLICY"],
   membership_cost: [
     "MODEL_COST_RATES", "USAGE_BILLING_MODE", "USAGE_COST_MULTIPLIER",
     "CHAT_PRICE_IN", "CHAT_PRICE_OUT", "CHAT_PRICE_STANDARD_IN", "CHAT_PRICE_STANDARD_OUT",
@@ -72,6 +72,7 @@ for (const [sid, keys] of Object.entries(SECTION_OF)) {
 // ── 字段级元数据（未声明的键走按类型推导的默认规则）──
 // widget: text | number | toggle | enum | textarea | password | json
 const META = {
+  CHAT_STYLE_POLICY: {title:"候选表达策略（默认关闭）",widget:"json",risk:"high",maxLength:10000,description:"候选尚未通过事实审查，默认关闭。完成评测后可用enabled=true启用，instructions最多6000字符。不改变权限或模型路由。"},
   IMAGE_MIXED_REFERENCES_POLICY:{title:'单图 · 当前底图与历史原图混合',widget:'json',risk:'high',maxLength:6000,help:'保留当前底图并追加本账号已同步历史原图；支持enabled、audience=all或accountIds。精确Logo本地合成及当前附件组图仍走原流程。'},
   USAGE_BILLING_MODE: {title:"额度计费依据",widget:"enum",enum:["legacy","supplier_cost"],risk:"high",
     description:"supplier_cost 按实际用量×账单核验单价×倍数扣额度；未知成本挂待核账；legacy 仅回滚旧计价。"},
@@ -280,6 +281,11 @@ function validateValue(key, raw, spec, meta) {
     let parsed;
     try { parsed = JSON.parse(sv); } catch { return { ok: false, reason: `${m.title || spec.label} 不是合法 JSON` }; }
     if (typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: `${m.title || spec.label} 必须是 JSON 对象` };
+    if (key === "CHAT_STYLE_POLICY" && (!parsed || Object.keys(parsed).some(k => !["enabled", "instructions"].includes(k))
+      || (parsed.enabled != null && typeof parsed.enabled !== "boolean")
+      || (parsed.instructions != null && (typeof parsed.instructions !== "string" || parsed.instructions.length > 6000)))) {
+      return { ok: false, reason: "表达策略只接受 enabled 布尔值和 instructions 文本（最多6000字符）" };
+    }
     return { ok: true, value: sv };
   }
   // 普通字符串 / 长文本
