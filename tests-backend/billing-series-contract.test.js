@@ -18,6 +18,8 @@ const path = require("node:path");
 
 const ROOT = path.join(__dirname, "..");
 const IMAGE = fs.readFileSync(path.join(ROOT, "cloudfunctions/bf-image/index.js"), "utf8");
+const IMAGE_GATE = fs.readFileSync(path.join(ROOT, "cloudfunctions/bf-image/image-execution-gate.js"), "utf8");
+const IMAGE_BILLING = fs.readFileSync(path.join(ROOT, "cloudfunctions/bf-image/image-billing.js"), "utf8");
 const API = fs.readFileSync(path.join(ROOT, "cloudfunctions/bf-api/index.js"), "utf8");
 
 // ─────────────────────────────────────────────────────────────
@@ -27,7 +29,7 @@ const API = fs.readFileSync(path.join(ROOT, "cloudfunctions/bf-api/index.js"), "
 test("SERIES-01 子任务先 claim 再 generate 再 finish", () => {
   const start = IMAGE.indexOf("async function runSeriesChild");
   assert.ok(start > 0, "缺少 runSeriesChild");
-  const body = IMAGE.slice(start, start + 2600);
+  const body = IMAGE.slice(start, IMAGE.indexOf("// ── 10-24 P1-12", start));
   const iClaim = body.indexOf("claimIdem(subRid");
   const iGen = body.indexOf("await generate(");
   const iFinish = body.indexOf("finishIdem(subRid");
@@ -93,15 +95,16 @@ test("BILL-03 账务事件 ID 由账号 + 任务 key 派生", () => {
   assert.match(IMAGE, /"bill:" \+ String\(accountId\) \+ ":" \+ String\(jobKey\)/);
 });
 
-test("BILL-04 明细复用事件 ID（重复写入必然失败）", () => {
-  assert.match(IMAGE, /_id: eventId, accountId, kind: "image"/, "usage 明细未复用事件 ID");
-  assert.match(IMAGE, /usageOk = !!\(await readOne\(C\.usage, eventId\)\)/, "重复写入未按已应用处理");
+test("BILL-04 明细与事件在同一事务复用事件 ID", () => {
+  assert.match(IMAGE_BILLING, /tx\.collection\(COLLECTIONS\.usage\)\.doc\(eventId\)\.set/, "usage 明细未复用事件 ID");
+  assert.match(IMAGE_BILLING, /existing\?\.state === "committed"[\s\S]{0,80}replayed: true/, "已提交事件未按重放处理");
 });
 
-test("BILL-05 账户累计用 CAS 标记，失败可回滚重试", () => {
-  assert.match(IMAGE, /col\.where\(\{ _id: eventId, accountApplied: false \}\)/, "缺少条件更新（会重复累加）");
-  assert.match(IMAGE, /update\(\{ accountApplied: false \}\)/, "inc 失败后未回滚标记（钱会永久丢失）");
-  assert.match(IMAGE, /billing_cas_unsupported/, "条件更新不支持时没有降级记录");
+test("BILL-05 账户、明细与事件状态使用同一事务", () => {
+  assert.match(IMAGE_BILLING, /db\.runTransaction/, "缺少数据库事务");
+  assert.match(IMAGE_BILLING, /accountAlreadyApplied = existing\?\.accountApplied === true/, "旧事件迁移可能重复扣费");
+  assert.match(IMAGE_BILLING, /imageUsedCny: money\(Number\(account\.imageUsedCny \|\| 0\) \+ charge\)/, "账户未按事务快照计算");
+  assert.doesNotMatch(IMAGE_BILLING, /command\.inc/, "仍使用非事务 inc，无法保证事故回滚");
 });
 
 test("BILL-06 flushJobs 把 jobKey 传给账务（否则每次都是新事件）", () => {
@@ -114,9 +117,9 @@ test("BILL-06 flushJobs 把 jobKey 传给账务（否则每次都是新事件）
 // ─────────────────────────────────────────────────────────────
 
 test("QUOTA-01 额度服务不可用返回 503，不误报「已用完」", () => {
-  assert.match(IMAGE, /if \(q\.unavailable\)/, "未区分不可用");
-  assert.match(IMAGE, /error: "QUOTA_CHECK_UNAVAILABLE"/, "缺少 503 专用错误码");
-  assert.match(IMAGE, /这次没有生成图片，也不会扣费/, "缺少「未扣费」的明确说明");
+  assert.match(IMAGE_GATE, /if \(q\?\.unavailable\)/, "未区分不可用");
+  assert.match(IMAGE_GATE, /error: "QUOTA_CHECK_UNAVAILABLE"/, "缺少 503 专用错误码");
+  assert.match(IMAGE_GATE, /这次没有生成图片，也不会扣费/, "缺少「未扣费」的明确说明");
 });
 
 test("QUOTA-02 组图先估算再启动，余额不足不跑半套", () => {

@@ -469,15 +469,21 @@ function loadStaff(){
     STAFF.forEach(function(s){
       var role=s.role==='admin'?'<span class="st st-open">管理员</span>':'<span class="st st-open">员工</span>';
       var st=s.status==='active'?'<span class="st st-ok">正常</span>':'<span class="st st-bad">已禁用</span>';
-      var nm=esc(s.displayName).replace(/'/g,"\\'");
       h+='<tr><td>'+esc(s.displayName)+'</td><td class="mono">'+esc(s.username)+'</td><td>'+role+'</td><td>'+st+'</td>'
         +'<td style="color:var(--t2)">'+(s.lastLoginAt?fmtTime(s.lastLoginAt):'—')+'</td>'
         +'<td style="text-align:right">'+(s.role==='admin'?'<span style="color:var(--t3);font-size:12px">—</span>'
-        +'':'<span class="op" style="justify-content:flex-end"><button onclick="viewStaffPwd(\''+s.id+'\',\''+nm+'\')">密码</button>'
-        +'<button class="o-danger" onclick="askDisableStaff(\''+s.id+'\',\''+nm+'\')">禁用</button>'
-        +'<button class="o-danger" onclick="askDel(\'staff\',\''+s.id+'\',\''+nm+'\')">删除</button></span>')+'</td></tr>';
+        +'':'<span class="op" style="justify-content:flex-end"><button data-staff-act="pwd" data-id="'+esc(s.id)+'" data-name="'+esc(s.displayName)+'">密码</button>'
+        +'<button class="o-danger" data-staff-act="disable" data-id="'+esc(s.id)+'" data-name="'+esc(s.displayName)+'">禁用</button>'
+        +'<button class="o-danger" data-act="del" data-kind="staff" data-id="'+esc(s.id)+'" data-name="'+esc(s.displayName)+'">删除</button></span>')+'</td></tr>';
     });
     q('stfBox').innerHTML=h+'</tbody></table>';
+    q('stfBox').onclick=function(event){
+      var button=event.target.closest('button[data-staff-act]');
+      if(!button) return;
+      var id=button.getAttribute('data-id'),name=button.getAttribute('data-name');
+      if(button.getAttribute('data-staff-act')==='pwd') viewStaffPwd(id,name);
+      if(button.getAttribute('data-staff-act')==='disable') askDisableStaff(id,name);
+    };
   }).catch(function(e){ q('stfBox').innerHTML='<div class="empty">'+esc(e.message)+'</div>'; });
 }
 
@@ -932,8 +938,8 @@ function renderExpViz(){
       +'</div>'
       +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">时效性要求（需联网核实的领域）'
       +'<input class="mi" data-f="freshnessCue" value="'+esc(e.freshnessCue||'')+'" style="width:100%;margin-top:4px"></label>'
-      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">开场白（每行一条，格式：标签｜内容）'
-      +'<textarea class="exptext" data-f="starters" rows="3" style="margin-top:4px">'+esc(starterLines(e.id))+'</textarea></label>'
+      +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">开场白（标签与多行内容分别编辑）'
+      +starterEditor(e.id)+'</label>'
       +'<label style="font-size:12px;color:var(--t2);display:block;margin-top:8px">默认交付物 <select class="mi" data-f="deliverable" style="width:140px">'
       +['word','ppt','excel','pdf'].map(function(d){return '<option value="'+d+'"'+((e.deliverable||'word')===d?' selected':'')+'>'+d.toUpperCase()+'</option>';}).join('')
       +'</select></label>'
@@ -943,9 +949,37 @@ function renderExpViz(){
   });
   q('expViz').innerHTML=h||'<div class="empty">还没有专家，点「+ 新增专家」</div>';
 }
-function starterLines(id){
+function starterRowHtml(item){
+  var s=item||{label:'',content:''};
+  return '<div data-starter-row style="border:1px solid var(--line);padding:8px;margin-top:6px;border-radius:8px">'
+    +'<input class="mi" data-starter-label placeholder="标签" value="'+esc(s.label||'')+'" style="width:100%;margin-bottom:5px">'
+    +'<textarea class="exptext" data-starter-content rows="3" placeholder="开场白内容，支持多行">'+esc(s.content||'')+'</textarea>'
+    +'<button type="button" onclick="removeStarterRow(this)">删除本条</button></div>';
+}
+function starterEditor(id){
   var arr=(EXP_OBJ.starters||{})[id]||[];
-  return arr.map(function(s){ return s.label+'｜'+s.content; }).join('\n');
+  return '<div data-starter-list="'+esc(id)+'">'+arr.map(starterRowHtml).join('')
+    +'<button type="button" style="margin-top:6px" onclick="addStarterRow(this)">＋ 添加开场白</button></div>';
+}
+function addStarterRow(button){
+  var list=button.parentElement;
+  var holder=document.createElement('div');
+  holder.innerHTML=starterRowHtml({label:'',content:''});
+  list.insertBefore(holder.firstChild,button);
+}
+function removeStarterRow(button){
+  var row=button.closest('[data-starter-row]');
+  if(row) row.remove();
+}
+function collectStarters(card){
+  var rows=card.querySelectorAll('[data-starter-row]');
+  var out=[];
+  rows.forEach(function(row){
+    var label=row.querySelector('[data-starter-label]').value.trim();
+    var content=row.querySelector('[data-starter-content]').value;
+    if(label||content.trim()) out.push({label:label,content:content});
+  });
+  return out.slice(0,5);
 }
 function collectExpViz(){
   var cards=document.querySelectorAll('#expViz details.expcard');
@@ -967,11 +1001,7 @@ function collectExpViz(){
     };
     if(!e.name||!e.role||!e.steps.length) throw new Error('第 '+(idx+1)+' 位专家：名称/角色/工作流步骤不能为空');
     out.push(e);
-    var sl=val('starters');
-    if(sl){ starters[e.id]=sl.split('\n').map(function(line){
-      var p=line.split('｜'); if(p.length<2) return null;
-      return {label:p[0].trim(), content:p.slice(1).join('｜').trim()};
-    }).filter(Boolean).slice(0,5); }
+    starters[e.id]=collectStarters(card);
   });
   return { experts:out, starters:starters, ui:{expertsSectionTitle:q('expUiTitle').value.trim(), expertsSectionIcon:q('expUiIcon').value.trim()} };
 }
@@ -981,38 +1011,29 @@ function saveExpertsViz(){
     payload = EXP_JSON_MODE ? JSON.parse(q('expJson').value) : collectExpViz();
   } catch(e){ toast(e.message); return; }
   if(!payload.experts||!payload.experts.length){ toast('至少保留一位专家'); return; }
+  payload.expectedRevision=EXP_OBJ.catalogRevision||EXP_OBJ.version;
   busy(q('expSaveBtn'),true,'发布中');
   api('/admin/experts-config',{method:'POST',body:payload}).then(function(j){
     busy(q('expSaveBtn'),false);
     q('expVer').textContent='v'+j.version;
     q('expResult').innerHTML='<div class="okbox" style="margin:0">✅ 已发布 v'+j.version+'，App 下次启动自动拉取生效</div>';
     EXPLOADED=false; EXP_OBJ=payload;
+    EXP_OBJ.version=j.version; EXP_OBJ.catalogRevision=j.catalogRevision||j.version;
   }).catch(function(e){ busy(q('expSaveBtn'),false); toast(e.message); });
 }
 function moveExpert(i,dir){
-  var arr=EXP_OBJ.experts, j=i+dir;
+  var cur;
+  try{ cur=collectExpViz(); }catch(e){ toast(e.message); return; }
+  var arr=cur.experts, j=i+dir;
   if(j<0||j>=arr.length) return;
   var tmp=arr[i]; arr[i]=arr[j]; arr[j]=tmp;
-  try{ var cur=collectExpViz(); }catch(e){ toast(e.message); return; }
-  EXP_OBJ.experts=arr; renderExpViz();
+  EXP_OBJ=Object.assign({},EXP_OBJ,cur); renderExpViz();
 }
-function delExpert(i){
-  var nm=EXP_OBJ.experts[i].name;
-  if(!confirm('确定删除「'+nm+'」？保存后客户端将不再显示该专家。')) return;
-  EXP_OBJ.experts.splice(i,1); renderExpViz();
+function delExpert(){
+  toast('当前已发布 App 不支持删除专家 ID；请调整展示或职责，避免旧会话静默变成通用助手');
 }
 function addExpert(){
-  try{
-    var cur=collectExpViz(); EXP_OBJ.experts=cur.experts; EXP_OBJ.starters=cur.starters;
-  }catch(e){ toast(e.message); return; }
-  var num=EXP_OBJ.experts.length+1;
-  EXP_OBJ.experts.push({
-    id:'custom_'+Date.now().toString(36), emoji:'🧠', name:'新专家'+num, subtitle:'请填写定位',
-    symbol:'bubble.left.and.bubble.right.fill', role:'你是……（填写这位专家的人设与专长）',
-    framework:'（方法论框架）', steps:['第一步','第二步'], deliverable:'word', tools:['search','image','word'],
-    checklist:['（自检项）'], freshnessCue:''
-  });
-  renderExpViz();
+  toast('当前已发布 App 不支持新增专家 ID；需待通用能力协议升级后统一开放');
 }
 function resetExperts(){
   if(!confirm('确定恢复为内置默认专家目录？当前线上配置将被覆盖。')) return;

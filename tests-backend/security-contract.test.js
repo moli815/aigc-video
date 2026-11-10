@@ -18,6 +18,8 @@ const ADMIN = read("web/admin.html");
 const STAFF = read("web/staff.html");
 const API = read("cloudfunctions/bf-api/index.js");
 const IMAGE = read("cloudfunctions/bf-image/index.js");
+const IMAGE_BILLING = read("cloudfunctions/bf-image/image-billing.js");
+const APPROVAL = read("cloudfunctions/bf-api/approval-fulfillment.js");
 const JOB_CLAIM = read("cloudfunctions/shared/image-job-claim.js");
 const GUARDS = read("cloudfunctions/bf-image/media-guards.js");
 const TIERS_MOD = read("cloudfunctions/bf-api/tiers.js");
@@ -137,14 +139,12 @@ test("BILL-01 缺 requestId 时在入口生成一次并全程复用", () => {
   assert.doesNotMatch(seg.slice(0, 400), /if \(!rid\) rid = "srv-/, "claimIdem 内部仍在私造 requestId");
 });
 
-test("BILL-02 记账按唯一事件分阶段提交，flushJobs 只在成功时标 committed", () => {
-  // 10-24 P0-4：账户累计 + 明细两次独立写入不可能原子，
-  // 改为「唯一账务事件 + CAS 标记 + 明细复用同一 _id」的实现。
+test("BILL-02 记账以唯一事件事务提交，flushJobs 只在成功时标 committed", () => {
   assert.match(IMAGE, /const BILLING_COLL = "bf_billing_events"/, "缺少账务事件账本");
   assert.match(IMAGE, /function billingEventIdOf\(accountId, jobKey\)/, "缺少事件 ID 派生");
-  assert.match(IMAGE, /if \(accountOk && usageOk\)[\s\S]{0,200}return true/, "未在双阶段都成功时返回成功");
-  assert.match(IMAGE, /state: "committed", usageApplied: true/, "事件未落 committed 状态");
-  assert.match(IMAGE, /_id: eventId, accountId, kind: "image"/, "明细未复用事件 ID（会重复流水）");
+  assert.match(IMAGE_BILLING, /db\.runTransaction/, "账户、明细与事件缺少事务边界");
+  assert.match(IMAGE_BILLING, /state: "committed", accountApplied: true, usageApplied: true/, "事件未落完整提交状态");
+  assert.match(IMAGE_BILLING, /tx\.collection\(COLLECTIONS\.usage\)\.doc\(eventId\)/, "明细未复用事件 ID");
   assert.match(IMAGE, /const billed = cost <= 0 \? true : await addImageCost/, "flushJobs 未检查记账结果");
   assert.match(IMAGE, /if \(!billed\)[\s\S]{0,260}costTries/, "记账失败未保留重试标记");
 });
@@ -153,15 +153,12 @@ test("BILL-02 记账按唯一事件分阶段提交，flushJobs 只在成功时�
 // BIZ-01：续费审批不得重复写账号
 // ─────────────────────────────────────────────────────────────
 
-test("BIZ-01 续费只执行一次 accounts.update", () => {
-  const start = API.indexOf("const renewPatch = {");
-  const seg = API.slice(start, start + 4000);
-  // 10-25 C2.2-FIX：续费写入从"doc().update(renewPatch)"改为带条件的 where().update()，
-  // 目的不只是"只写一次"，而是"同一次写里同时校验幂等键与到期日版本"。
-  const unconditional = seg.match(/db\.collection\(C\.accounts\)\.doc\(reqDoc\.accountId\)\.update\(renewPatch\)/g) || [];
-  assert.strictEqual(unconditional.length, 0, "仍存在无条件的整包写入（会覆盖并发续费）");
-  const conditional = seg.match(/where\(\{[\s\S]{0,160}renewedRequestIds: _\.nin/g) || [];
-  assert.ok(conditional.length >= 1, "续费未使用条件更新（缺幂等键）");
+test("BIZ-01 续费只在事务内按最新账号快照更新一次", () => {
+  assert.match(APPROVAL, /db\.runTransaction/);
+  assert.match(APPROVAL, /const account = one\(await accountRef\.get\(\)\)/);
+  assert.match(APPROVAL, /if \(!applied\)/);
+  assert.match(APPROVAL, /await accountRef\.update\(patch\)/);
+  assert.doesNotMatch(APPROVAL, /doc\(reqDoc\.accountId\)\.update\(renewPatch\)/);
 });
 
 // ─────────────────────────────────────────────────────────────

@@ -252,7 +252,7 @@
 <div class="modal glass" id="mReady" onclick="event.stopPropagation()">
   <div class="mh"><span class="ic">&#127881;</span>你的会员账号已经准备好了</div>
   <div class="cred" id="readyCred"></div>
-  <div class="tip">这是初始密码。客户可在 App 内自行修改，修改后此处不会同步更新。</div>
+  <div class="tip">此处显示当前发放密码；客户或管理员改密后会同步更新。仅与这条通知关联的发放记录可复制。</div>
   <div class="mf"><button class="b-ghost" onclick="closeM()">关闭</button><button class="b-main" id="readyCopy" onclick="copyReady()">复制账号信息</button></div>
 </div>
 
@@ -301,7 +301,7 @@ var API = (function () {
 
 /* ══════════════ 基础 ══════════════ */
 var TOKEN = null, ME = null, pending = { type: 'create', accountId: null, who: '' };
-var ACCOUNTS = [], DELIVERIES = [], NOTE_TARGET = null, READY_DLY = null, POLL = null;
+var ACCOUNTS = [], DELIVERIES = [], NOTIFS = [], NOTE_TARGET = null, READY_DLY = null, POLL = null;
 
 function q(id) { return document.getElementById(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -474,7 +474,8 @@ function loadRequests() {
 function loadNotifs() {
   if (!TOKEN) return;
   api('/admin/notifications').then(function (j) {
-    var unread = (j.list || []).filter(function (n) { return !n.read; });
+    NOTIFS = j.list || [];
+    var unread = NOTIFS.filter(function (n) { return !n.read; });
     var box = q('notifBox');
     if (!unread.length) { box.classList.add('hide'); box.innerHTML = ''; return; }
     var n = unread[0];
@@ -482,7 +483,7 @@ function loadNotifs() {
     box.innerHTML = '<div class="notif glass" onclick="openNotif(\'' + n._id + '\')">'
       + '<span class="ic">&#127881;</span>'
       + '<span class="tx">🎉 ' + (unread.length > 1 ? unread.length + ' 条新通知，最新：' : '') + esc(n.title || '账号已开通')
-      + '<small>' + esc(n.body || '') + ' · 点击领取账号密码</small></span>'
+      + '<small>' + esc(n.body || '') + (n.type === 'account_ready' ? ' · 点击查看对应发放记录' : ' · 点击查看处理结果') + '</small></span>'
       + '<span class="badge">' + unread.length + '</span></div>';
     // P0-23 醒目交付：账号开通通知自动弹出（每条只自动弹一次，靠 sessionStorage 防重）
     try {
@@ -510,10 +511,15 @@ function openRenewPick() {
   var h2 = '';
   ACCOUNTS.forEach(function (a) {
     var dl = a.daysLeft == null ? '' : (a.daysLeft >= 0 ? '还剩 ' + a.daysLeft + ' 天' : '已过期 ' + (-a.daysLeft) + ' 天');
-    h2 += '<button onclick="renewFor(\'' + a.id + '\',\'' + esc(a.displayName).replace(/'/g, "\\'") + '\',\'' + (a.tier || 'plus') + '\')">'
+    h2 += '<button data-renew-id="' + esc(a.id) + '" data-renew-name="' + esc(a.displayName) + '" data-renew-tier="' + esc(a.tier || 'plus') + '">'
       + esc(a.displayName) + '<small>' + dl + '</small></button>';
   });
   box.innerHTML = h2;
+  box.onclick = function (event) {
+    var button = event.target.closest('button[data-renew-id]');
+    if (!button) return;
+    renewFor(button.getAttribute('data-renew-id'), button.getAttribute('data-renew-name'), button.getAttribute('data-renew-tier'));
+  };
   openM('mRenewPick');
 }
 // 档位与会收款码由服务端 /tiers 下发（不写死价格，避免各端不一致）
@@ -611,10 +617,15 @@ function submitPay() {
   api('/admin/requests', { method: 'POST', body: body })
     .then(function (j) {
       busy(q('payBtn'), false);
-      q('doneTitle').textContent = pending.type === 'renew' ? '已提交续费申请' : '已提交开通申请';
-      q('doneBody').innerHTML = pending.type === 'renew'
-        ? '已确认收款，续费<b>已立即生效</b>，该客户到期时间已顺延。<br>本操作已记录审计，管理员可事后抽检。'
-        : '已确认收款，账号<b>已立即开通</b>，可在会员列表查看登录名与密码。<br>本操作已记录审计，管理员可事后抽检。';
+      var immediate = j.instant === true;
+      q('doneTitle').textContent = immediate
+        ? (pending.type === 'renew' ? '续费已生效' : '账号已开通')
+        : (pending.type === 'renew' ? '续费申请待审核' : '开通申请待审核');
+      q('doneBody').innerHTML = immediate
+        ? (pending.type === 'renew'
+          ? '续费<b>已生效</b>，到期时间以会员列表为准。'
+          : '账号<b>已开通</b>，可在会员列表查看对应登录名与密码。')
+        : '申请已提交，<b>当前尚未生效</b>。请等待管理员审核，处理结果以审核列表和通知为准。';
       openM('mDone');
       refreshAll();
     })
@@ -624,22 +635,40 @@ function submitPay() {
 /* ══════════════ 通知 / 备注 / 详情 ══════════════ */
 function openNotif(id) {
   READY_DLY = null;
-  var h = '<div class="line"><b>状态</b><span>正在读取…</span></div>';
-  q('readyCred').innerHTML = h;
+  q('readyCred').innerHTML = '<div class="line"><b>状态</b><span>正在读取…</span></div>';
   openM('mReady');
+  var notice = NOTIFS.filter(function (n) { return n._id === id; })[0];
   api('/admin/notifications/' + id + '/read', { method: 'POST' }).catch(function () {});
+  if (!notice) {
+    q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>通知已更新，请刷新后重试</span></div>';
+    return;
+  }
+  if (notice.type !== 'account_ready') {
+    q('readyCred').innerHTML = '<div class="line"><b>处理结果</b><span>' + esc(notice.title || '通知') + '</span></div>'
+      + '<div class="line"><b>说明</b><span>' + esc(notice.body || '暂无详细说明') + '</span></div>';
+    loadNotifs();
+    return;
+  }
+  if (!notice.refDeliveryId) {
+    q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>这条通知没有关联发放记录，请在发放列表按客户核对；此处不展示密码。</span></div>';
+    return;
+  }
   api('/admin/deliveries').then(function (j) {
-    var list = j.list || [];
-    // 取最新一条尚未展示过的记录（服务端按充值时间倒序）
-    var d = list[0];
-    if (!d) { q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>未找到对应记录</span></div>'; return; }
+    DELIVERIES = j.list || DELIVERIES;
+    var d = DELIVERIES.filter(function (item) { return item.id === notice.refDeliveryId; })[0];
+    if (!d) {
+      q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>未找到这条通知对应的发放记录，不展示其他客户凭据。</span></div>';
+      return;
+    }
     READY_DLY = d;
     q('readyCred').innerHTML =
       '<div class="line"><b>登录账号</b><span>' + esc(d.username) + '</span></div>' +
       '<div class="line"><b>登录密码</b><span>' + esc(d.password || '—') + '</span></div>' +
       '<div class="line"><b>发放时间</b><span>' + fmtTime(d.issuedAt) + '</span></div>';
     loadNotifs(); refreshAll();
-  }).catch(function () {});
+  }).catch(function () {
+    q('readyCred').innerHTML = '<div class="line"><b>提示</b><span>发放记录读取失败，请稍后重试</span></div>';
+  });
 }
 function copyReady() {
   if (!READY_DLY) { toast('暂无可复制内容'); return; }

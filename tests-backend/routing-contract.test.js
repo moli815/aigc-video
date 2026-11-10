@@ -36,7 +36,7 @@ test("ROUTE-03 未知模型走保守默认（不给 fast / 组图 / 图层）", 
 });
 
 test("ROUTE-04 fast 参数只在能力允许时下发", () => {
-  assert.match(IMAGE, /if \(caps\.fastPromptMode\)/,
+  assert.match(IMAGE, /if \(caps\.fastPromptMode && !image\)/,
     "optimize_prompt_options 未受能力表约束");
   assert.doesNotMatch(IMAGE, /const mode = String\(RT\.IMAGE_FAST_MODE\) === "0" \? "standard" : "fast";/,
     "仍是旧的全局 fast 开关");

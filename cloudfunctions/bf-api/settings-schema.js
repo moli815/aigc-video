@@ -40,7 +40,7 @@ const SECTION_OF = {
     "IMAGE_MAX_EDGE", "IMAGE_QUALITY", "IMAGE_MAX_PIXELS", "IMAGE_2K_PIXELS",
     "IMGPROG_STAGE1", "IMGPROG_STAGE2", "IMGPROG_STAGE3", "IMGPROG_ETA",
   ],
-  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES", "CHAT_STYLE_POLICY"],
+  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES", "CHAT_STYLE_POLICY", "CHAT_GROUNDED_REVIEW"],
   membership_cost: [
     "MODEL_COST_RATES", "USAGE_BILLING_MODE", "USAGE_COST_MULTIPLIER",
     "CHAT_PRICE_IN", "CHAT_PRICE_OUT", "CHAT_PRICE_STANDARD_IN", "CHAT_PRICE_STANDARD_OUT",
@@ -73,6 +73,7 @@ for (const [sid, keys] of Object.entries(SECTION_OF)) {
 // widget: text | number | toggle | enum | textarea | password | json
 const META = {
   CHAT_STYLE_POLICY: {title:"候选表达策略（默认关闭）",widget:"json",risk:"high",maxLength:10000,description:"候选尚未通过事实审查，默认关闭。完成评测后可用enabled=true启用，instructions最多6000字符。不改变权限或模型路由。"},
+  CHAT_GROUNDED_REVIEW: {title:"商业成稿 · 独立事实审查",widget:"json",risk:"high",maxLength:10000,description:"默认关闭。仅对商业成稿增加一次独立审查/修订，普通问答、JSON和明确工具任务不拦截。支持enabled、audience=all或accountIds，以及有界超时和token预算；产生额外对话调用与额度成本。"},
   IMAGE_MIXED_REFERENCES_POLICY:{title:'单图 · 当前底图与历史原图混合',widget:'json',risk:'high',maxLength:6000,help:'保留当前底图并追加本账号已同步历史原图；支持enabled、audience=all或accountIds。精确Logo本地合成及当前附件组图仍走原流程。'},
   USAGE_BILLING_MODE: {title:"额度计费依据",widget:"enum",enum:["legacy","supplier_cost"],risk:"high",
     description:"supplier_cost 按实际用量×账单核验单价×倍数扣额度；未知成本挂待核账；legacy 仅回滚旧计价。"},
@@ -285,6 +286,16 @@ function validateValue(key, raw, spec, meta) {
       || (parsed.enabled != null && typeof parsed.enabled !== "boolean")
       || (parsed.instructions != null && (typeof parsed.instructions !== "string" || parsed.instructions.length > 6000)))) {
       return { ok: false, reason: "表达策略只接受 enabled 布尔值和 instructions 文本（最多6000字符）" };
+    }
+    if (key === "CHAT_GROUNDED_REVIEW") {
+      const allowed = ["enabled", "audience", "accountIds", "generationTimeoutMs", "reviewTimeoutMs", "maxGenerationTokens", "maxReviewTokens", "maxSourceChars"];
+      const numeric = ["generationTimeoutMs", "reviewTimeoutMs", "maxGenerationTokens", "maxReviewTokens", "maxSourceChars"];
+      if (Object.keys(parsed).some(k => !allowed.includes(k)) || parsed.enabled != null && typeof parsed.enabled !== "boolean" ||
+          parsed.audience != null && !["all", "accounts"].includes(parsed.audience) ||
+          parsed.accountIds != null && (!Array.isArray(parsed.accountIds) || parsed.accountIds.length > 100 || parsed.accountIds.some(id => typeof id !== "string" || id.length > 128)) ||
+          numeric.some(k => parsed[k] != null && (!Number.isFinite(parsed[k]) || parsed[k] <= 0))) {
+        return { ok: false, reason: "事实审查配置包含无效字段、账号范围或预算" };
+      }
     }
     return { ok: true, value: sv };
   }

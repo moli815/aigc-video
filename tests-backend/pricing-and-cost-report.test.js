@@ -18,6 +18,7 @@ const { aggregateCostRows } = require("../cloudfunctions/bf-api/cost-report");
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g,"\n");
 const imageFunction = read("cloudfunctions/bf-image/index.js");
+const imageBilling = read("cloudfunctions/bf-image/image-billing.js");
 const apiFunction = read("cloudfunctions/bf-api/index.js");
 
 /** 直接执行源码里的定价函数，避免测试里另抄一套算术 */
@@ -73,11 +74,10 @@ test("price never falls below cost", () => {
 });
 
 test("ledger separates cost from charge", () => {
-  // 账户扣款用售价
-  assert.match(imageFunction, /imageUsedCny: getDb\(\)\.command\.inc\(charge\)/, "账户仍按成本扣款");
-  // 流水写成本 + 售价 + 毛利
-  assert.match(imageFunction, /costCny: upstream, priceCny: charge/, "流水没有区分成本与售价");
-  assert.match(imageFunction, /marginCny: Number\(\(charge - upstream\)\.toFixed\(4\)\)/);
+  // 事务内按售价更新账户，流水分别记录成本、售价与毛利。
+  assert.match(imageBilling, /imageUsedCny: money\(Number\(account\.imageUsedCny \|\| 0\) \+ charge\)/);
+  assert.match(imageBilling, /costCny: upstream, priceCny: charge/);
+  assert.match(imageBilling, /marginCny: Number\(\(charge - upstream\)\.toFixed\(4\)\)/);
   // 任务单要存下上游成本，否则 flush 时拿不到
   assert.match(imageFunction, /patch\.upstreamCostCny = Number\(ex\.upstreamCostCny\) \|\| 0/);
 });

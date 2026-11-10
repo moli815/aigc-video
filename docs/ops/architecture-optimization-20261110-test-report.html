@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BossAI 架构优化测试报告 · 2026-11-10</title>
+<style>
+:root{--bg:#f6f8fb;--card:#fff;--ink:#172033;--sub:#5d6b82;--line:#dde4ee;--blue:#2563eb;--green:#087f5b;--amber:#b45309;--red:#b42318}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 -apple-system,Segoe UI,"Microsoft YaHei",sans-serif}.wrap{max-width:1080px;margin:auto;padding:36px 22px 64px}h1{font-size:30px;margin:0 0 6px}h2{font-size:20px;margin:30px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}.meta{color:var(--sub);font-size:13px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}.kpi,.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 1px 2px #0b1f4410}.kpi b{display:block;font-size:24px;color:var(--blue)}.kpi span{color:var(--sub);font-size:12px}.ok{color:var(--green);font-weight:700}.warn{color:var(--amber);font-weight:700}.bad{color:var(--red);font-weight:700}table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:10px 0 18px}th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}th{background:#eef3fb;color:#263a58}tr:last-child td{border-bottom:0}code{background:#eef2f8;padding:2px 5px;border-radius:4px;font-size:13px}.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#e8f3ff;color:#1c4f9c;font-size:12px;margin-right:4px}.note{border-left:4px solid var(--amber);background:#fff8e8;padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0}.foot{color:var(--sub);font-size:12px;margin-top:28px}ul{padding-left:20px}li{margin:4px 0}@media(max-width:760px){.grid{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body><div class="wrap">
+<h1>BossAI 架构优化测试报告</h1>
+<div class="meta">北京时间 2026-11-10 21:25 · Windows · Node 20 本地测试 · 候选代码基线 <code>e73d5e2</code> · <strong>未部署 / 未出包 / 未调用付费模型</strong></div>
+
+<div class="grid">
+<div class="kpi"><b>607</b><span>后端用例总数</span></div>
+<div class="kpi"><b class="ok">607 / 0</b><span>通过 / 失败</span></div>
+<div class="kpi"><b>3.71s</b><span>全套回归耗时</span></div>
+<div class="kpi"><b>0</b><span>付费模型 / 生图调用</span></div>
+</div>
+
+<div class="note"><strong>结论：</strong>本轮完成服务端、管理端、专家与 Seedream 接入的离线候选改造，全套后端回归通过；但 <strong>静态/纯函数/源码契约测试通过不等于生产可用</strong>。真实 CloudBase 并发、真实 HTTP/SSE、浏览器端到端、固定素材视觉回归、Xcode/真机、生产部署均未执行。聊天事实审查仍默认关闭。</div>
+
+<h2>① 测试用例清单</h2>
+<table><thead><tr><th>编号 / 类型</th><th>覆盖场景</th><th>结果</th></tr></thead><tbody>
+<tr><td>新建 6 组 · 纯函数/事务模拟</td><td>共享打包、图片执行门禁/账务、审批履约、专家目录、商业成稿审查、Seedream 官方契约</td><td class="ok">26 项通过</td></tr>
+<tr><td>迁移 7 组 · 源码契约</td><td>旧授权、账务、审批、安全、XSS、定价、路由与专家种子的断言改为新架构，不放宽行为门禁</td><td class="ok">通过</td></tr>
+<tr><td>全量回归 · 混合</td><td><code>node --test tests-backend/*.test.js</code>；覆盖对话、图片、同步、删除、成本、会员、管理端、员工端、配置、错误</td><td class="ok">607 / 607</td></tr>
+<tr><td>语法与构建</td><td><code>node --check</code> 对 bf-api/bf-image/commercial-chat-review；shared 打包与 <code>--check</code>；<code>git diff --check</code></td><td class="ok">通过</td></tr>
+<tr><td>故障注入</td><td>并发同事件补账、旧事件迁移、价格冲突、通知写失败回滚、续费重放、凭据不一致修复、SSE 断连</td><td class="ok">通过（模拟数据库层）</td></tr>
+</tbody></table>
+
+<h2>② 测试成果物</h2>
+<ul>
+<li>架构文档：<code>docs/ops/architecture-optimization-20261110.md</code>（问题台账 + 官方核对 + 实施结果 + 未解决项）。</li>
+<li>变更记录：<code>docs/CHANGELOG.md</code>、<code>docs/RELEASE-BACKLOG.md</code>（B-09～B-16 待出包、C-01～C-09 服务端候选）。</li>
+<li>新模块：<code>image-execution-gate.js</code>、<code>image-billing.js</code>、<code>approval-fulfillment.js</code>、<code>expert-catalog.js</code>、<code>commercial-chat-review.js</code>。</li>
+<li>测试：<code>tests-backend/*</code> 新增 8 个测试文件，迁移 7 个旧契约；完整输出 <code>outputs/backend-full-20261110.tap</code>。</li>
+<li>共享构建：<code>scripts/bundle-function-shared.js</code> 产出 5 个函数 × 22 个 canonical/shared 文件及 manifest，连续校验一致。</li>
+</ul>
+
+<h2>③ 测试指标与命令</h2>
+<table><thead><tr><th>命令</th><th>退出码</th><th>指标</th></tr></thead><tbody>
+<tr><td><code>node --test --test-reporter=spec tests-backend/*.test.js</code></td><td>0</td><td>607 pass / 0 fail / 3.71s</td></tr>
+<tr><td><code>node --check</code> × 3 个核心 JS</td><td>0</td><td>语法错误 0</td></tr>
+<tr><td><code>node scripts/bundle-function-shared.js &amp;&amp; ... --check</code></td><td>0</td><td>5 函数 / 22 shared 文件 / missing, extra, drifted 均 0</td></tr>
+<tr><td><code>git diff --check</code></td><td>0</td><td>补丁格式错误 0；仅有 LF→CRLF 提示</td></tr>
+<tr><td>付费模型 / 生图 / iOS CI</td><td>—</td><td>调用 0；IPA dispatch 0；客户额度变化 0</td></tr>
+</tbody></table>
+<p><span class="tag">纯函数/模拟事务</span>可证明分支与状态机；<span class="tag">源码契约</span>可防回退；<span class="tag">真实 CloudBase 集成</span><strong class="bad">0 项，本轮未执行</strong>。607 项通过不等于业务一致性已验证。</p>
+
+<h2>④ 与 ChatGPT 6 对标</h2>
+<table><thead><tr><th>维度</th><th>本轮前</th><th>本轮候选</th><th>ChatGPT 6 目标</th><th>本轮能否声称对齐</th></tr></thead><tbody>
+<tr><td>交付格式</td><td>专家强制选题/分镜/固定章节</td><td>16 个云端专家改为按任务交付；长短由本轮决定</td><td>听懂纯文案/补资料/局部改，不机械展开</td><td class="warn">仅离线契约；无真实 A/B，不声称</td></tr>
+<tr><td>事实边界</td><td>一次生成，常补写展会现场与客户原话</td><td>独立事实审查候选，用户原文与初稿分离；默认关闭</td><td>稳定区分已知事实、合理解读和未核实内容</td><td class="bad">不能，未经真实模型事实门禁</td></tr>
+<tr><td>长上下文/纠错</td><td>旧分析框架会跨轮升级为事实</td><td>服务端交付仲裁 + 16 专家模板收敛；grounded review 选择器支持短纠错继承</td><td>纠错后不复活旧稿，只改指定部分</td><td class="warn">仅离线覆盖；未真人长会话验收</td></tr>
+<tr><td>工具一致性</td><td>prompt/schema/预检索/执行多套决策</td><td>服务端已统一付费门禁与部分审批；客户端 ToolManifest 统一仍待出包</td><td>能力声明、可见性与执行完全一致</td><td class="bad">不能，客户端尚未改造</td></tr>
+<tr><td>商业作图</td><td>模板化构图、参考图可能被上游改写</td><td>关闭参考图提示词优化、修原生组图字段、核对官方价与能力</td><td>成品级构图/排字/主体一致，少模板感</td><td class="bad">不能；未做固定素材视觉回归</td></tr>
+</tbody></table>
+<p>用户要求节省积分，本轮<strong>没有执行新一轮真实模型 A/B 或付费生图</strong>。对标只引用既有真实评测与源码事实，不把离线测试写成“达到 ChatGPT 6 品质”。</p>
+
+<h2>⑤ 复杂场景（贴近真实用户使用）</h2>
+<table><thead><tr><th>场景</th><th>输入 / 故障</th><th>期望</th><th>本轮结果</th></tr></thead><tbody>
+<tr><td>纯口播 + 补展板资料 + 批评重写</td><td>用户只要正文，后续补公司资料并纠正格式</td><td>不输出选题/分镜、不编现场对话，延续原任务</td><td class="ok">选择器和证据边界用例通过；真实模型未复验</td></tr>
+<tr><td>局部改句 / JSON / 明确工具 / 安全问答</td><td>同一 App 常挂 tools，但本轮任务各不相同</td><td>局部范围不扩散；JSON 不被审查改写；工具仍可执行；安全边界保留</td><td class="ok">选择器旁路用例通过</td></tr>
+<tr><td>两个管理员或员工并发</td><td>同申请重复审批、同事件补账、同目录保存、同通知读取</td><td>不重复顺延、不重复扣费、不覆盖较新目录、不串客户密码</td><td class="ok">事务模拟与 Web 函数测试通过</td></tr>
+<tr><td>支付/额度边界</td><td>会员到期、停用、改密、顶号、额度不足、能力开关关闭、限额、预留失败</td><td>模型调用前拒绝，错误码与旧 App 兼容，不伪报成功</td><td class="ok">门禁纯函数与路由覆盖通过；真实 HTTP 未跑</td></tr>
+<tr><td>组图中断/取消/重试</td><td>404、401、429、5xx、响应丢失、保存失败、断连</td><td>不乱回退、不换幂等键、不重复付费、不谎报已保存</td><td class="warn">服务端候选覆盖；客户端修复未出包</td></tr>
+<tr><td>多账号切换 / 长会话</td><td>A→B→A、旧全局身份、目录缓存、请求断连</td><td>不串身份、旧模板不复活、断连不继续第二次付费调用</td><td class="warn">服务端 SSE 断连通过；账号隔离待出包</td></tr>
+</tbody></table>
+
+<h2>⑥ 作图方面专项</h2>
+<table><thead><tr><th>核对项</th><th>火山官方当前结论</th><th>本轮实现 / 结论</th></tr></thead><tbody>
+<tr><td>Pro/Flash 能力与价格</td><td>Pro ≤261万 ¥0.30 / &gt;261万 ¥0.60；Flash ¥0.12；Pro/Flash 不支持原生组图和流式</td><td>成本公式已正确，修正过期 236 万注释；不加 stream 提速</td></tr>
+<tr><td>参考图提示词优化</td><td>standard/fast 是上游提示词优化能力，不保证保留编辑约束</td><td>有参考图时不发 <code>optimize_prompt_options</code>，恢复 S-08 原则；无参考图按能力配置</td></tr>
+<tr><td>原生组图参数</td><td>张数在 <code>sequential_image_generation_options.max_images</code></td><td>修掉顶层 <code>max_images</code>；4.0/4.5 能力表修正；主云端编排未切换</td></tr>
+<tr><td>模型升级</td><td>官方价格页 2026-11-05 未列 5.5 可生产 ID/价格</td><td>不提前接 5.5、不切 Lite、不改主模型路由</td></tr>
+<tr><td>视觉质量</td><td>参数合法不等于主体、边缘、文字、构图与美感正确</td><td><strong class="bad">未做固定素材视觉回归</strong>；人物、海报、多文字、名片、多比例、Logo 本轮未重新出图，不能声称变好</td></tr>
+<tr><td>成本与售价</td><td>多输入图/图层拆分/像素档位影响实际成本</td><td>售价仍为成本×2；事务账务分别记 cost/price/margin；未改价</td></tr>
+</tbody></table>
+
+<h2>⑦ 未执行 / 不得视为通过</h2>
+<ul>
+<li>生产部署、Active/InstallDependency、上传/下载 ZIP 逐文件 SHA-256、真实 HTTP 200/401/403/429、SSE JSON 帧与 <code>[DONE]</code>。</li>
+<li>真实 CloudBase 事务冲突、并发 flush、预留写入失败、bf-jobs 定时补发、数据库恢复重放。</li>
+<li>浏览器真实 DOM 交互、员工 A/B 连续通知、XSS 载荷真实执行环境。</li>
+<li><code>CHAT_GROUNDED_REVIEW</code> 真实模型 A/B 和人工逐条事实审查；目前保持 <code>enabled:false</code>。</li>
+<li>付费 Seedream 固定素材视觉回归、Seedream 5.5/Lite/1.5K 质量成本 A/B；本轮没有调用生图。</li>
+<li>Swift 单测、Xcode/CI、真机、旧包兼容回放、B-01～B-16 客户端修复；没有构建 IPA。</li>
+<li><code>npm audit</code>、Node 18 运行时契约、O4 后续治理、完整部署声明与 CI/IPA 解耦。</li>
+</ul>
+
+<div class="foot">官方来源：火山方舟图片生成 API、模型价格（页面更新 2026-11-05）、BytePlus Seedream 5.0 overview；成熟实现仅借鉴 GitHub MCP/ComfyUI 的资产落盘与能力矩阵组织，不引入生产运行时。证据路径：<code>outputs/backend-full-20261110.tap</code>。</div>
+</div></body></html>

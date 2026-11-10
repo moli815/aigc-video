@@ -35,6 +35,7 @@ const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
 const { providerPromptOptions } = require("./shared/image-policy");
 const { cleanImageRequest } = require("./shared/image-delivery");
+const { authorizeImageExecution } = require("./image-execution-gate");
 let __commercialComposition;
 function commercialCompositionOf(){
   if(!__commercialComposition){getDb();__commercialComposition=require("./commercial-composition-runtime").createCommercialComposition({app:__APP,
@@ -85,7 +86,7 @@ const RT = {
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
   // ── 10-29 定价改为"成本 × 倍数"：售价不再手填，避免改成本忘了改售价 ──
   // 上游官方成本（火山方舟 2026-10 核实）：
-  //   Pro   ≤236 万像素 0.30 / >236 万像素 0.60 / 图层拆分 0.15 / 0.30
+  //   Pro   ≤261 万像素 0.30 / >261 万像素 0.60 / 图层拆分 0.15 / 0.30
   //   Flash 0.12（不分尺寸）· Lite 0.22 · 4.5 0.25 · 4.0 0.20
   //   多图输入：Pro 首张免费，第 2 张起 0.02/张；Flash/Lite 输入免费
   IMAGE_COST_PRO_SMALL: process.env.IMAGE_COST_PRO_SMALL || "0.3",
@@ -103,6 +104,7 @@ const RT = {
   IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "",    // 弃用
   IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "",          // 弃用
   RATE_IMAGE_PER_HOUR: process.env.RATE_IMAGE_PER_HOUR || "120",
+  CAP_IMAGE_ENABLED: process.env.CAP_IMAGE_ENABLED || "1",
   IMAGE_API_KEY: process.env.IMAGE_API_KEY || "",
 };
 // 注意：IMAGE_API_KEY 是主链路密钥，只认环境变量，**不参与** DB 覆盖——
@@ -112,7 +114,7 @@ const RT_KEYS = [
   "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_MIXED_REFERENCES_POLICY",
   "IMAGE_COST_PRO_SMALL", "IMAGE_COST_PRO_LARGE", "IMAGE_COST_PRO_LAYER_SMALL", "IMAGE_COST_PRO_LAYER_LARGE",
   "IMAGE_COST_FLASH", "IMAGE_COST_LITE", "IMAGE_COST_45", "IMAGE_COST_40", "IMAGE_COST_EXTRA_INPUT",
-  "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR",
+  "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR", "CAP_IMAGE_ENABLED",
 ];
 /**
  * 10-24 模型能力表。**未知 model ID 一律走保守默认**（不传 fast、不支持组图/图层），
@@ -129,7 +131,8 @@ const MODEL_CAPS = {
   "doubao-seedream-5-0-flash-260915": { fastPromptMode: false, series: false, edit: true,  layers: true  },
   "doubao-seedream-5-0-260128":       { fastPromptMode: false, series: true,  edit: false, layers: false },
   "doubao-seedream-5-0-lite-260128":  { fastPromptMode: false, series: true,  edit: false, layers: false },
-  "doubao-seedream-4-0-250828":       { fastPromptMode: true,  series: false, edit: true,  layers: false },
+  "doubao-seedream-4-0-250828":       { fastPromptMode: true,  series: true,  edit: true,  layers: false },
+  "doubao-seedream-4-5-251128":       { fastPromptMode: false, series: true,  edit: true,  layers: false },
 };
 
 /// 能力查询：未登记的模型按"保守可用"处理（能文生图，不给 fast/组图/图层）。
@@ -360,6 +363,13 @@ async function runSeriesChild(opts) {
     return { index, ok: false, message: "需要的原图暂时无法读取，请确认素材已同步后再试。", errorCategory: "reference_unavailable" };
   }
   const image = source.image;
+  // All series protocols converge here, so rate is charged per actual new image,
+  // not per HTTP request and never for an idempotent replay.
+  const rateMessage = await claimRate(accountId);
+  if (rateMessage) {
+    await abortIdem(subRid, accountId, "rate_limited");
+    return { index, ok: false, message: rateMessage, errorCategory: "rate_limited" };
+  }
   const r = await generate({
     prompt: seriesPrompt(prompt, index, total),
     image, size, structured, renderIntent, aspectRatio,
@@ -433,7 +443,8 @@ async function activeReservedCny(accountId) {
     return Number(sum.toFixed(4));
   } catch (e) {
     logStage("reserve_read_failed", { err: String((e && e.message) || e).slice(0, 120) });
-    return 0;   // 读不到预留时按 0 处理（宁可放行，不阻断正常用户）
+    // Unknown reservations cannot prove that concurrent paid tasks fit the pool.
+    return null; // quotaExhausted treats this as unavailable and fails closed.
   }
 }
 
@@ -778,6 +789,17 @@ async function quotaExhausted(req) {
   }
 }
 
+// Every paid route consumes the same capability/quota decision. Per-image rate
+// claims happen at execution time so idempotent status/cache reads stay free.
+async function paidImageGate(req) {
+  const result = await authorizeImageExecution(req, { enabled: RT.CAP_IMAGE_ENABLED, quotaExhausted });
+  if (!result.ok) {
+    logStage("paid_execution_denied", { status: result.denial.status, code: result.denial.body.error });
+    return { ...result, denial: { ...result.denial, body: { ...result.denial.body, requestId: currentRequestId() } } };
+  }
+  return result;
+}
+
 /** 会员侧拒绝（401/403）原样转出：文案与错误码跟 bf-api 保持一致，不要改写成"额度不可用" */
 function sendDenied(q, send) {
   const code = q.code || (q.denied === 401 ? "UNAUTHORIZED" : "MEMBERSHIP_EXPIRED");
@@ -881,131 +903,34 @@ async function readOne(coll, id) {
 }
 
 /**
- * 10-24 账务幂等（P0-4）：
- *   ① 用唯一 _id 领取账务事件 —— 重复提交必然失败，天然去重；
- *   ② 账户累计用「CAS 标记 → inc」两步：先原子地把 accountApplied 从 false 改成 true，
- *      只有抢到标记的那一次才执行 inc；inc 失败时回滚标记，下一轮可重试；
- *   ③ 明细 bf_usage_logs 复用同一个 _id —— 重复写入直接失败，不可能出现两条流水。
- *
- * 残余风险（已在交付说明中标注）：CAS 成功后、inc 完成前进程被杀，这一笔会少计。
- * 这里选择「宁可少收、不可重复扣用户」；对账可用事件表重算账户累计。
+ * 账务幂等：账户、usage 明细和 event 状态在同一数据库事务提交。
+ * 新建事件与已有事件走同一路径，不再保留新事件绕过 CAS 的并发窗口。
+ * 旧的 accountApplied=true 事件只补剩余状态，避免迁移期二次扣费。
  */
 async function addImageCost(accountId, chargeCny, meta) {
-  // 10-29 账实分离：账户扣的是**售价**，流水记的是**上游成本**。
-  // 旧实现两者混为一个参数，导致成本看板把售价当成本、毛利永远是 0。
-  const charge = Math.max(0, Number(chargeCny) || 0);
   const m = meta || {};
-  const upstream = Math.max(0, Number(m.upstreamCostCny != null ? m.upstreamCostCny : charge) || 0);
   const jobKey = String(m.jobKey || m.jobId || "");
   const eventId = billingEventIdOf(
     accountId,
     jobKey || ("anon-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8))
   );
   await ensureCollection(BILLING_COLL);
-  const col = getDb().collection(BILLING_COLL);
-
-  // ① 领取事件（_id 唯一 → 只有一个调用点能成功）
-  let isNew = false;
-  let ev = null;
+  let result;
   try {
-    await col.add({
-      _id: eventId, accountId, costCny: upstream, priceCny: charge,
-      marginCny: Number((charge - upstream).toFixed(4)),
-      model: m.model || "", kind: m.kind || "image",
-      jobId: jobKey, parentJobId: m.parentJobId || "",
-      index: Number.isFinite(Number(m.index)) ? Number(m.index) : null,
-      state: "pending", accountApplied: false, usageApplied: false, ts: new Date(),
+    result = await require("./image-billing").settleImageCharge({
+      db: getDb(), accountId, chargeCny, meta: { ...m, jobKey }, eventId,
     });
-    isNew = true;
-  } catch (e) {
-    ev = await readOne(BILLING_COLL, eventId);
-    if (!ev) {
-      logStage("billing_event_read_failed", { eventId: eventId.slice(0, 16) });
-      return false;
-    }
-    if (ev.state === "committed") {
-      await modelLedger.charge(m.modelCallId, charge, eventId);
-      return true;
-    }
+  } catch (error) {
+    logStage("billing_transaction_failed", { eventId: eventId.slice(0, 16),
+      err: String((error && error.message) || error).slice(0, 120) });
+    return false;
   }
-
-  // ② 账户累计（CAS 抢占，避免重复 inc）
-  let accountOk = false;
-  if (!isNew && ev && ev.accountApplied) {
-    accountOk = true;                            // 上一轮已累加过，跳过
-  } else {
-    let grabbed = isNew;
-    if (!isNew) {
-      try {
-        const r = await col.where({ _id: eventId, accountApplied: false })
-          .update({ accountApplied: true, accountAppliedAt: Date.now() });
-        grabbed = Number((r && (r.updated !== undefined ? r.updated : r.updatedCount)) || 0) > 0;
-      } catch (e) {
-        // 环境不支持条件更新：退化为「先 inc 再标记」，并明确记录这条降级
-        logStage("billing_cas_unsupported", { eventId: eventId.slice(0, 16) });
-        grabbed = true;
-      }
-    }
-    if (grabbed) {
-      if (isNew) {
-        try { await col.doc(eventId).update({ accountApplied: true, accountAppliedAt: Date.now() }); }
-        catch (e) { /* 标记失败只影响重试效率，不影响本次金额 */ }
-      }
-      try {
-        await getDb().collection(C.accounts).doc(accountId).update({
-          // 用户侧扣减 = 售价（成本 × 倍数）；流水里另有成本，两者不能混
-          imageUsedCny: getDb().command.inc(charge),
-          dayUsedCny: getDb().command.inc(charge),
-          weekUsedCny: getDb().command.inc(charge),
-        });
-        accountOk = true;
-      } catch (e) {
-        try { await col.doc(eventId).update({ accountApplied: false }); } catch (e2) { /* 忽略 */ }
-        logStage("billing_account_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: charge,
-          err: String((e && e.message) || e).slice(0, 120),
-        });
-      }
-    } else {
-      logStage("billing_event_busy", { eventId: eventId.slice(0, 16) });
-      return false;                              // 交给下一轮 flush 重试
-    }
+  if (result.state !== "committed") {
+    logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), state: result.state });
+    return false;
   }
-
-  // ③ 明细：_id 复用事件 ID → 天然去重
-  let usageOk = !!(!isNew && ev && ev.usageApplied);
-  if (!usageOk) {
-    try {
-      await getDb().collection(C.usage).add({
-        _id: eventId, accountId, kind: "image",
-        // costCny = 上游真实成本（成本看板口径）；priceCny = 向用户收的钱；margin = 毛利
-        costCny: upstream, priceCny: charge,
-        marginCny: Number((charge - upstream).toFixed(4)), ts: new Date(),
-        model: m.model || "unknown", estimated: false, source: "bf-image",
-        jobId: jobKey, parentJobId: m.parentJobId || "",
-      });
-      usageOk = true;
-    } catch (e) {
-      // 已存在说明上一轮写成功过（唯一 _id 冲突）→ 视为已应用
-      usageOk = !!(await readOne(C.usage, eventId));
-      if (!usageOk) {
-        logStage("billing_usage_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: charge,
-          err: String((e && e.message) || e).slice(0, 120),
-        });
-      }
-    }
-  }
-
-  await modelLedger.charge(accountOk && usageOk ? m.modelCallId : "", charge, eventId);
-  if (accountOk && usageOk) {
-    try {
-      await col.doc(eventId).update({ state: "committed", usageApplied: true, committedAt: Date.now() });
-    } catch (e) { /* 状态位失败不影响账务正确性 */ }
-    return true;
-  }
-  logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), accountOk, usageOk, costCny: charge });
-  return false;
+  await modelLedger.charge(m.modelCallId, Math.max(0, Number(chargeCny) || 0), eventId);
+  return true;
 }
 
 // ── 幂等 + 任务台账（10-23 改为"原子占位"模型）──
@@ -1517,17 +1442,19 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
-  if (caps.fastPromptMode) {
+  if (caps.fastPromptMode && !image) {
     payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
   }
   if (image) payload.image = image;
   // 10-23 图层拆分（Seedream 5.0 pro 原生能力）：仅支持 1 张图，返回底图 + 最多 16 个透明 PNG 图层
   if (layerDecomposition === true) payload.layer_decomposition = true;
-  // 组图：只有 Lite 支持（Pro/Flash 明确不支持，前面已拦截）
+  // 原生组图：Lite / 4.5 / 4.0；Pro/Flash 在前面明确拒绝。
   if (String(taskKind || "") === "series" && caps.series) {
     payload.sequential_image_generation = "auto";
     const n = Number(requestedCount);
-    if (Number.isFinite(n) && n > 1) payload.max_images = Math.min(8, Math.max(2, Math.floor(n)));
+    if (Number.isFinite(n) && n > 1) {
+      payload.sequential_image_generation_options = { max_images: Math.min(8, Math.max(2, Math.floor(n))) };
+    }
   }
 
   const controller = new AbortController();
@@ -1557,7 +1484,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
           // idempotency claim and total deadline. Never retry an uncertain result.
           payload.model = selectedModel;
           delete payload.optimize_prompt_options;
-          if (caps.fastPromptMode) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
+          if (caps.fastPromptMode && !image) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
           route.reason = "auto:capability-rejection-pro";
           logStage("image_route_upgrade", { from: previous, model: selectedModel, reason: route.reason, status: r.status });
           continue;
@@ -1682,7 +1609,7 @@ const server = http.createServer(async (req, res) => {
           { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto" } },
           { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro" } },
           { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro" } },
-          { key: "series", args: { taskKind: "generate", qualityTier: "auto" } },
+          { key: "series", args: { taskKind: "series", qualityTier: "auto" } },
         ];
         const out = {};
         for (const c of cases) {
@@ -1710,20 +1637,9 @@ const server = http.createServer(async (req, res) => {
     const auth = await requireMember(req);
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
 
-    const q = await quotaExhausted(req);
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      return send(429, {
-        ok: false, code: 429, error: "POOL_EXHAUSTED",
-        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
-      });
-    }
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
 
     const body = (await readBody(req)) || {};
     const prompt = String(body.prompt || "").trim();
@@ -1821,7 +1737,14 @@ const server = http.createServer(async (req, res) => {
       logStage("series_start_create_failed", { sub: auth.sub, err: String((e && e.message) || e).slice(0, 120) });
       return send(500, { ok: false, code: 500, error: "INTERNAL", msg: "任务创建失败，请稍后重试。" });
     }
-    await reserveQuota(taskId, auth.sub, need);
+    const reserved = await reserveQuota(taskId, auth.sub, need);
+    if (!reserved) {
+      await getDb().collection(SERIES_COLL).doc(taskId).update({
+        status: "failed", failedReason: "quota_reservation_unavailable", updatedAt: Date.now(),
+      }).catch(() => {});
+      return send(503, { ok: false, code: 503, error: "QUOTA_RESERVATION_UNAVAILABLE",
+        msg: "暂时无法预留本次额度，没有开始生成图片，请稍后重试。" });
+    }
     logStage("series_started", { sub: auth.sub, taskId: taskId.slice(0, 16), n, need });
     return send(200, Object.assign(seriesTaskPayload(doc), { ms: Date.now() - tStart }));
   }
@@ -1863,6 +1786,10 @@ const server = http.createServer(async (req, res) => {
       return send(200, Object.assign(seriesTaskPayload(task), { step: idx, reused: true, ms: Date.now() - tStep }));
     }
 
+    // A durable task is not a bypass around current membership/quota state.
+    // Cache/idempotent reads above remain available without a new paid call.
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
     try {
       const item = await executeSeriesStep(task, idx, auth.sub);
       await flushJobs(2);
@@ -1935,20 +1862,9 @@ const server = http.createServer(async (req, res) => {
     const auth = await requireMember(req);
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
     await flushJobs();
-    const q = await quotaExhausted(req);
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      return send(429, {
-        ok: false, code: 429, error: "POOL_EXHAUSTED",
-        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
-      });
-    }
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
     const body = (await readBody(req)) || {};
     const parentRid = normalizeRid(body.requestId || body.parentRequestId);
     const rec = await readOne(JOB_COLL, idemKey(parentRid, auth.sub));
@@ -2039,21 +1955,9 @@ const server = http.createServer(async (req, res) => {
     // 记账补投：上次已完成但未记账的任务在这里补上（最多 3 条）
     await flushJobs();
 
-    const q = await quotaExhausted(req);
-    // 10-24 P1-2：不可用 ≠ 用完。服务故障时告诉用户"续费"是错误引导，
-    // 正确做法是 503 + 可重试文案，并且明确"这次没有生成、不会扣费"。
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      logStage("quota_check_unavailable", { sub: auth.sub, reason: q.reason });
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      logStage("quota_exhausted", { sub: auth.sub });
-      return send(429, { ok: false, code: 429, error: "POOL_EXHAUSTED", msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt });
-    }
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
 
     let body = null;
     try { body = await readBody(req); } catch (e) { body = null; }

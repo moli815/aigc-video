@@ -56,6 +56,7 @@ const { compactConversation } = require("./context-compaction");
 const { prepareImageContext } = require("./confirmed-image-context");
 const { diagnostic: imageToolDiagnostic, repairImageCompletion } = require("./image-tool-repair");
 const { reviewCommercialCalls, enabledFor: copyReviewEnabledFor } = require("./commercial-copy-review");
+const { selectCommercialCopyRequest, reviewGroundedCompletion, createReviewedSseSession } = require("./commercial-chat-review");
 const { withImageToolSchema } = require("./image-tool-schema");
 const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
 const { prepareSeriesReferenceGuidance } = require("./image-series-reference-guidance");
@@ -102,7 +103,7 @@ const notifyRetry = require("./notify-retry");
 // 10-23 配置中心：分组/标题/控件/范围/校验统一由 settings-schema 提供，前端只渲染
 const { SECTIONS, describeSettings, validateValue } = require("./settings-schema");
 // 内置目录升级时 +1；DB 版本落后会自动用种子覆盖（v3：新增 short_video 短视频脚本专家）
-const EXPERTS_SEED_VERSION = 4;
+const EXPERTS_SEED_VERSION = 5;
 // 种子指纹：内容变了但版本没变（或部署包混版）也能被发现，见 handleGetExperts 的注释
 const EXPERTS_SEED_HASH = crypto.createHash("sha256")
   .update(JSON.stringify([EXPERTS_SEED.experts, EXPERTS_SEED.starters, EXPERTS_SEED.ui || null]))
@@ -217,6 +218,7 @@ const RUNTIME_SPECS = {
   // P0-46 metaRule 迁云端：回答风格与数据铁律（原打包在 App 内，现服务端下发——改规则不出包）
   META_RULE:          { type: "str", label: "回答规则·metaRule（服务端已含默认全文，可整段覆盖）", def: () => process.env.META_RULE || "BUILTIN" },
   CHAT_STYLE_POLICY:  { type: "json", label: "候选表达策略（默认关闭；事实审查合格后再启用）", def: () => '{"enabled":false}' },
+  CHAT_GROUNDED_REVIEW: { type: "json", label: "商业成稿 · 独立事实审查（默认关闭）", def: () => '{"enabled":false,"audience":"all"}' },
   CHAT_RULES:         { type: "str", label: "能力表达铁律（注入系统提示词，改文案不出包）", def: () => process.env.CHAT_RULES ||
     "【能力表达铁律·最高优先级】\n" +
     "0. 身份口径：你是中防AI专属智能助手；助手品牌与底层模型分开表达，不能臆造模型厂商、版本或官方归属。\n" +
@@ -1331,8 +1333,15 @@ async function compactMessages(messages) {
 /** 带超时的上游请求：防止上游挂起占死实例（对话 180s / 作图 120s） */
 function fetchWithTimeout(url, options = {}, ms = 120000) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), ms);
-  return modelLedger.fetch(url, { ...options, signal: ctl.signal }, fetch).finally(() => clearTimeout(timer));
+  const external = options.signal;
+  const abort = () => ctl.abort();
+  if (external?.aborted) ctl.abort();
+  else external?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(abort, ms);
+  return modelLedger.fetch(url, { ...options, signal: ctl.signal }, fetch).finally(() => {
+    clearTimeout(timer);
+    external?.removeEventListener("abort", abort);
+  });
 }
 
 // ───────────────────────── 登录防爆破 ─────────────────────────
@@ -2868,6 +2877,10 @@ async function handleChat(req, res) {
     }
   } catch { /* 注入失败不阻断对话 */ }
 
+  // Selected commercial copy is reviewed before any prose reaches the client.
+  // The policy is off by default; all other requests keep the original path.
+  const groundedReview = selectCommercialCopyRequest(messages, body, RUNTIME.CHAT_GROUNDED_REVIEW, auth.sub);
+
   // ── P0-38 「配置」面板（客户只看到 标准/高/最高，不暴露真实模型名） ──
   // 客户端传 chatMode（白名单内），模型由服务端映射；未传 = 保持原有自动路由（向后兼容旧版 App）
   // P0-46 差异化配档（2026-10-16 实测评估后确定）：
@@ -2935,7 +2948,7 @@ async function handleChat(req, res) {
   // ── P1 语义缓存命中：零上游成本直接回放（记账 0 并留痕，便于统计命中率） ──
   // Cached prose must never replace a new tool plan, or reuse a reply formed
   // under another memory/style system context.
-  const cacheKey = Array.isArray(body.tools) && body.tools.length ? null : semanticCacheKey(messages, tier.name);
+  const cacheKey = groundedReview || Array.isArray(body.tools) && body.tools.length ? null : semanticCacheKey(messages, tier.name);
   if (cacheKey) {
     const hit = await cacheGet(cacheKey);
     if (hit) {
@@ -3004,6 +3017,16 @@ async function handleChat(req, res) {
     }
   }
 
+  const groundedController = groundedReview ? new AbortController() : null;
+  if (groundedReview) {
+    // Client streaming preference is preserved separately in wantStream. Only
+    // the upstream initial generation is buffered for the independent review.
+    upstreamBody.stream = false;
+    delete upstreamBody.stream_options;
+    upstreamBody.max_tokens = Math.min(Number(upstreamBody.max_tokens) || groundedReview.policy.maxGenerationTokens,
+      groundedReview.policy.maxGenerationTokens);
+  }
+
   const reviewImageCalls = calls=>reviewCommercialCalls(calls,{messages,enabled:String(RUNTIME.IMAGE_COPY_REVIEW)==="1"&&copyReviewEnabledFor(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub)&&isCommercialTask(messages,imageUserText),
     observe:fields=>logSafe({tag:"image_copy_review",requestId:currentRequestId(),...fields}),
     request:async reviewMessages=>{
@@ -3041,17 +3064,24 @@ async function handleChat(req, res) {
       }
       return data;
     }});
+  const groundedSse = groundedReview && wantStream
+    ? createReviewedSseSession(res, req, { onClose: () => groundedController.abort() })
+    : null;
   let upstream;
   try {
-    upstream = await fetchWithTransientRetry(`${UPSTREAM.chat.base}/chat/completions`, {
+    // A chat POST is not idempotent: after dispatch, a 5xx/timeout is an
+    // unknown outcome, not proof that another paid call is safe.
+    upstream = await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${RUNTIME.CHAT_API_KEY || (RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY)}`,
       },
       body: JSON.stringify(upstreamBody),
-    }, 180000);   // P0-80 瞬时错误自动重试（仅 fetch 阶段）
+      signal: groundedController?.signal,
+    }, groundedReview ? groundedReview.policy.generationTimeoutMs : 180000);
   } catch (e) {
+    if (groundedSse) return groundedSse.fail({ ...streamErrorFrame("UPSTREAM_ERROR"), requestId: currentRequestId() });
     return sendError(res, e && e.name === "AbortError" ? 504 : 502,
       e && e.name === "AbortError" ? "UPSTREAM_TIMEOUT" : "UPSTREAM_ERROR",
       e && e.name === "AbortError" ? "上游响应超时，请重试" : "上游服务连接失败");
@@ -3063,7 +3093,83 @@ async function handleChat(req, res) {
       ...require("./domains/chat-diagnostics").chatRejection(upstream.status, detail, upstreamBody)});
     // 不回传上游原始内容，避免泄露任何上游标识
     const busyC = [429, 430, 439, 503, 504].includes(upstream.status);
+    if (groundedSse) return groundedSse.fail({ ...streamErrorFrame("UPSTREAM_ERROR"), requestId: currentRequestId() });
     return sendError(res, 502, "UPSTREAM_ERROR", busyC ? "服务繁忙，请稍等片刻再试" : "对话服务暂时不可用，请稍后重试");
+  }
+
+  if (groundedReview) {
+    try {
+      let data = null;
+      try { data = await upstream.json(); } catch { data = null; }
+      if (!data) throw Object.assign(new Error("GROUNDED_GENERATION_INVALID"), { code: "GROUNDED_GENERATION_INVALID" });
+      const usage = data.usage || {};
+      const hasUsage = typeof usage.prompt_tokens === "number";
+      const promptTokens = hasUsage ? usage.prompt_tokens : estimateTokens(messages.map(m => String(m.content || "")).join("\n"));
+      const completionTokens = hasUsage ? usage.completion_tokens || 0 : 0;
+      try {
+        await addChatCost(auth.sub, (promptTokens / 1e6) * tier.priceIn + (completionTokens / 1e6) * tier.priceOut,
+          { model: upstreamBody.model, tier: tier.name, promptTokens, completionTokens, estimated: !hasUsage, modelCallId: upstream.modelCallId });
+      } catch { logSafe({ tag: "usage_charge_pending", modelCallId: upstream.modelCallId, state: "storage_error" }); }
+      if (MODEL_MASK && typeof data.model === "string") data.model = MODEL_MASK;
+
+      try { data = sanitizeCompletion(data, imageUserText, observeImageBoundary, finalizeImageCalls); }
+      catch (error) {
+        const repaired = await repairImageArguments(error);
+        if (!repaired) throw error;
+        data = repaired;
+        if (MODEL_MASK && typeof data.model === "string") data.model = MODEL_MASK;
+      }
+      // A tool call is already a complete non-prose result. Explicit tool tasks
+      // are normally excluded by the selector; this guard preserves a tool call
+      // if the model legitimately chooses one on a borderline request.
+      if (data.choices?.[0]?.message?.tool_calls?.length) {
+        data = await reviewImageCompletion(data);
+        if (groundedSse) return groundedSse.complete(data, MODEL_MASK || upstreamBody.model);
+        return sendJson(res, 200, data);
+      }
+      if (groundedSse?.aborted) return;
+
+      const reviewed = await reviewGroundedCompletion({
+        completion: data, messages, task: imageUserText,
+        maxSourceChars: groundedReview.policy.maxSourceChars,
+        request: async reviewMessages => {
+          const response = await fetchWithTimeout(`${UPSTREAM.chat.base}/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${RUNTIME.CHAT_API_KEY || process.env.CHAT_API_KEY}` },
+            body: JSON.stringify({
+              model: upstreamBody.model, messages: reviewMessages, stream: false,
+              max_tokens: groundedReview.policy.maxReviewTokens, enable_thinking: false,
+              response_format: { type: "json_object" },
+            }),
+            signal: groundedController.signal,
+          }, groundedReview.policy.reviewTimeoutMs);
+          if (!response.ok) throw Object.assign(new Error("GROUNDED_REVIEW_UPSTREAM"), { code: "GROUNDED_REVIEW_UPSTREAM" });
+          const reviewData = await response.json();
+          const reviewUsage = reviewData.usage;
+          if (reviewUsage && typeof reviewUsage.prompt_tokens === "number") {
+            await addChatCost(auth.sub,
+              (reviewUsage.prompt_tokens / 1e6) * tier.priceIn + ((reviewUsage.completion_tokens || 0) / 1e6) * tier.priceOut,
+              { model: upstreamBody.model, tier: tier.name, promptTokens: reviewUsage.prompt_tokens,
+                completionTokens: reviewUsage.completion_tokens || 0, estimated: false, modelCallId: response.modelCallId })
+              .catch(() => logSafe({ tag: "usage_charge_pending", modelCallId: response.modelCallId, state: "storage_error" }));
+          }
+          return reviewData;
+        },
+      });
+      logSafe({ tag: "commercial_chat_review", requestId: currentRequestId(), event: "completed",
+        changed: reviewed.changed, unsupportedCount: reviewed.unsupportedCount, sourceCount: reviewed.sourceCount });
+      if (groundedSse) return groundedSse.complete(reviewed.completion, MODEL_MASK || upstreamBody.model);
+      return sendJson(res, 200, reviewed.completion);
+    } catch (error) {
+      logSafe({ tag: "commercial_chat_review", requestId: currentRequestId(), event: "failed",
+        code: String(error?.code || error?.message || "unknown").slice(0, 80) });
+      if (groundedSse?.aborted) return;
+      const frame = { ...streamErrorFrame("UPSTREAM_ERROR"), requestId: currentRequestId() };
+      if (groundedSse) return groundedSse.fail(frame);
+      return sendError(res, 502, "UPSTREAM_ERROR", "这次文案没有顺利完成，请再试一次");
+    } finally {
+      groundedSse?.stop();
+    }
   }
 
   // 非流式：直接透传 JSON 并记账（App 的记忆提取等场景走这条路径）
@@ -3274,7 +3380,8 @@ async function callDashscopeImage(payload, apiKey) {
     input: { messages: [{ role: "user", content }] },
     parameters: { size, n: 1, watermark: false, prompt_extend: true },
   };
-  const r = await fetchWithTransientRetry(
+  // Image generation is non-idempotent. Do not repeat an uncertain paid result.
+  const r = await fetchWithTimeout(
     process.env.IMAGE_DASHSCOPE_URL || "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
     { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, body: JSON.stringify(body) }, 120000);
   if (!r.ok) return { ok: false, status: r.status, url: "" };
@@ -3808,181 +3915,19 @@ async function approveRequest(reqDoc, staff, auto) {
 }
 
 async function doApprove(reqDoc, staff, auto) {
-  const now = new Date();
-  const reviewedBy = auto ? "system" : staff.sub;
-
-  if (reqDoc.type === "renew") {
-    const acc = await db.collection(C.accounts).doc(reqDoc.accountId).get();
-    const account = (acc.data || [])[0];
-    if (!account) throw new Error("ACCOUNT_NOT_FOUND");
-    const from = account.expiresAt ? new Date(account.expiresAt) : now;
-    const oldTierDef = tierDefOf(account);
-    const newTierDef = TIERS[reqDoc.tier] || oldTierDef;
-    const isUpgrade = newTierDef.key !== oldTierDef.key;
-
-    // 到期日规则（两种语义，避免写死一种）：
-    // ・同档续费：在现有到期日上顺延（剩余天数不浪费）
-    // ・换档升级：从当下起算——新档 30 天 + 把「原档剩余额度按新档日单价折算」出的天数
-    //   （例：Plus 剩余 ¥125 未用 → Pro 日单价 ¥18.33 → +6 天 → 共 36 天）
-    const base = isUpgrade ? now : (from.getTime() > now.getTime() ? from : now);
-    const to = new Date(base);
-    to.setMonth(to.getMonth() + MEMBER_MONTHS);
-
-    let bonusDays = 0;
-    if (isUpgrade) {
-      const remaining = Math.max(0, oldTierDef.poolCapCny - poolUsedCny(account));
-      const dailyNew = newTierDef.poolCapCny / 30;
-      // 防呆：日单价异常（0/负/非数字）时不做折算，避免算出无穷天数
-      if (Number.isFinite(dailyNew) && dailyNew > 0) {
-        bonusDays = Math.max(0, Math.min(60, Math.floor(remaining / dailyNew)));   // 上限 60 天，防异常数据造成超长有效期
-      }
-      if (bonusDays > 0) to.setDate(to.getDate() + bonusDays);
-    }
-
-    // 新的付费周期：额度池按新档位重置（已用量清零，不结转）
-    const renewPatch = {
-      expiresAt: to, status: "active",
-      cycleAnchorAt: now, periodKey: periodKey(),
-      chatUsedCny: 0, imageUsedCny: 0,
-      dayUsedCny: 0, weekUsedCny: 0, dayKey: null, weekKey: null,
-      lastUpgradeBonusDays: bonusDays,
-    };
-    if (TIERS[reqDoc.tier]) {
-      renewPatch.tier = reqDoc.tier;
-      renewPatch.planPriceCny = TIERS[reqDoc.tier].priceCny;
-    }
-    // ── 10-25 C2.2-FIX：R1 续费重复顺延 / R3 不同申请并发覆盖 ──
-    // 一次条件更新同时完成三件事：校验"这条申请没生效过"、改到期日、记下申请 ID。
-    // 条件是 renewedRequestIds 不含本申请 + expiresAt 仍是刚才读到的值：
-    //   · R1：同一申请重跑 → 条件不命中 → updated=0 → 视为已完成（幂等，不再顺延）
-    //   · R3：另一条申请抢先改了 expiresAt → 条件不命中 → 重读新值重算 → 两次延期累计
-    // 绝不能再拆成"先 update 再 addToSet"两次写：中间失败就会留下"改了期限但没标记"的窗口。
-    const _ = db.command;
-    let renewApplied = false;
-    let renewTo = to;
-    for (let attempt = 0; attempt < 3 && !renewApplied; attempt++) {
-      const fresh = await db.collection(C.accounts).doc(reqDoc.accountId).get();
-      const acc2 = (fresh.data || [])[0];
-      if (!acc2) throw new Error("ACCOUNT_NOT_FOUND");
-      const appliedIds = Array.isArray(acc2.renewedRequestIds) ? acc2.renewedRequestIds : [];
-      if (appliedIds.indexOf(reqDoc._id) >= 0) {
-        return { type: "renew", to: acc2.expiresAt, idempotent: true };
-      }
-      // 每轮都按"最新到期日"重算，避免用旧值覆盖别人的续费
-      const base2 = isUpgrade ? now : (acc2.expiresAt && new Date(acc2.expiresAt).getTime() > now.getTime()
-        ? new Date(acc2.expiresAt) : now);
-      const computed = new Date(base2);
-      computed.setMonth(computed.getMonth() + MEMBER_MONTHS);
-      if (isUpgrade && bonusDays > 0) computed.setDate(computed.getDate() + bonusDays);
-      renewTo = computed;
-
-      const claim = await db.collection(C.accounts)
-        .where({
-          _id: reqDoc.accountId,
-          expiresAt: acc2.expiresAt,
-          renewedRequestIds: _.nin([reqDoc._id]),
-        })
-        .update(Object.assign({}, renewPatch, {
-          expiresAt: computed,
-          renewedRequestIds: _.push(reqDoc._id),
-        }));
-      if (claim && claim.updated) { renewApplied = true; }
-      // updated=0 → 被并发抢先，进入下一轮重算（最多 3 次）
-    }
-    if (!renewApplied) throw new Error("RENEW_CONFLICT_RETRY");
-    await db.collection(C.requests).doc(reqDoc._id).update({
-      status: "approved", reviewedAt: now, reviewedBy, autoApproved: !!auto,
-      renewFrom: from, renewTo: renewTo, fulfillmentState: "done",
-    });
-    await db.collection(C.notifications).add({
-      toStaffId: reqDoc.submittedBy,
-      type: "renew_ready",
-      title: "续费已完成",
-      body: `「${reqDoc.customerName}」的会员已续期至 ${renewTo.toISOString().slice(0, 10)}`,
-      refRequestId: reqDoc._id,
-      read: false,
-      createdAt: now,
-    });
-    return { type: "renew", to: renewTo };
+  // Fulfillment is a transaction, not a sequence of externally visible partial
+  // writes. Generated credentials are passed as data and never logged.
+  let generated = {};
+  if (reqDoc.type !== "renew") {
+    const username = (reqDoc.customUsername && String(reqDoc.customUsername).trim()) || await generateUsername(reqDoc.customerName);
+    const password = (reqDoc.customPassword && String(reqDoc.customPassword).trim()) || randomPassword(12);
+    generated = { username, passwordHash: hashPassword(password), passwordCipher: encryptPwd(password) };
   }
-
-  // 开通：生成账号 + 落存档 + 通知提交人（优先使用员工自定义的登录名/密码）
-  const username = (reqDoc.customUsername && String(reqDoc.customUsername).trim()) || await generateUsername(reqDoc.customerName);
-  const password = (reqDoc.customPassword && String(reqDoc.customPassword).trim()) || randomPassword(12);
-  const expiresAt = new Date(now);
-  expiresAt.setMonth(expiresAt.getMonth() + MEMBER_MONTHS);
-
-  // ── 10-25 C2.2-FIX：R2 重复开通 ──
-  // 账号 _id 由申请 ID 派生：同一条申请永远对应同一个账号文档。
-  // 重试时 add 必然撞主键 → 识别为"已经建过"，直接复用，不会再生成第二个用户名。
-  const accountDocId = "acct_" + reqDoc._id;
-  let addedAccount = null;
-  let accountReused = false;
-  try {
-    addedAccount = await db.collection(C.accounts).add({
-    _id: accountDocId,
-    username,
-    passwordHash: hashPassword(password),
-    displayName: reqDoc.customerName,
-    realName: String(reqDoc.realName || "").slice(0, 20),   // P0-21 客户资料
-    phone: String(reqDoc.phone || "").slice(0, 11),
-    status: "active",
-    tier: TIERS[reqDoc.tier] ? reqDoc.tier : "plus",
-    planPriceCny: TIERS[reqDoc.tier] ? TIERS[reqDoc.tier].priceCny : TIERS.plus.priceCny,
-    expiresAt,
-    cycleAnchorAt: now,
-    periodKey: periodKey(),
-    chatUsedCny: 0,
-    imageUsedCny: 0,
-    createdAt: now,
-    note: "",
+  return require("./approval-fulfillment").fulfillApproval({
+    db, request: reqDoc, staff, auto, tiers: TIERS, tierDefOf,
+    memberMonths: MEMBER_MONTHS, periodKey, generated,
+    decryptPassword: decryptPwd, verifyPassword,
   });
-
-  } catch (e) {
-    if (!isDuplicateKeyError(e)) throw e;
-    // 已经建过：读回原账号复用（这才是"重试找到原账号"而不是再造一个）
-    const ex = await db.collection(C.accounts).doc(accountDocId).get();
-    addedAccount = (ex.data || [])[0] || null;
-    accountReused = true;
-    if (!addedAccount) throw new Error("ACCOUNT_CREATE_FAILED");
-  }
-
-  const delivery = await db.collection(C.deliveries).add({
-    _id: "dlv_" + reqDoc._id,          // 发放记录同样按申请绑定，重试不会写第二条
-    chargedAt: reqDoc.createdAt,
-    username,
-    passwordCipher: encryptPwd(password),
-    issuedAt: now,
-    note: "",
-    realName: String(reqDoc.realName || "").slice(0, 20),   // P0-21 客户资料
-    phone: String(reqDoc.phone || "").slice(0, 11),
-    staffId: reqDoc.submittedBy,
-    staffName: reqDoc.submittedByName || "",
-    reviewedBy,
-    autoApproved: !!auto,
-    requestId: reqDoc._id,
-    accountId: addedAccount.id,
-  });
-
-  await db.collection(C.requests).doc(reqDoc._id).update({
-    status: "approved", reviewedAt: now, reviewedBy,
-    autoApproved: !!auto,
-    createdAccountUsername: username,
-    deliveryId: delivery.id,
-  });
-
-  await db.collection(C.notifications).add({
-    toStaffId: reqDoc.submittedBy,
-    type: "account_ready",
-    title: "你的会员账号已经准备好了",
-    body: `「${reqDoc.customerName}」的会员账号已开通`,
-    refRequestId: reqDoc._id,
-    refDeliveryId: delivery.id,
-    read: false,
-    createdAt: now,
-  });
-
-  return { type: "create", username };
 }
 
 async function handleApproveRequest(req, res, staff, id) {
@@ -4337,79 +4282,19 @@ async function handleRollbackSettings(req, res) {
 
 /** P0-24 专家配置下发：GET /api/experts（任意登录）。DB 缺失或版本落后于内置种子时用种子并懒升级。 */
 async function handleGetExperts(req, res) {
-  let doc = null;
-  try {
-    const r = await db.collection(C.config).doc("experts").get();
-    doc = (r.data || [])[0] || null;
-  } catch { /* 读失败走默认 */ }
-  /**
-   * 10-24 事故修复：只看版本号判断"是否落后"会踩到一个死锁——
-   * 部署瞬间若旧实例先拿到「新 index.js + 旧 experts.json」，它会把 version=新版本 写进 DB，
-   * 之后所有新实例都认为"已是最新"，于是新专家永远上不了线（实测就是这样丢了 short_video）。
-   * 现在同时比对**种子指纹**：版本相同但内容哈希不符 → 仍然重刷。
-   * 管理员在线编辑会自增 version（> 种子版本），因此不会被这里覆盖。
-   */
-  const seedMismatch = !!doc && Number(doc.version || 0) === EXPERTS_SEED_VERSION && doc.seedHash !== EXPERTS_SEED_HASH;
-  const stale = !doc || !Array.isArray(doc.experts) || !doc.experts.length
-    || (doc.version || 0) < EXPERTS_SEED_VERSION || seedMismatch;
-  if (stale) {
-    // 落后于内置种子（如 v1 无 emoji/ui）→ 升级到种子版本；管理员此后仍可在线覆盖
-    try {
-      const payload = { version: EXPERTS_SEED_VERSION, seedHash: EXPERTS_SEED_HASH, experts: EXPERTS_SEED.experts, starters: EXPERTS_SEED.starters, ui: EXPERTS_SEED.ui || null, updatedAt: new Date() };
-      if (doc) await db.collection(C.config).doc("experts").update(payload);
-      else await db.collection(C.config).add({ _id: "experts", ...payload });
-      doc = payload;
-    } catch { /* 升级失败不影响返回种子内容 */ }
-  }
-  const experts = (doc && Array.isArray(doc.experts) && doc.experts.length) ? doc.experts : EXPERTS_SEED.experts;
-  const starters = (doc && doc.starters && Object.keys(doc.starters).length) ? doc.starters : EXPERTS_SEED.starters;
-  const ui = (doc && doc.ui) || EXPERTS_SEED.ui || null;
-  sendJson(res, 200, { ok: true, version: (doc && doc.version) || EXPERTS_SEED_VERSION, experts, starters, ui });
+  const catalog = await require("./expert-catalog").getExpertCatalog({
+    db, seed: EXPERTS_SEED, seedVersion: EXPERTS_SEED_VERSION, seedHash: EXPERTS_SEED_HASH,
+  });
+  sendJson(res, 200, { ok: true, ...catalog });
 }
 
-/** P0-24 专家配置：POST /api/admin/experts（admin）。JSON 校验 + 版本号自增。 */
-async function handleUpdateExperts(req, res) {
+/** P0-24 专家配置：管理员修订、乐观锁与历史快照。 */
+async function handleUpdateExperts(req, res, staff) {
   const body = await readJsonBody(req);
-  const r0 = await db.collection(C.config).doc("experts").get();
-  const prev = (r0.data || [])[0];
-  const version = ((prev && prev.version) || 0) + 1;
-  // 支持一键恢复内置默认
-  if (body.reset === true) {
-    const payload = { version, experts: EXPERTS_SEED.experts, starters: EXPERTS_SEED.starters, ui: EXPERTS_SEED.ui || null, updatedAt: new Date() };
-    try { await db.collection(C.config).doc("experts").update(payload); }
-    catch { await db.collection(C.config).add({ _id: "experts", ...payload }); }
-    return sendJson(res, 200, { ok: true, version, reset: true });
-  }
-  const experts = body.experts, starters = body.starters || {};
-  if (!Array.isArray(experts) || !experts.length || experts.length > 60) {
-    return sendError(res, 400, "BAD_EXPERTS", "experts 必须为 1~60 个的非空数组");
-  }
-  const ids = new Set();
-  const KNOWN_TOOLS = ["search", "image", "word", "ppt", "excel", "pdf"];
-  const KNOWN_DELIV = ["word", "ppt", "excel", "pdf"];
-  for (const e of experts) {
-    if (!e || typeof e !== "object") return sendError(res, 400, "BAD_EXPERTS", "存在非法专家项");
-    for (const f of ["id", "name", "subtitle", "symbol", "role"]) {
-      if (!String(e[f] || "").trim()) return sendError(res, 400, "BAD_EXPERTS", `专家缺少字段 ${f}`);
-    }
-    if (ids.has(e.id)) return sendError(res, 400, "BAD_EXPERTS", `专家 id 重复：${e.id}`);
-    if (!/^[a-z0-9_]{2,32}$/.test(String(e.id))) return sendError(res, 400, "BAD_EXPERTS", `专家 id 只允许小写字母/数字/下划线：${e.id}`);
-    ids.add(e.id);
-    const tools = Array.isArray(e.tools) ? e.tools : [];
-    if (tools.some((t) => !KNOWN_TOOLS.includes(t))) return sendError(res, 400, "BAD_EXPERTS", `${e.id} 含未知工具，允许：${KNOWN_TOOLS.join("/")}`);
-    const d = String(e.deliverable || "word");
-    if (!KNOWN_DELIV.includes(d)) return sendError(res, 400, "BAD_EXPERTS", `${e.id} 交付物应为 ${KNOWN_DELIV.join("/")}`);
-    if (e.steps != null && (!Array.isArray(e.steps) || e.steps.some((x) => typeof x !== "string" || !x.trim()))) {
-      return sendError(res, 400, "BAD_EXPERTS", `${e.id} 的 steps 必须为非空字符串数组`);
-    }
-  }
-  const payload = { version, experts, starters, ui: body.ui || null, updatedAt: new Date() };
-  try {
-    await db.collection(C.config).doc("experts").update(payload);
-  } catch {
-    await db.collection(C.config).add({ _id: "experts", ...payload });
-  }
-  sendJson(res, 200, { ok: true, version });
+  const result = await require("./expert-catalog").saveExpertCatalog({
+    db, body, seed: EXPERTS_SEED, seedVersion: EXPERTS_SEED_VERSION, seedHash: EXPERTS_SEED_HASH, staff,
+  });
+  sendJson(res, result.status, result.body);
 }
 
 /**
@@ -5125,7 +5010,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (sub.length === 1 && m === "POST") {
           const staff = await requireStaff(req, res, true); if (!staff) return;
-          return handleUpdateExperts(req, res);
+          return handleUpdateExperts(req, res, staff);
         }
       }
 

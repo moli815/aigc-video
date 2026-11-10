@@ -77,6 +77,56 @@
 - **下次出包**：增加非敏感的请求 ID 与策略版本回报，不能上传 API Key 或全部系统提示。本轮只记录。
 - **验收**：一次反馈可关联具体请求、策略和错误，且不会跨账号查到记录。
 
+### B-09 托管 token 混入 BYOK Provider 自检（架构 IOS-01，P0）
+- **现象/根因**：`CredentialStore.reload()` 把会员 token 写入 chat/imageKey，`SetupView` 预填并触发 `ProviderDetector` 对第三方域名发 Bearer 探测；与 B-01/B-03 同源但外发路径是新发现。
+- **涉及/修改**：`Config/CredentialStore.swift`、`Views/SetupView.swift`、`Services/ProviderProfiles.swift`；分离凭证类型，托管态不预填/不自检/不保存 token，BYOK 只接受明确自备 Key。
+- **依赖/风险**：依赖 B-01 旧 Key 清除、B-03 `allowBYOK`；影响登录、登出、换号、掉登录和隐藏设置，错误隔离会阻断当前静默直连。
+- **验收**：托管打开设置后第三方域名零请求；Keychain 无会员 token；旧包错误修复不回退。来源：架构文档 IOS-01 / A-01。
+
+### B-10 用户身份全局存储跨账号串资料（架构 IOS-02，P0）
+- **现象/根因**：`Models.swift` 固定 `bossai.user_identity`，`ChatViewModel`/`IdentitySheet`/定时任务都读全局值；登出未隔离。
+- **涉及/修改**：`Models.swift`、`ChatViewModel.swift`、`IdentitySheet.swift`、`HostedAccount.swift`；按账号 scope 版本化，旧值需当前账号确认才迁移。
+- **依赖/风险**：依赖统一 owner 生命周期和同步备份；影响记忆、定时任务与客户称呼。
+- **验收**：A→B→A 不串姓名、公司、行业、角色；备份恢复不越账号。来源：IOS-02 / A-02。
+
+### B-11 失效上下文返回空数组后本轮仍继续执行（架构 IOS-03，P0）
+- **现象/根因**：`buildAPIMessages` 失败返回 `[]`，`runLoop` 仍用旧 userText 预检索/请求；Service 每次访问可能重新读取模式。
+- **涉及/修改**：`ChatViewModel.swift`、`ChatViewModel+Streaming.swift`、发送/重试扩展；引入不可变 `ChatTurnContext`，构建失败 throws，每个 await 后校验 owner/session。
+- **依赖/风险**：依赖 B-01/B-03/B-09/B-10；改变取消与错误状态机，影响所有工具与流式响应。
+- **验收**：各 await 点切账号/删会话后后续网络调用为零，旧文本不进新账号。来源：IOS-03 / A-03。
+
+### B-12 组图任意 start 错误都回退 legacy 并换幂等键（架构 IOS-04/A-04，P0）
+- **现象/根因**：`ChatViewModel+Series.swift` 对任何异常进入 legacy，重新生成 requestId；取消类错误也被 legacy 重试；服务端 `IMAGE_MODEL_SERIES` 语义未闭环。
+- **涉及/修改**：`ChatViewModel+Series.swift`、`ImageUseCase.swift`、统一错误目录；仅明确 404/`SERIES_V2_UNAVAILABLE` 回退，复用同一业务 ID，取消/额度/未知结果不回退。
+- **依赖/风险**：依赖服务端能力码与错误目录；影响所有组图、重试和计费。
+- **验收**：404/401/403/409/422/429/500/丢响应/取消矩阵下无重复付费、无换 ID、取消后零重试。来源：IOS-04 / A-04。
+
+### B-13 组图落库失败仍宣称已保存到本地（架构 IOS-10，P1）
+- **现象/根因**：`ChatViewModel+Series.swift` 多处 `try? persistSeriesImages`，只按上游成功数设置 outcome；与 `ArtifactRepository` 的 throws 契约冲突。
+- **涉及/修改**：Series outcome 拆为生成成功、保存数、保存错误；失败只重试保存/下载，不重新生成。
+- **依赖/风险**：依赖统一 ToolResult/ArtifactRepository；影响产物恢复入口与提示文案。
+- **验收**：注入 SwiftData save 失败，不出现“已保存”、不重复出图、仍可恢复。来源：IOS-08 / A-10。
+
+### B-14 V1/V2 同步与删除队列冲突规则不一致（架构 IOS-11，P1）
+- **现象/根因**：V1 跳过本地已有记忆，V2 覆盖；bootstrap 用随机副本 ID；V2 pending deletion 与 legacy outbox 双写，400/403 只清一处。
+- **涉及/修改**：`SyncService.swift`、`SyncV2Engine.swift`、`ConversationDeletionService.swift`；V2 唯一运行时所有者，V1 只读迁移，确定性冲突 ID，单一 outbox/terminalFailed。
+- **依赖/风险**：依赖 B-10/B-11；涉及多设备、离线删除和数据迁移，需存量回放。
+- **验收**：本地未同步编辑不丢、中断重放不重复、删除不复活、400/403 不伪报成功。来源：IOS-09 / A-11。
+
+### B-15 超时名义值与实际资源上限不一致；双 Key 写入非原子（架构 IOS-12，P1）
+- **现象/根因**：`BoundedHTTPClient` 图片 300s/聊天 180s，但管理端允许 900/600s；`CredentialStore.save` 顺序写两个 Key，失败后可能半新半旧。
+- **涉及/修改**：统一 HTTPPolicy 派生 request/session/gateway/upstream 超时；保存前读旧值、失败回滚或标记不可用；服务端按 build 限制旧包上限。
+- **依赖/风险**：影响长图、长文、网关超时和 BYOK 配置；服务端先行不改二进制行为。
+- **验收**：315/600/900 配置名义与实际一致；第二把 Key 失败不留可用半状态。来源：IOS-10 / A-12。
+
+### B-16 工具、专家目录、错误与遥测仍是多套决策者（架构 IOS-05～09/12，P1）
+- **现象/根因**：`runLoop` 同时管轮次/工具/落库；ToolManifest、ExpertCapability、EffectiveToolPolicy、预检索、执行器各自决策；远程新专家无法执行；缓存无版本/账号；本地错误原文仍多处上屏；请求缺 turn/mode/build/catalog/policy 关联。
+- **涉及/修改**：`ChatTurnRunner/Finalizer`、`ToolDispatcher`、通用最小权限 capability、`ExpertCatalogStore`、按任务启用文档模板、`FriendlyError/UserFacingError`、非敏感 turn 元数据；保留已寄出 App 的旧接口兼容。
+- **依赖/风险**：依赖 B-09～B-11、服务端目录 schema 和 `allowBYOK`；属于一次较大的架构迁移，须分小步灰度并回放旧客户端契约。
+- **验收**：工具权限矩阵一致；关闭搜索零调用；纯口播无旧模板；未知专家 fail-closed；旧 errorEnvelope 不跨轮次；一条反馈可关联完整轮次且无 prompt/key。来源：IOS-05～08、IOS-12、A-05～08、A-13～15。
+
+> B-09～B-16 均**只登记、不实施、不出包**。下次获准构建时按 B-01～B-03 → B-09～B-11 → B-12～B-16 的依赖顺序合并执行，并保留当前工作区的 Swift 错误修复候选。详见 `docs/ops/architecture-optimization-20261110.md` 第 7 节。
+
 ---
 
 ## 二、已修复（Shipped）— 附根因与修法
@@ -152,6 +202,9 @@
 | 强制更新 / 版本门禁 | `MIN_APP_VERSION` | 立即 |
 | 会话踢下线 | `bf_accounts.sv` 自增 → 旧 token 401 | 下次请求 |
 | 云函数回滚 | 保留版本号，SCF 控制台回退 | 分钟级 |
+| 主生图总开关 | `bf-image` 读取 `CAP_IMAGE_ENABLED`；四个付费入口共用门禁 | 30s |
+| 商业成稿事实审查 | `CHAT_GROUNDED_REVIEW`；默认关闭，需真实验收后才灰度 | 30s |
+| 专家目录发布 | `bf_config/experts` 的 `catalogRevision/origin` + 事务快照；旧客户端不支持新增/删除 ID | 下次登录拉取 |
 
 **明确做不到的**：改工具 schema、改几何/排版逻辑、改等待动画、改链路选择策略——这些都在二进制里。
 
@@ -165,3 +218,63 @@
   但 WebParser 抓取未开通，抓取不通前不能删搜索 Key。
 - **`hasToken`（UserDefaults）与 Keychain token 可能不同步**：删装/清数据都可能造成
   "同步正常、聊天走 BYOK"的混合状态，本次事故即是（见 B-01）。
+
+---
+
+## 五、2026-11-10 服务端候选（代码完成 / 离线通过 / **未部署**）
+
+> 不进「二、已修复」，因为没有生产发布和真实 HTTP 复验。全部为纯服务端、管理端 HTML、脚本、文档或测试改动，不需要 IPA。详细根因、影响面和依赖见 `docs/ops/architecture-optimization-20261110.md`。
+
+### C-01 付费生图入口门禁不统一
+- **现象**：`/series/step` 可绕过实时会员/额度，`CAP_IMAGE_ENABLED` 不覆盖 `bf-image`，组图 start/step 不按实际张数限流。
+- **根因**：四个付费路由各自复制鉴权/额度判断；`quotaExhausted()` 未被 step 调用，预留失败按 0 处理。
+- **修法**：`image-execution-gate.js` 单一决策；四入口共用；组图每张在 `runSeriesChild` 计数；预留读取失败返回 null 使额度检查 fail-closed，写入失败把任务标为 failed 并返回 503。
+- **验证**：`image-execution-integrity.test.js` 4 项 + `auth-denied-contract.test.js` 5 项；全量 607 通过。真实 DB 并发未跑。
+
+### C-02 账务唯一事件却可并发重复扣额度
+- **现象**：新建 event 直接获得 CAS 标记，已有 event 又可能抢到同一标记；账户累计与流水不一致。
+- **根因**：`addImageCost()` 给 `isNew` 特例，账户、usage、event 状态不在同一事务。
+- **修法**：`image-billing.js` 用 `db.runTransaction` 原子提交账户快照、usage 和 committed；兼容旧 `accountApplied=true` 事件，价格冲突直接拒绝。
+- **验证**：并发双调用、旧事件、价格冲突、事件重放均通过；`billing-series-contract`、`security-contract` 旧断言已迁移。
+
+### C-03 审批失败留下永久 pending 或错误凭据
+- **现象**：续费生效但通知失败会把申请退回 pending；建号重试重新生成随机密码，delivery 与真实账号可能不匹配。
+- **根因**：账号、发放、申请状态和通知是多次非原子写入；`addedAccount.id` 可能不存在。
+- **修法**：`approval-fulfillment.js` 单事务，确定性账号/发放/通知 ID；旧凭据不一致时一并重置 hash 与 cipher；已生效续费仍补齐状态，不重复顺延。
+- **验证**：`approval-fulfillment.test.js` 3 项故障注入；旧 FUL-01～06、BIZ-01 断言迁移。
+
+### C-04 非幂等请求结果未知仍自动重试
+- **现象**：chat/Dashscope image POST 对 5xx/超时最多再发三次，可能重复产生供应商成本。
+- **根因**：传输层把 HTTP 可重试状态当成业务可重试结果。
+- **修法**：主聊天与 Dashscope 图片生成改单次 `fetchWithTimeout`，台账保留 `outcome_unknown`；通用重试只留给可证明无副作用的调用。
+- **验证**：`seedream-official-contract.test.js` 源码契约；未做真实上游故障注入。
+
+### C-05 专家目录覆盖管理员编辑 / 新增专家不可执行 / 多行开场白丢失
+- **现象**：种子升级可能覆盖管理员目录；后台可新增旧 App 不支持的 ID；可视化编辑按换行切 `starters`，多行内容只剩第一行。
+- **根因**：`version` 同时承担种子和修订语义；前端把对象数组压成一行；本地能力注册表不支持任意 ID。
+- **修法**：`expert-catalog.js` 分离 `seedVersion/catalogRevision/origin`，事务保存快照和 expectedRevision，禁止未知/删除 ID；`web/admin.html` 改为结构化 label+textarea 编辑；16 个云端专家改成按需交付。
+- **验证**：`expert-catalog.test.js` 4 项、`expert-seed-contract.test.js` 6 项、`web-contract.test.js` 4 项。未覆盖线上管理员目录。
+
+### C-06 员工端错误状态与密码关联
+- **现象**：待审核显示立即开通；任何通知都打开 `deliveries[0]`；部分动态姓名仍进 inline onclick。
+- **根因**：前端忽略 `instant`、`refDeliveryId`，并用字符串拼 HTML/JS。
+- **修法**：按 `j.instant/status` 渲染；通知按 `_id→refDeliveryId` 找对应 delivery，续费/驳回/无关联通知 fail-closed；动态按钮改 `data-*` + 事件委托。
+- **验证**：`web-contract.test.js` 通知关联、非账号通知、无关联通知与动态事件断言；`security-contract.test.js` 旧 XSS 断言通过。浏览器端到端未跑。
+
+### C-07 Seedream payload 与官方能力表漂移
+- **现象**：带参考图仍发 `optimize_prompt_options`；原生组图用顶层 `max_images`；4.0 原生组图能力被误标 false；236 万旧注释。
+- **根因**：历史 S-08 原则只覆盖部分路径；provider 参数与能力表各改一处。
+- **修法**：参考图不优化；改 `sequential_image_generation_options.max_images`；补 4.5/4.0 能力；成本注释改 261 万；`/models` 系列探针用真实 series task。
+- **验证**：`seedream-official-contract.test.js` 4 项 + 全量回归；未做付费生图和固定素材视觉回归，视觉质量不声称提升。
+
+### C-08 商业成稿独立事实审查
+- **现象**：DeepSeek Flash 在有模板冲突和事实缺口时仍会编造现场经历、客户原话与效果承诺。
+- **根因**：旧链路只有一次生成，无独立断言—证据核对；`CHAT_STYLE_POLICY` 大段候选未过事实门禁且默认关闭。
+- **修法**：`commercial-chat-review.js` 仅选择商业成稿，整理用户证据，生成后独立审查/安全修订；两次上游调用分别计费，断连 Abort，审稿前只发空 SSE 活动帧；`CHAT_GROUNDED_REVIEW` 默认关闭。
+- **验证**：`commercial-chat-review.test.js` 5 项 + 配置校验；未做真实模型 A/B，不得启用为全量策略。
+
+### C-09 函数产物可能不是审计源码
+- **现象**：`cloudfunctions/*/shared` 是 ignored 生成副本，旧打包脚本全量复制、不清理、不校验，fresh clone 可能缺新模块。
+- **根因**：构建步骤靠人工记忆，部署声明与实际函数不一致。
+- **修法**：`bundle-function-shared.js` 从 canonical 生成、清旧 JS、写 manifest、逐文件 SHA-256，并提供 `--check` 门禁。
+- **验证**：`function-shared-bundle.test.js`；本仓重建后 5 个函数各 22 个共享文件一致。完整 ZIP 上传/下载核验留待生产发布时执行。

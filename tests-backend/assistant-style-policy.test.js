@@ -8,6 +8,9 @@ test('online style settings reject misspelled fields, non-boolean flags and over
  for(const value of ['null','{"enable":false}','{"enabled":"false"}',JSON.stringify({instructions:'a'.repeat(6001)})])assert.equal(validateValue('CHAT_STYLE_POLICY',value,spec).ok,false);
  assert.equal(validateValue('CHAT_STYLE_POLICY','{"enabled":false}',spec).ok,true);
  assert.equal(validateValue('CHAT_STYLE_POLICY','{"instructions":"直接回答"}',spec).ok,true);
+ assert.equal(validateValue('CHAT_GROUNDED_REVIEW','{"enabled":true,"audience":"all"}',spec).ok,true);
+ assert.equal(validateValue('CHAT_GROUNDED_REVIEW','{"enabled":"true"}',spec).ok,false);
+ assert.equal(validateValue('CHAT_GROUNDED_REVIEW','{"enabled":true,"unknown":1}',spec).ok,false);
 });
 test('style is idempotent, can be tuned or disabled without disabling identity or dropping history',()=>{
  const user={role:'user',content:[{type:'text',text:'只改第二段'},{type:'image_url',image_url:{url:'PRIVATE_ASSET'}}]};
