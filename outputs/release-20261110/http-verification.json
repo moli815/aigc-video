@@ -1,0 +1,21 @@
+{
+  "at": "2026-11-10T13:52:32.714Z",
+  "checks": [
+    "api health 200",
+    "image ping 200",
+    "anonymous catalog 401",
+    "grounded review and candidate style disabled",
+    "temporary login 200",
+    "authorized 16-expert catalog 200",
+    "real SSE JSON frames and DONE",
+    "expired membership 403",
+    "exhausted quota 429"
+  ],
+  "paidChatCalls": 1,
+  "paidImageCalls": 0,
+  "customerQuotaChanged": false,
+  "temporaryAccountDeleted": true,
+  "expertVersion": 8,
+  "catalogRevision": 8,
+  "ok": true
+}

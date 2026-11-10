@@ -1,0 +1,44 @@
+{
+  "at": "2026-11-10T13:39:48.764Z",
+  "commit": "1f5ccf1fa81fa0832bb45e0ebd73e67b1175569c",
+  "namespace": "xmy-test-d5g8c0xcifcefcfd5",
+  "functions": {
+    "bf-api": {
+      "status": "Active",
+      "modTime": "2026-11-10 18:09:56",
+      "installDependency": "FALSE",
+      "codeSha256": "91573bd5a7a2ac82a91745b03c9bcdc053d01b835fc429f9de6d20bcbdbfb671",
+      "beforeSha256": "91573bd5a7a2ac82a91745b03c9bcdc053d01b835fc429f9de6d20bcbdbfb671",
+      "candidateSha256": "63a2430c90d082eb05aff22b7f7dcaea797b761a01e3c4a95db891cc16678aab",
+      "changed": [
+        "approval-fulfillment.js",
+        "commercial-chat-review.js",
+        "expert-catalog.js",
+        "experts.json",
+        "index.js",
+        "settings-schema.js"
+      ],
+      "fileCount": 5616
+    },
+    "bf-image": {
+      "status": "Active",
+      "modTime": "2026-11-04 22:16:35",
+      "installDependency": "FALSE",
+      "codeSha256": "1d8a372e0646857324d2b55673340680c3f80a64ee0cc63fb1db2caea4d6cbf5",
+      "beforeSha256": "1d8a372e0646857324d2b55673340680c3f80a64ee0cc63fb1db2caea4d6cbf5",
+      "candidateSha256": "03c9e12dfdfa6a283a9e66663c2b6286e7fb29d91a836912fd007d66f5811beb",
+      "changed": [
+        "image-billing.js",
+        "image-execution-gate.js",
+        "index.js"
+      ],
+      "fileCount": 5910
+    }
+  },
+  "staticBefore": {
+    "admin.html": "69dd63c373c57b4e6ea0bf139d2240fa5405787c4af4e61fcb6f95743418bd95",
+    "staff.html": "ca8700acc9b8b72073302b9436126559780324175d90d32e89de7ba55089789e"
+  },
+  "expertVersion": 7,
+  "runtimeRevision": "1794305041916"
+}

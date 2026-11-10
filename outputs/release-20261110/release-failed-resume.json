@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-10T13:49:57.352Z",
+  "error": "Command failed: C:\\Users\\24072\\.workbuddy\\binaries\\node\\versions\\22.22.2-6\\node.exe C:/Users/24072/AppData/Roaming/npm/node_modules/@cloudbase/cli/bin/tcb hosting deploy C:\\Users\\24072\\WorkBuddy\\2026-10-08-11-01-51\\aigc-video\\outputs\\release-20261110\\hosting . -e xmy-test-d5g8c0xcifcefcfd5 --concurrency 1 --safe --verify --entry admin.html,staff.html --json",
+  "state": {
+    "deployedFunctions": [
+      "bf-api",
+      "bf-image"
+    ],
+    "configWritten": true,
+    "staticUploaded": true
+  },
+  "rollback": {
+    "error": "Command failed: C:\\Users\\24072\\.workbuddy\\binaries\\node\\versions\\22.22.2-6\\node.exe C:/Users/24072/AppData/Roaming/npm/node_modules/@cloudbase/cli/bin/tcb hosting deploy C:\\Users\\24072\\WorkBuddy\\2026-10-08-11-01-51\\aigc-video\\outputs\\release-20261110\\rollback-hosting . -e xmy-test-d5g8c0xcifcefcfd5 --concurrency 1 --verify --entry admin.html,staff.html --json"
+  }
+}

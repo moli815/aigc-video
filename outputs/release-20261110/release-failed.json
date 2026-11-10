@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-10T13:41:11.269Z",
+  "error": "spawnSync tcb ENOENT",
+  "state": {
+    "deployedFunctions": [
+      "bf-api",
+      "bf-image"
+    ],
+    "configWritten": true,
+    "staticUploaded": false
+  },
+  "rollback": {
+    "error": "不能更新_id的值"
+  }
+}

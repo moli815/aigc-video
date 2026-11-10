@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "beforeSha256": "91573bd5a7a2ac82a91745b03c9bcdc053d01b835fc429f9de6d20bcbdbfb671",
+  "candidateSha256": "63a2430c90d082eb05aff22b7f7dcaea797b761a01e3c4a95db891cc16678aab",
+  "changed": [
+    "approval-fulfillment.js",
+    "commercial-chat-review.js",
+    "expert-catalog.js",
+    "experts.json",
+    "index.js",
+    "settings-schema.js"
+  ],
+  "unexpected": [],
+  "missingRuntimeFiles": [],
+  "dependencyChanges": [],
+  "beforeFileCount": 5613,
+  "candidateFileCount": 5616
+}

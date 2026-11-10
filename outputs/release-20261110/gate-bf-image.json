@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "beforeSha256": "1d8a372e0646857324d2b55673340680c3f80a64ee0cc63fb1db2caea4d6cbf5",
+  "candidateSha256": "03c9e12dfdfa6a283a9e66663c2b6286e7fb29d91a836912fd007d66f5811beb",
+  "changed": [
+    "image-billing.js",
+    "image-execution-gate.js",
+    "index.js"
+  ],
+  "unexpected": [],
+  "missingRuntimeFiles": [],
+  "dependencyChanges": [],
+  "beforeFileCount": 5908,
+  "candidateFileCount": 5910
+}

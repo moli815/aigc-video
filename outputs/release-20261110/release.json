@@ -1,0 +1,67 @@
+{
+  "at": "2026-11-10T13:52:39.195Z",
+  "commit": "1f5ccf1fa81fa0832bb45e0ebd73e67b1175569c",
+  "namespace": "xmy-test-d5g8c0xcifcefcfd5",
+  "status": "ACTIVE",
+  "resumed": true,
+  "functions": {
+    "bf-api": {
+      "status": "Active",
+      "modTime": "2026-11-10 21:51:33",
+      "installDependency": "FALSE",
+      "onlineSha256": "a57200e10ae431765c39d754d494a9b7b465d5c493b3c99079079c17b1e08eea",
+      "exactArtifactMatch": true,
+      "fileCount": 5616
+    },
+    "bf-image": {
+      "status": "Active",
+      "modTime": "2026-11-10 21:52:05",
+      "installDependency": "FALSE",
+      "onlineSha256": "3db6819ddb79ddb99119e2f6bb636fe8df0fea4599b3b0ccc8f855e0bc695d12",
+      "exactArtifactMatch": true,
+      "fileCount": 5910
+    }
+  },
+  "config": {
+    "version": 8,
+    "catalogRevision": 8,
+    "changed": 16,
+    "skipped": 0,
+    "at": "2026-11-10T13:51:24.749Z"
+  },
+  "staticHashes": {
+    "admin.html": "48633489656082fbdfa943cb81a06997a1f8d3239d0641c4d6341219d76dd93f",
+    "staff.html": "08d6ed554659fe613733c5f3ef3bbcc807e51e6d92ed6974bcce6d814c52901c"
+  },
+  "http": {
+    "at": "2026-11-10T13:52:32.714Z",
+    "checks": [
+      "api health 200",
+      "image ping 200",
+      "anonymous catalog 401",
+      "grounded review and candidate style disabled",
+      "temporary login 200",
+      "authorized 16-expert catalog 200",
+      "real SSE JSON frames and DONE",
+      "expired membership 403",
+      "exhausted quota 429"
+    ],
+    "paidChatCalls": 1,
+    "paidImageCalls": 0,
+    "customerQuotaChanged": false,
+    "temporaryAccountDeleted": true,
+    "expertVersion": 8,
+    "catalogRevision": 8,
+    "ok": true
+  },
+  "paidImageCalls": 0,
+  "ipaBuildTriggered": false,
+  "customerQuotaChanged": false,
+  "rollbackArtifacts": [
+    "before-bf-api.zip",
+    "before-bf-image.zip",
+    "config-before.json",
+    "before-admin.html",
+    "before-staff.html"
+  ]
+}

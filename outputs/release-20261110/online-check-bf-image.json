@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "beforeSha256": "03c9e12dfdfa6a283a9e66663c2b6286e7fb29d91a836912fd007d66f5811beb",
+  "candidateSha256": "3db6819ddb79ddb99119e2f6bb636fe8df0fea4599b3b0ccc8f855e0bc695d12",
+  "changed": [],
+  "unexpected": [],
+  "missingRuntimeFiles": [],
+  "dependencyChanges": [],
+  "beforeFileCount": 5910,
+  "candidateFileCount": 5910
+}

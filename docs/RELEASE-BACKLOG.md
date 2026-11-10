@@ -221,9 +221,9 @@
 
 ---
 
-## 五、2026-11-10 服务端候选（代码完成 / 离线通过 / **未部署**）
+## 五、2026-11-10 服务端与管理端上线记录（**已部署，无 IPA**）
 
-> 不进「二、已修复」，因为没有生产发布和真实 HTTP 复验。全部为纯服务端、管理端 HTML、脚本、文档或测试改动，不需要 IPA。详细根因、影响面和依赖见 `docs/ops/architecture-optimization-20261110.md`。
+> 2026-11-10 21:52 北京时间上线：先备份当前线上 `bf-api`/`bf-image` 代码 ZIP、专家目录、运行时开关与两个静态页，再以线上 ZIP 为基座构建候选；只替换 6 个 `bf-api` 业务文件、3 个 `bf-image` 业务文件，`node_modules` 零变化。两函数 Active / `InstallDependency FALSE`，下载后逐文件 inventory 与候选一致。专家目录 `version=8 / catalogRevision=8`，16 个专家全部迁移；`CHAT_GROUNDED_REVIEW` 默认关闭，`CHAT_STYLE_POLICY` 仍关闭；`admin.html`、`staff.html` 线上 SHA256 与候选一致。真实 HTTP 9 项通过，含健康 200、img ping 200、匿名 401、登录 200、16 专家目录 200、SSE JSON 帧与 `[DONE]`、到期 403、额度 429；仅 1 次 24-token 聊天验证，生图 0、客户额度变化 0、临时账号已删除。发布证据 `outputs/release-20261110/release.json`。回滚使用同目录 `before-*.zip`、`config-before.json` 和 `before-*.html`，或 `scripts/release-architecture-20261110.cjs` 的回滚路径。详细根因、影响面和依赖见 `docs/ops/architecture-optimization-20261110.md`。
 
 ### C-01 付费生图入口门禁不统一
 - **现象**：`/series/step` 可绕过实时会员/额度，`CAP_IMAGE_ENABLED` 不覆盖 `bf-image`，组图 start/step 不按实际张数限流。

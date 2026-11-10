@@ -10,16 +10,16 @@
 </head>
 <body><div class="wrap">
 <h1>BossAI 架构优化测试报告</h1>
-<div class="meta">北京时间 2026-11-10 21:25 · Windows · Node 20 本地测试 · 候选代码基线 <code>e73d5e2</code> · <strong>未部署 / 未出包 / 未调用付费模型</strong></div>
+<div class="meta">北京时间 2026-11-10 21:52 · Windows · Node 20 本地测试 · 代码提交 <code>1f5ccf1</code> · <strong>已上线 / 未出包 / 1 次 24-token SSE 聊天验证 / 0 生图</strong></div>
 
 <div class="grid">
 <div class="kpi"><b>607</b><span>后端用例总数</span></div>
 <div class="kpi"><b class="ok">607 / 0</b><span>通过 / 失败</span></div>
 <div class="kpi"><b>3.71s</b><span>全套回归耗时</span></div>
-<div class="kpi"><b>0</b><span>付费模型 / 生图调用</span></div>
+<div class="kpi"><b>1 / 0</b><span>聊天验证 / 生图调用</span></div>
 </div>
 
-<div class="note"><strong>结论：</strong>本轮完成服务端、管理端、专家与 Seedream 接入的离线候选改造，全套后端回归通过；但 <strong>静态/纯函数/源码契约测试通过不等于生产可用</strong>。真实 CloudBase 并发、真实 HTTP/SSE、浏览器端到端、固定素材视觉回归、Xcode/真机、生产部署均未执行。聊天事实审查仍默认关闭。</div>
+<div class="note"><strong>结论：</strong>本轮完成服务端、管理端、专家与 Seedream 接入的离线改造和真实上线；607/607 离线回归、上传/下载 ZIP 逐文件一致、真实 HTTP 9 项复验均通过。两函数 Active，专家目录 v8，管理端两个页面哈希一致。聊天事实审查仍默认关闭；<strong>静态/纯函数/源码契约测试通过不等于真实模型质量或视觉质量达标</strong>，真实 CloudBase 并发故障注入、浏览器端到端、固定素材视觉回归、Xcode/真机仍未执行。</div>
 
 <h2>① 测试用例清单</h2>
 <table><thead><tr><th>编号 / 类型</th><th>覆盖场景</th><th>结果</th></tr></thead><tbody>
@@ -37,6 +37,7 @@
 <li>新模块：<code>image-execution-gate.js</code>、<code>image-billing.js</code>、<code>approval-fulfillment.js</code>、<code>expert-catalog.js</code>、<code>commercial-chat-review.js</code>。</li>
 <li>测试：<code>tests-backend/*</code> 新增 8 个测试文件，迁移 7 个旧契约；完整输出 <code>outputs/backend-full-20261110.tap</code>。</li>
 <li>共享构建：<code>scripts/bundle-function-shared.js</code> 产出 5 个函数 × 22 个 canonical/shared 文件及 manifest，连续校验一致。</li>
+<li>上线证据：<code>outputs/release-20261110/{prepare.json,release.json,http-verification.json,online-check-*.json,hosting-hashes.json}</code>，含备份 ZIP、配置快照与回滚页。</li>
 </ul>
 
 <h2>③ 测试指标与命令</h2>
@@ -45,7 +46,8 @@
 <tr><td><code>node --check</code> × 3 个核心 JS</td><td>0</td><td>语法错误 0</td></tr>
 <tr><td><code>node scripts/bundle-function-shared.js &amp;&amp; ... --check</code></td><td>0</td><td>5 函数 / 22 shared 文件 / missing, extra, drifted 均 0</td></tr>
 <tr><td><code>git diff --check</code></td><td>0</td><td>补丁格式错误 0；仅有 LF→CRLF 提示</td></tr>
-<tr><td>付费模型 / 生图 / iOS CI</td><td>—</td><td>调用 0；IPA dispatch 0；客户额度变化 0</td></tr>
+<tr><td><code>node scripts/release-architecture-20261110.cjs --resume</code></td><td>0</td><td>双函数 Active / InstallDependency FALSE；上传下载 ZIP inventory 一致；专家目录 v8；静态页 SHA256 一致</td></tr>
+<tr><td>真实 HTTP 9 项 + SSE JSON 帧与 <code>[DONE]</code></td><td>0</td><td>200/401/403/429 全通过；1 次 24-token 聊天验证；生图 0；临时账号已删除；客户额度变化 0；IPA dispatch 0</td></tr>
 </tbody></table>
 <p><span class="tag">纯函数/模拟事务</span>可证明分支与状态机；<span class="tag">源码契约</span>可防回退；<span class="tag">真实 CloudBase 集成</span><strong class="bad">0 项，本轮未执行</strong>。607 项通过不等于业务一致性已验证。</p>
 
@@ -57,7 +59,7 @@
 <tr><td>工具一致性</td><td>prompt/schema/预检索/执行多套决策</td><td>服务端已统一付费门禁与部分审批；客户端 ToolManifest 统一仍待出包</td><td>能力声明、可见性与执行完全一致</td><td class="bad">不能，客户端尚未改造</td></tr>
 <tr><td>商业作图</td><td>模板化构图、参考图可能被上游改写</td><td>关闭参考图提示词优化、修原生组图字段、核对官方价与能力</td><td>成品级构图/排字/主体一致，少模板感</td><td class="bad">不能；未做固定素材视觉回归</td></tr>
 </tbody></table>
-<p>用户要求节省积分，本轮<strong>没有执行新一轮真实模型 A/B 或付费生图</strong>。对标只引用既有真实评测与源码事实，不把离线测试写成“达到 ChatGPT 6 品质”。</p>
+<p>用户要求节省积分，本轮<strong>没有执行新一轮真实模型 A/B 或付费生图</strong>；仅为上线烟雾测试执行 1 次 24-token SSE 聊天调用。对标只引用既有真实评测与源码事实，不把离线测试或烟雾测试写成“达到 ChatGPT 6 品质”。</p>
 
 <h2>⑤ 复杂场景（贴近真实用户使用）</h2>
 <table><thead><tr><th>场景</th><th>输入 / 故障</th><th>期望</th><th>本轮结果</th></tr></thead><tbody>
@@ -81,7 +83,7 @@
 
 <h2>⑦ 未执行 / 不得视为通过</h2>
 <ul>
-<li>生产部署、Active/InstallDependency、上传/下载 ZIP 逐文件 SHA-256、真实 HTTP 200/401/403/429、SSE JSON 帧与 <code>[DONE]</code>。</li>
+<li>完整回滚演练；当前已保存回滚包与自动回滚路径，但没有在真实生产环境执行回退操作。</li>
 <li>真实 CloudBase 事务冲突、并发 flush、预留写入失败、bf-jobs 定时补发、数据库恢复重放。</li>
 <li>浏览器真实 DOM 交互、员工 A/B 连续通知、XSS 载荷真实执行环境。</li>
 <li><code>CHAT_GROUNDED_REVIEW</code> 真实模型 A/B 和人工逐条事实审查；目前保持 <code>enabled:false</code>。</li>

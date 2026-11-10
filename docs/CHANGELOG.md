@@ -2,19 +2,19 @@
 
 所有时间使用北京时间。先查本文件及 [出包问题与修复台账](RELEASE-BACKLOG.md)，再开始修改。详细分析放对应 ops 文档，本文件保留索引和真实发布状态。
 
-## 2026-11-10 21:25：全架构审查后的服务端候选改造（未上线）
+## 2026-11-10 21:52：全架构审查后的服务端与管理端上线（已部署，无 IPA）
 
-- **时间 / 状态**：2026-11-10 21:25，北京时间；**候选已完成并通过离线测试，未部署、未出包**。
+- **时间 / 状态**：2026-11-10 21:52，北京时间；用户明确授权「自测之后直接上线」；**服务端、配置与两个静态页面已部署，未出包**。
 - **问题与影响**：组图续步可绕过实时额度/能力开关；账务并发可能重复扣额度；审批重试可能发错凭据；员工通知会显示另一客户密码；管理端编辑会截断多行开场白；16 个专家把内部方法强行外显；Seedream 原生组图参数与参考图优化策略有偏差；对话成稿仍可能编造现场细节。
 - **真实根因**：付费入口各自重复鉴权；事件唯一性与账户副作用未在同一事务；审批履约由多个外部可见写组成；前端把结构化数据压成行文本；专家目录/权限/模板分三处维护；官方 provider 能力表与 payload 编译未统一；写作链路只有生成、没有独立事实审查。
-- **改动与方式**：新增 `image-execution-gate.js`、`image-billing.js`、`approval-fulfillment.js`、`expert-catalog.js`、`commercial-chat-review.js`；收敛 `bf-api/index.js`、`bf-image/index.js`；修正 Seedream payload 与能力表；将 16 个云端专家改为按本轮任务交付；修 `web/admin.html`/`web/staff.html`；实现确定性 shared 打包；新增 `CHAT_GROUNDED_REVIEW`，默认 `enabled:false`。
-- **涉及文件及配置**：`cloudfunctions/bf-api/{index.js,experts.json,settings-schema.js,*.js 新模块}`、`cloudfunctions/bf-image/{index.js,*.js 新模块}`、`scripts/bundle-function-shared.js`、`web/{admin,staff}.html`、11 个新增/迁移测试、`docs/ops/architecture-optimization-20261110.md`、本文件及 `RELEASE-BACKLOG.md`。未修改 Swift/资源/Info.plist；保留所有原有未提交改动。
-- **测试与实际效果**：`node --check` 三个核心 JS 通过；后端全量 `node --test` **607/607，0 失败**；shared 构建两轮哈希一致；未调用付费模型、未扣客户额度、未生成图片。测试只证明离线契约与故障注入，不能证明线上一致性或视觉质量。
-- **未解决限制**：`CHAT_GROUNDED_REVIEW` 未做真实模型 A/B，保持关闭；Seedream 未做固定素材视觉回归；真实 CloudBase 并发、浏览器端到端、真实 HTTP、Xcode/真机、生产发布均未完成；O4 和全部客户端待办见架构文档第 10/12 节及 BACKLOG。
-- **上线时间与版本**：无；本轮没有部署，也没有线上版本变化。生产发布需另行确认，先备份当前 `bf-api`/`bf-image` 与专家目录，核验上传/下载 ZIP 后再灰度。
-- **回滚方式**：候选未部署时直接撤回这些业务文件；若以后部署，只恢复本轮 5 个新模块外的原业务文件，保留后续补丁；关闭 `CHAT_GROUNDED_REVIEW` 只撤审查功能，不等于完整回滚。
-- **是否需要出包**：**不需要**。所有本轮改动均为服务端/管理端/文档/测试；客户端问题只登记，等待下次授权后统一出包。
-- **详记**：[架构优化与实施台账](ops/architecture-optimization-20261110.md)。
+- **改动与方式**：新增 `image-execution-gate.js`、`image-billing.js`、`approval-fulfillment.js`、`expert-catalog.js`、`commercial-chat-review.js`；收敛 `bf-api/index.js`、`bf-image/index.js`；修正 Seedream payload 与能力表；16 个云端专家改为按本轮任务交付；修 `web/admin.html`/`web/staff.html`；实现确定性 shared 打包；新增 `CHAT_GROUNDED_REVIEW`，默认 `enabled:false`。
+- **涉及文件及配置**：`cloudfunctions/bf-api/{index.js,experts.json,settings-schema.js,*.js 新模块}`、`cloudfunctions/bf-image/{index.js,*.js 新模块}`、`scripts/bundle-function-shared.js`、`web/{admin,staff}.html`、11 个新增/迁移测试、发布脚本/证据、架构文档、本文件及 `RELEASE-BACKLOG.md`。未修改 Swift/资源/Info.plist；保留所有原有未提交改动。
+- **测试与实际效果**：`node --check` 与后端全量 `node --test` **607/607，0 失败**；上线前当前线上 ZIP 为基线，候选 ZIP 仅替换 6+3 个业务文件、node_modules 零变化；上传/下载逐文件 inventory 完全一致。真实 HTTP 9 项通过：health 200、img ping 200、匿名 401、临时登录 200、16 专家目录 200、真实 SSE JSON 帧与 `[DONE]`、到期 403、额度 429、两个候选开关关闭。为验 SSE 发生 **1 次 24-token 聊天调用**；生图 0、客户额度变化 0、临时账号已删除、IPA 0。
+- **未解决限制**：`CHAT_GROUNDED_REVIEW` 未做真实模型 A/B，保持关闭；Seedream 未做固定素材视觉回归；真实 CloudBase 并发故障注入、浏览器端到端、Xcode/真机、O4 和全部客户端待办仍未完成；详见架构文档第 10/12 节及 BACKLOG。
+- **上线时间与版本**：21:51:33 `bf-api` Active / `InstallDependency FALSE`；21:52:05 `bf-image` Active / `InstallDependency FALSE`；专家目录 `version=8 / catalogRevision=8`，16 个专家全部迁移；`CHAT_GROUNDED_REVIEW={"enabled":false,"audience":"all"}`；`CHAT_STYLE_POLICY` 保持 false；管理端 `admin.html`/`staff.html` 线上 SHA256 与候选一致。发布结果见 `outputs/release-20261110/release.json`。
+- **回滚方式**：先备份当前线上版本和后续补丁；用 `outputs/release-20261110/before-bf-api.zip`、`before-bf-image.zip` 以 `InstallDependency=FALSE` 回传，恢复 `config-before.json` 的专家目录与运行时开关，重新上传 `before-admin.html`、`before-staff.html`。`scripts/release-architecture-20261110.cjs` 内含自动回滚路径；仅关闭审查开关不等于完整回滚。
+- **是否需要出包**：**不需要**。所有本轮上线均为服务端/管理端/文档/测试；客户端问题只登记，等待下次授权后统一出包。
+- **详记**：[架构优化与实施台账](ops/architecture-optimization-20261110.md)、[上线测试报告](architecture-optimization-20261110-test-report.html)。
 
 ## 2026-11-10：对话风格与用户交付意图
 
