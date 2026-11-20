@@ -62,7 +62,19 @@ function collectImages(messages) {
  */
 function classify(images, userText) {
   const valid = images.filter(i => i.size && i.size.w > 0 && i.size.h > 0);
-  if (valid.length < 2) return { logo: null, poster: null, photo: null, count: valid.length };
+  const mentionsOldText = String(userText || "");
+  const oldSemantics = /旧稿|旧版|上一版|之前的|原来那|改版|重绘|这张海报|参考这版|照着这版/.test(mentionsOldText);
+  if (valid.length === 0) return { logo: null, poster: null, photo: null, count: 0 };
+  // 只有一张图时也必须能判角色：小扁图当 Logo，否则按语义在「旧稿 / 素材照片」之间选
+  if (valid.length === 1) {
+    const only = valid[0];
+    const ratio = only.size.w / only.size.h;
+    const area = only.size.w * only.size.h;
+    if (ratio <= LOGO_MAX_RATIO && area < 400 * 200) return { logo: only, poster: null, photo: null, count: 1 };
+    return oldSemantics
+      ? { logo: null, poster: only, photo: null, count: 1 }
+      : { logo: null, poster: null, photo: only, count: 1 };
+  }
   const withArea = valid.map(i => ({ ...i, area: i.size.w * i.size.h, ratio: i.size.w / i.size.h }));
   const sorted = [...withArea].sort((a, b) => a.area - b.area);
   const smallest = sorted[0];
