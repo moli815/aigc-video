@@ -103,28 +103,61 @@
 `outcome_unknown→结果未知（断连） · CONSUMER_CANCELLED · HTTP 200`、
 未知状态原样透出、空状态→`—`。
 
-## 五、部署（未执行，等确认）
+## 五、部署（2026-11-20 20:34–20:41 已执行）
 
 ```bash
-# 后端（1 个文件）
+# 1) 后端
 node scripts/deploy-function-zip.cjs --fn bf-api \
   --zip outputs/admin-filter-20261120/candidate-bf-api.zip \
   --out outputs/admin-filter-20261120
 
-# 前端（2 个文件，静态托管）
-tcb hosting deploy web/admin-finance-console-20261029.js admin-finance-console-20261029.js -e xmy-test-d5g8c0xcifcefcfd5
+# 2) 前端：新文件名（绕 CDN 缓存）
+tcb hosting deploy web/admin-finance-console-20261120.js admin-finance-console-20261120.js -e xmy-test-d5g8c0xcifcefcfd5
+
+# 3) 最后上传入口页
 tcb hosting deploy web/admin.html admin.html -e xmy-test-d5g8c0xcifcefcfd5
 ```
+
+### 踩到的坑：静态托管按路径缓存
+
+第一次按原文件名覆盖上传 `admin-finance-console-20261029.js`（11948 字节），
+线上 `curl` 拿到的仍是旧内容（10715 字节，无 `financeStatusFilter`）。`tcb hosting` 没有 purge 命令。
+
+**解决**：换新文件名 `admin-finance-console-20261120.js`（全新路径必然命中新内容），
+`admin.html` 引用改为该文件名 + `?v=202611201`。旧文件名保留且内容同步更新。
+
+**为什么这样安全**：缓存未刷新期间，旧页面引用旧 JS，功能完整只是没有新筛选 —— 不会出现
+"新 HTML 配旧 JS"导致的白屏或报错。新页面一旦生效，引用的是全新 JS 路径，必然是完整新版。
+
+### 部署后验证
+
+| 项 | 结果 |
+|---|---|
+| 后端包内含 `STATUS_FILTERS` | ✓（`after-bf-api.zip` 实测 4 处） |
+| 真实接口 `status=failed` | ✓ 20 条混排（partial 5 + outcome_unknown 4 + not_dispatched 11）|
+| 真实接口 `status=rejected` | ✓ 20/20 全 rejected |
+| 真实接口 `status=no_such` | ✓ HTTP 400 |
+| 无 token 访问 | ✓ HTTP 401 |
+| 正式地址 admin.html | ✓ 77338 字节，引用 `admin-finance-console-20261120.js?v=202611201` |
+| 正式地址新 JS | ✓ 11948 字节，含 `financeStatusFilter` 2 处 |
+| 真实浏览器渲染（Chrome headless + CDP） | ✓ 8 个状态选项、20 行数据、状态列「部分成功 · HTTP 200」、失败标红 |
+
+浏览器验证脚本：`scripts/verify-admin-ui-20261120.cjs`（建临时 admin → 注入 token → 切 tab7 →
+展开明细 → 选「仅失败」→ 断言行数 → 截图 → 删账号）。截图 `outputs/admin-filter-20261120/admin-failure-filter-live.png`。
 
 ## 六、回滚
 
 | 对象 | 回滚方式 |
 |---|---|
-| bf-api | `outputs/admin-filter-20261120/before-bf-api.zip` |
-| 前端 JS | 重新上传上一版 `admin-finance-console-20261029.js` |
-| admin.html | 版本号改回 `?v=20261106` 并重新上传 |
+| bf-api | `node scripts/deploy-function-zip.cjs --fn bf-api --zip outputs/admin-filter-20261120/before-bf-api.zip` |
+| admin.html | 用 `outputs/admin-filter-20261120/static-before/admin.html` 重新上传（它引用 `?v=20261106`） |
+| 前端 JS | `outputs/admin-filter-20261120/static-before/admin-finance-console-20261029.js` 是部署前的线上原件；如需彻底回退，把它传回 `admin-finance-console-20261029.js` 并回滚 admin.html |
+
+> 回滚注意：静态托管有路径缓存，回滚也要换文件名或等 CDN 过期，否则同样会看到旧内容。
 
 ## 七、注意事项
 
 1. `failed` 的 `in` 查询目前未建复合索引。台账 900+ 条无感；数据量上万后若变慢，需给 `bf_model_calls` 建 `(status, startedAt)` 复合索引。
 2. 只读接口，不改任何账务数据，不产生模型调用，**零成本**。
+3. 旧文件 `admin-finance-console-20261029.js` 已同步为新内容但被 CDN 缓存；新 HTML 不再引用它，
+   没有页面依赖，可择期删除。
