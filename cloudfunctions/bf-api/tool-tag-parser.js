@@ -153,12 +153,15 @@ function stripToolTags(text) {
 
 /** 这段文本是否出现工具标签迹象（用于决定是否转入缓冲） */
 function looksLikeToolTag(text) {
-  const s = String(text || "");
-  // 模型用的竖线是全角「｜」，正则里必须两种都覆盖
+  let s = String(text || "");
+  // 上游/网关可能把尖括号转义，检测前先还原（只用于判断，不改原文）
+  s = s.replace(/\\u003c/gi, "<").replace(/\\u003e/gi, ">");
+  // 模型用的竖线是全角「｜」，两种都要覆盖
   if (/<[｜|]?DSML[｜|]?/i.test(s)) return true;
   if (/<tool_calls?>/i.test(s)) return true;
-  // 边界：chunk 以「<」或「<t」结尾，下一块可能续上标签
-  if (/<[a-z_]*$/i.test(s)) return true;
+  // 半截标签：SSE 行里 content 后面紧跟 JSON 引号，不是行尾，
+  // 旧写法用 /<[a-z_]*$/ 在整行上永远匹配不到。
+  if (/<[a-z_]{0,12}"/i.test(s)) return true;
   return false;
 }
 
