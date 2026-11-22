@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作文档 · 2026-11-20 至 11-22</title>
+<style>
+  :root{
+    --ink:#1a2030; --sub:#5a6377; --line:#e3e7ee; --bg:#f6f8fb; --card:#fff;
+    --green:#1c7350; --green-bg:#e9f5ef; --red:#b52a2a; --red-bg:#fcecec;
+    --amber:#9d6209; --amber-bg:#fcf4e4; --blue:#28568f; --blue-bg:#ecf2fa;
+    --purple:#5b3d8c; --purple-bg:#f2eefb;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.8 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;padding:34px 20px 70px}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-.4px;margin-bottom:8px;line-height:1.35}
+  .meta{color:var(--sub);font-size:13.5px;margin-bottom:8px}
+  h2{font-size:20px;margin:38px 0 14px;padding-left:12px;border-left:4px solid var(--green)}
+  h3{font-size:16px;margin:24px 0 10px}
+  h4{font-size:14.5px;margin:16px 0 6px;color:var(--sub);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:9px 0}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f2f5f9;font-weight:600;font-size:13px;color:var(--sub)}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;padding:1px 9px;border-radius:11px;font-size:12px;font-weight:600;white-space:nowrap}
+  .ok{background:var(--green-bg);color:var(--green)}
+  .bad{background:var(--red-bg);color:var(--red)}
+  .warn{background:var(--amber-bg);color:var(--amber)}
+  .info{background:var(--blue-bg);color:var(--blue)}
+  .new{background:var(--purple-bg);color:var(--purple)}
+  code{background:#f1f4f8;padding:1px 5px;border-radius:4px;font-size:13px;font-family:ui-monospace,Consolas,monospace}
+  pre{background:#1b212c;color:#dde4ef;padding:14px 16px;border-radius:8px;font-size:12.5px;overflow-x:auto;line-height:1.75;margin:10px 0;white-space:pre-wrap;word-break:break-word}
+  pre code{background:none;color:inherit;padding:0;font-size:12.5px}
+  .note{background:var(--amber-bg);border-left:4px solid var(--amber);padding:11px 15px;border-radius:0 8px 8px 0;font-size:13.5px;margin:12px 0}
+  .good{background:var(--green-bg);border-left:4px solid var(--green);padding:11px 15px;border-radius:0 8px 8px 0;font-size:13.5px;margin:12px 0}
+  .badbox{background:var(--red-bg);border-left:4px solid var(--red);padding:11px 15px;border-radius:0 8px 8px 0;font-size:13.5px;margin:12px 0}
+  .ts{display:inline-block;background:#eef2f8;color:var(--blue);font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:2px 8px;border-radius:5px;margin-right:8px;font-weight:600}
+  .stage{position:relative;padding-left:22px;margin:20px 0}
+  .stage::before{content:"";position:absolute;left:5px;top:9px;bottom:-14px;width:2px;background:var(--line)}
+  .stage:last-child::before{display:none}
+  .stage::after{content:"";position:absolute;left:0;top:7px;width:12px;height:12px;border-radius:50%;background:var(--green);border:2px solid #fff;box-shadow:0 0 0 2px var(--green-bg)}
+  .q{background:#f5f7fa;border-radius:8px;padding:10px 14px;font-size:13.5px;color:#333c4d;margin:8px 0;border-left:3px solid #b9c3d3}
+  .q b{color:var(--ink)}
+  ul,ol{padding-left:22px;margin:6px 0}li{margin:4px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kv{font-size:13.5px;padding:3px 0}.kv b{color:var(--sub);font-weight:600;min-width:92px;display:inline-block}
+  .toc{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 22px;margin-bottom:20px}
+  .toc ol{font-size:14px}
+  .toc a{color:var(--blue);text-decoration:none}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>工作文档 · 2026-11-20（周五）→ 11-22（周日）</h1>
+  <div class="meta">BossAI · aigc-video &nbsp;|&nbsp; 环境 <code>xmy-test-d5g8c0xcifcefcfd5</code> &nbsp;|&nbsp; 整理时间 2026-11-22 19:52</div>
+  <div class="meta">本文覆盖三天的全部工作：遇到什么问题、你让我做什么、我怎么做的、最终效果，附线上完整提示词与测试报告索引。</div>
+
+  <div class="toc">
+    <b style="font-size:14px">目录</b>
+    <ol>
+      <li><a href="#s0">三天概览</a></li>
+      <li><a href="#s1">11-20 周五：止血与回退</a></li>
+      <li><a href="#s2">11-21 周六：文字层三条路</a></li>
+      <li><a href="#s3">11-22 周日：从报错到契约定型</a></li>
+      <li><a href="#s4">附一：线上完整提示词（全文）</a></li>
+      <li><a href="#s5">附二：测试报告索引</a></li>
+      <li><a href="#s6">附三：代码提交与文档</a></li>
+      <li><a href="#s7">附四：遗留问题</a></li>
+    </ol>
+  </div>
+
+  <h2 id="s0">一、三天概览</h2>
+
+  <div class="card">
+    <div class="grid2">
+      <div>
+        <div class="kv"><b>时间跨度</b>11-20 11:25 → 11-22 19:52（约 56 小时）</div>
+        <div class="kv"><b>主线目标</b>修稳定 + 修文字 + 修排版</div>
+        <div class="kv"><b>服务端部署</b>bf-api 约 20 次、bf-image 约 12 次</div>
+        <div class="kv"><b>代码提交</b>4 条（287d8a9 / dc92e5c / 712482f / c122f88）</div>
+      </div>
+      <div>
+        <div class="kv"><b>文档</b>docs/ops 65 篇、CHANGELOG 30 条</div>
+        <div class="kv"><b>测试</b>单测 1001 项、接口 6 项、客户端 3 项</div>
+        <div class="kv"><b>真实场景</b>烘焙 / 口腔 / 安防 / 编程 四个行业</div>
+        <div class="kv"><b>额度消耗</b>真实场景测试 ¥1.23，其余为调试抽卡</div>
+      </div>
+    </div>
+    <h4>三天的性质</h4>
+    <table>
+      <tr><th style="width:110px">日期</th><th>在做什么</th><th>结果</th></tr>
+      <tr><td>11-20 周五</td><td>线上连续出事：带图对话报错、海报断流。先止血、再全面体检、最后按你要求整体回退</td><td><span class="pill ok">稳定下来</span></td></tr>
+      <tr><td>11-21 周六</td><td>正面攻「文字崩坏」：试服务端真字体层，失败；试极简提示词，成功</td><td><span class="pill warn">找到方向</span></td></tr>
+      <tr><td>11-22 周日</td><td>把这个方向做成可重复的工程：契约、审计、重试、网格、文档与提交</td><td><span class="pill ok">定型上线</span></td></tr>
+    </table>
+  </div>
+
+  <h2 id="s1">二、11-20 周五：止血与回退</h2>
+
+  <div class="stage">
+    <h3><span class="ts">11:25</span>带图对话必然报错「暂时无法确认本次用量」</h3>
+    <div class="card">
+      <h4>问题</h4>
+      <p>你在 App 里发一张图，立刻报 <code>BILLING_UNAVAILABLE</code>，连试都进不去。</p>
+      <h4>根因</h4>
+      <p><code>shared/cost-budget-admission.js</code> 的 <code>upperBound()</code> 第一行就是：只要 <code>inputImages &gt; 0</code> 就返回 null；<code>reserve()</code> 拿到 null 直接抛错。而台账里 chat 的 <code>inputImages</code> 正是按图片段数统计的——**发图必然触发**。</p>
+      <h4>做法</h4>
+      <ul>
+        <li><code>upperBound</code> 不再因带图返回 null，改为按张数定界（每张 1500 token 预估）</li>
+        <li>只把文本计入字节统计——base64 图片参与字节折算会把预估抬高几十倍，反而误判额度耗尽</li>
+        <li>顺带修：<code>usage-settlement.js</code> 的跨周期分支原来「不扣费也不释放预留」，会把 0.164 的 hold 永久挂在账户上</li>
+      </ul>
+      <h4>效果</h4>
+      <p>11:29 发布 → 11:33 补结算修复 → 实测 HTTP 200、chargeState=committed、实扣 0.005684。全量测试 980/980。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">11:58</span>发图做海报，中途断流「输出尚未完成」</h3>
+    <div class="card">
+      <h4>问题</h4>
+      <p>客户 11:39–11:40 连试 4 次，全部在中途断流，一张图都拿不到。</p>
+      <h4>根因（日志实锤）</h4>
+      <p><code>require(...).reviewAndAdaptPosterCalls is not a function</code>——不是网络、不是超时、不是模型。</p>
+      <p>本地 <code>index.js</code> 里有一套**从未上线**的海报复核改动，11-20 上午修计费时，发布脚本默认文件清单包含 <code>index.js</code>，把这套未上线代码整段带了上去；而它依赖的 <code>poster-canvas-calls.js</code> 线上还是 11-10 旧版，没有那个函数 → 一生成海报就 TypeError。</p>
+      <h4>做法</h4>
+      <ol>
+        <li>11:52 先补推 <code>poster-canvas-calls.js</code>，崩溃消失</li>
+        <li>11:58 把 <code>index.js</code> 回退到 11-18 11:40 的线上版本，整套未上线逻辑撤下</li>
+        <li>发布脚本参数化（<code>FILES=</code> / <code>OUT_DIR=</code> / <code>SKIP_STATIC=1</code>），以后只推明确列出的文件</li>
+      </ol>
+      <h4>效果</h4>
+      <p>端到端复测 HTTP 200、收到 <code>[DONE]</code>、16 段文案、比例 3:4、台账 succeeded；纯文本对话也正常。</p>
+      <div class="badbox"><b>教训：</b>发布脚本默认全量推 <code>index.js</code>，等于每次都在替换主逻辑。这条后来写进了流程。</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">12:20</span>全链路体检：44 项真实请求</h3>
+    <div class="card">
+      <h4>做法</h4>
+      <p>覆盖产物自洽、登录与会员门禁、对话（文本/流式/视觉/多轮）、海报工具调用、生图（纯文/带参考图/幂等/额度）、同步（推送/拉取/墓碑/防呆）、定时任务、员工端、管理端、计费结算。</p>
+      <h4>结果</h4>
+      <p>44 项检查，影响正常使用的缺陷 <b>0</b>。首轮 3 处断言未过，全是测试脚本自己写错协议（<code>items</code> 应为 <code>records</code>、删除标记应为 <code>payload.isDeleted</code>）或断言过严。</p>
+      <p>花费 0.81 元（6 笔对话 + 5 笔生图，2 笔幂等命中免费）。</p>
+      <h4>新发现（未改）</h4>
+      <p><code>shared/error-catalog.js</code> 未登记 20 个业务错误码，<code>publicError</code> 会把它们统一降级成 <code>INTERNAL</code>。文案仍正确，但诊断统计会把正常业务失败记成内部错误。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">12:42</span>你要求整体回退到 11-17 中午版本</h3>
+    <div class="card">
+      <div class="q"><b>你的指令：</b>「把 11 月 17 日下午 2 点之后的所有更改都删掉，只保留中午那版」</div>
+      <h4>做法</h4>
+      <p>不是重改，是<b>把原件放回</b>，字节完全一致：</p>
+      <ul>
+        <li><code>bf-api</code> ← 11-17 已验证包，线上 12:41:24 Active</li>
+        <li><code>bf-image</code> ← 11-17 已验证包，线上 12:41:38 Active</li>
+      </ul>
+      <p>每步先把当时的线上备份到 <code>outputs/rollback-20261117-20261120/</code>。</p>
+      <h4>回退掉的东西</h4>
+      <p>原生叠字流水线（native-copy + opencv）、成本预算准入（含 11-20 的带图崩溃点）、80 元预算、租户隔离、11-17 晚的密集文案修复。</p>
+      <h4>复检</h4>
+      <p>核心链路 24 项 <b>24/24 通过</b>。用客户那张 1625×1920 原图实测：文案里热线正确（<code>400-7758-119</code>），但<b>出图把号码画成了 183-3628-2668</b>。</p>
+      <div class="note">根因：11-17 版只有文案达到 250 字才走程序叠字，本次约 200 字未达标 → 文字由模型自绘 → 数字必错。这是 11-17 版本固有限制，不是回退造成的。11-18 的 native-copy 正是为解决它而生，但你认为视觉变差，所以这次选择视觉优先。</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">13:35</span>品牌事实改由服务端自动记忆</h3>
+    <div class="card">
+      <h4>问题</h4>
+      <p>客户说过的公司名 / 热线 / Logo 要求，系统一条都没记住，海报上出现「品牌名称」「号码待补充」。</p>
+      <h4>根因（不是客户没说）</h4>
+      <ol>
+        <li>原有抽取只认固定句式（<code>电话统一用…</code>），客户原话「把我们公司的全国服务热线400-7758-119添加上去」匹配不到</li>
+        <li>抽取前会过滤含 <code>这次/本次/这张/建议/可能</code> 的句子，客户原话里正好有这些词</li>
+        <li>抽取由客户端触发，不是每轮都跑</li>
+      </ol>
+      <h4>做法</h4>
+      <p>新增 <code>brand-memory.js</code>，在每轮对话扫描<b>用户原文</b>，确定性抽取三类事实写入长期记忆：公司全称、联系电话、Logo 长期要求。同一事实用「类别+值」哈希作 refId，重复写不会堆积；整个动作 800ms 上限，失败静默。</p>
+      <h4>状态</h4>
+      <p>候选包已生成并通过逐文件门禁。<b>当时 CloudBase 凭据 13:27 过期</b>，等登录后发布（后续已发）。</p>
+    </div>
+  </div>
+
+  <h2 id="s2">三、11-21 周六：文字层三条路</h2>
+
+  <div class="card">
+    <p>周六的核心问题是客户那句反馈：<b>海报上的小字 100% 崩坏</b>，出现「北海址小止眨·栗子现 40y」这类伪文字。主标题正确，说明/参数全糊。这一天把三条路都试了一遍。</p>
+  </div>
+
+  <div class="stage">
+    <h3>路一：服务端真字体层（试了，否决）</h3>
+    <div class="card">
+      <h4>做法</h4>
+      <p>Seedream 只出「背景 + 主视觉 + 插画」，明确不出现任何文字；服务端用 satori + resvg + Noto CJK 渲染文字层，再用 pngjs 做 alpha 合成。</p>
+      <p>新增 <code>poster-overlay.js</code>（版式树 + 草图生成）、<code>overlay-pipeline.js</code>（管线）。</p>
+      <h4>效果</h4>
+      <p>文字 <b>100% 正确</b>、任意字号清晰、改文案不用重生图（成本 0）。但版式是服务端网格。</p>
+      <div class="badbox"><b>你当时的原话：</b>「每个模块都是这种直接方形切割，一条竖线切割，就会感觉很割裂。然后你这个整体也仍然很不美」。<br>所以这条路<b>默认关闭</b>（<code>IMAGE_COMPOSITION_POLICY.overlay.enabled=false</code>），能力保留作兜底。</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3>路二：极简提示词交给 Seedream 排版（成功，成为主线）</h3>
+    <div class="card">
+      <h4>做法</h4>
+      <p>压到 435 字，只给「用途 + 素材 + 画面 + 逐行文字 + 三条风格」，不写版式清单、不写坐标、不堆形容词。</p>
+      <h4>效果</h4>
+      <p>六款产品名、说明、价格、电话<b>全部正确</b>，而且模型自己排出了撕纸边缘、枫叶、手绘图标等设计元素。</p>
+      <div class="good"><b>这一步定下了整个方向：</b>版式交给 Seedream，我们只说清「要什么、做什么、给了什么」，文字逐行列出即可。</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3>配套：草图约束 / 去二维码 / 长文排版</h3>
+    <div class="card">
+      <table>
+        <tr><th style="width:130px">事项</th><th>做法与结论</th></tr>
+        <tr>
+          <td>草图约束</td>
+          <td>服务端出一张纯色块草图作参考图，Seedream 严格按草图重绘——解决了「分区比例偏差导致文字层对不齐」的问题。</td>
+        </tr>
+        <tr>
+          <td>去二维码</td>
+          <td>对比两条路：服务端 inpaint（免费）定位不准、有残留；<b>Seedream 局部重绘</b>（¥0.28 / 15 秒）完全干净、其他内容零改动。选后者，且这条能力可复用于「去掉某个模块」「换掉某段文案」。</td>
+        </tr>
+        <tr>
+          <td>长文全文排版</td>
+          <td><code>longformTree</code>：标题带 + 多栏流式正文 + 首字下沉 + 引用块 + 页脚，500–1500 字可排，字号按内容量自适应。代码就绪，<b>分流未接</b>。</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <h2 id="s3">四、11-22 周日：从报错到契约定型</h2>
+
+  <div class="stage">
+    <h3><span class="ts">09:21</span>你发来两张报错截图</h3>
+    <div class="card">
+      <div class="q"><b>你的动作：</b>发截图，显示「画布比例与要求不同」「输出尚未完成」两类报错。</div>
+      <h4>排查</h4>
+      <p>账号下只有 1 个环境，App 默认指向它，构建不注入其他地址——不存在「打到别处」。日志按毫秒串起来，定位到 <b>09:20:32 – 09:21:28</b>，同一台设备：</p>
+      <table>
+        <tr><th style="width:110px">时间</th><th>事件</th></tr>
+        <tr><td>09:20:32</td><td>改比例任务进来（9:16，1 张原图）</td></tr>
+        <tr><td>09:21:04</td><td>生图成功（31.5 秒，2K）</td></tr>
+        <tr><td>09:21:20</td><td>对话请求：召回 4 张历史原图 + 1 张当前附件</td></tr>
+        <tr><td>09:21:25</td><td><code>chat_stream_incomplete</code>：<code>IMAGE_REFERENCE_CONFLICT</code> → 你看到的「输出尚未完成」</td></tr>
+        <tr><td>09:21:27 / 28</td><td>素材上传连吃两次 422 <code>ASSET_SIZE_LIMIT</code></td></tr>
+      </table>
+      <h4>两个根因</h4>
+      <ul>
+        <li><b>参考冲突杀流</b>：模型把「4 张历史原图」和「本轮附件」塞进同一次组图调用，契约规定互斥，直接抛错冒到最外层，SSE 结束。自动修复只覆盖 <code>TOOL_ARGUMENTS_INVALID</code>，这个码不在修复集合。</li>
+        <li><b>超限文案含糊</b>：24MB 上限，报的却是「这次内容没有完整保存，请检查输入后重试」，用户只会反复重试同一张图。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">12:03</span>修复 A + B 并上线</h3>
+    <div class="card">
+      <div class="q"><b>你的指令：</b>「a＋b 做完之后进行全量测试 确保不会影响用户体验 包括画布比例与要求不同这种报错 你至少把生成的东西返回给用户吧」</div>
+      <h4>A：参考冲突改为收敛，不再杀流</h4>
+      <ul>
+        <li>结构层：本轮有附件就以附件为准，丢掉历史项；历史编号未签发也降级放行</li>
+        <li>管线层：任何参考类错误先剥掉参考字段重跑一次，仍失败就原样放行交给工具层，让模型同轮自己重试</li>
+        <li>核心判断：<b>契约是素材编排的护栏，不该决定这轮回复的生死</b></li>
+      </ul>
+      <h4>B：超限说人话</h4>
+      <p>返回「这张图约 30MB，超过 24MB 上限；请压缩后或换一张再发」。协议没变（仍 422），旧包也能显示。</p>
+      <h4>C：比例不符也要把图给你（代码已改，需出包）</h4>
+      <p>客户端原来校验失败就 <code>continue</code>，把已生成的图直接丢掉。现在照常落库展示，提示改成「这张图的比例和原图不一致，已按生成结果返回」。</p>
+      <h4>效果</h4>
+      <p>单测 13/13、接口回归 6/6、端到端 1776×2368、线上 5640 条目 0 差异。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">15:28</span>你指出：口腔那张纯白太素、文字太少</h3>
+    <div class="card">
+      <div class="q"><b>你的指令：</b>「开始修复这些问题吧 然后还有你看你口腔这张图的背景就是纯白太素 没有任何相关元素来丰富海报 然后就是文字信息太少了 你每次做完一轮都要自测链路问题和客户端问题 不要让用户那边再报错了」</div>
+      <h4>找到的真正根因（当天最有价值的发现）</h4>
+      <p>不是风格写得不够，是<b>风格段被降级逻辑整段丢弃</b>：总长卡在 900 字，六卡文案一挤就降级到 minimal 档，而 minimal 档把「画面」和「风格」两段都删掉，只留文字清单。发出去的提示词就是「一张白底 + 一堆文字」。</p>
+      <div class="good">修法：风格段改为永不可省（新增精简版 <code>STYLE_MIN</code>，任何档位都带），压缩固定段腾预算，上限提到 1100 字。</div>
+      <h4>同时改的 8 处</h4>
+      <table>
+        <tr><th style="width:34px">#</th><th>改动</th><th>解决的问题</th></tr>
+        <tr><td>1</td><td>风格段永不可省 + 上限提高</td><td>纯白底根因</td></tr>
+        <tr><td>2</td><td>风格写清「底色要有色调材质、用色块印章分区、每区配图、四角装饰」</td><td>白底表格感</td></tr>
+        <tr><td>3</td><td>构图改「上方主视觉 → 渐隐过渡 → 下方浅色信息面」，明确禁止硬边横切</td><td>场景不吃掉文字，也不割裂</td></tr>
+        <tr><td>4</td><td>卡片恢复「名称 + 价格 + 说明」，说明限 12–14 字</td><td>上一版砍掉说明导致「文字太少」</td></tr>
+        <tr><td>5</td><td>主标题写进<b>画面描述开头</b>，标「品牌既定文案」</td><td>标题被改成「秋天的栗香」等</td></tr>
+        <tr><td>6</td><td>底部信息带合并成一条指令</td><td>同一组电话印两遍</td></tr>
+        <tr><td>7</td><td>禁令点名：不写超过 20 字长段落、不写「二维码空位」占位说明</td><td>底部 200 字伪文字</td></tr>
+        <tr><td>8</td><td><code>labels</code>+<code>bodies</code> 等长时配对成卡片</td><td>模型用双数组写稿时产品卡区是空的</td></tr>
+      </table>
+      <h4>新增结构审计 + 硬伤自动重跑</h4>
+      <p>出图后视觉回读，只对硬伤（标题/电话/署名/卡数不足/编号重复）重跑一次；「说明被润色」这类软问题不重跑。</p>
+      <h4>效果</h4>
+      <p>口腔：诊室实景打底、六卡带完整规格、规格审计 <b>11/11 零缺失</b>。烘焙：六卡齐全、规格 11/11 零缺失。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">17:42</span>你批评排版丑、只有文字、浪费额度</h3>
+    <div class="card">
+      <div class="q"><b>你的原话：</b>「你这个排版也太丑了吧也不对称 dental 这张图片也只有文字啊 你不要浪费我的 seedream 额度做一些没必要的测试 你代码写好验证了吗 就测试 有参考社区方案吗」</div>
+      <h4>先认下三点</h4>
+      <ul>
+        <li>排版不对称：我只写了「网格对齐」，没约束<b>卡片等高、同栏等宽</b></li>
+        <li>只有文字：口腔素材只有诊室照和 logo，没有产品图，模型就只摆字</li>
+        <li>浪费额度：改一版跑一次图，确实不该</li>
+      </ul>
+      <h4>查社区方案（不是我自己想的）</h4>
+      <table>
+        <tr><th style="width:110px">来源</th><th>可用的原文</th></tr>
+        <tr><td>StartAI</td><td>「设计输出须<b>严格符合网格系统布局规范</b>，确保元素对齐、间距统一、比例协调」</td></tr>
+        <tr><td>CSDN 实测</td><td>「按顶部、中央、中底部划分」「规整地排布在<b>网格模块</b>内，层级分明」</td></tr>
+        <tr><td>起剖</td><td>「拆成<b>主体、背景、文字区</b>三块分别描述」</td></tr>
+      </table>
+      <h4>建本地自检脚本（这是工作方式的转折）</h4>
+      <p><code>scripts/verify-prompt-contract-20261122.cjs</code>，12 项检查，纯本地、不花钱，<b>不合格不许出图</b>。</p>
+      <div class="good">
+        <b>它当场抓出 5 个跑图也看不出来的问题：</b><br>
+        ① 风格段被降级成精简版（full 档 1101 字，超上限 1 字）→ 又会变纯白底<br>
+        ② 缺「无素材画示意图」→ 卡片会只有文字<br>
+        ③ 说明合并后 13 字超限<br>
+        ④ <code>质保10年</code> 被长度过滤器当碎片丢掉（阈值 6 字，它只有 5 字）<br>
+        ⑤ 对象形态文案没锁画布，会出 2:3
+      </div>
+      <h4>另外修了兜底的一个盲区</h4>
+      <p>原来按产品名判卡数，但模型会把「隐形矫正」写进右侧服务列表，OCR 读到就判「齐全」，实际卡片少了两张。<b>价格只出现在卡片里</b>，改用价格缺失 ≥2 判卡数才可靠。</p>
+      <h4>效果</h4>
+      <p>六卡严格两列三行、等高、等宽、左对齐；价格 4980/9800/12800/2680/23800/180 全对；卡片有图标。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">18:23</span>你给 1.5 元额度，要求用真实场景测</h3>
+    <div class="card">
+      <div class="q"><b>你的指令：</b>「你用用户最近的聊天记录进行测试给你1.5元的额度 最近2星期用户有多个不同场景的使用 你看聊天记录测试一下」</div>
+      <h4>先说明一件事</h4>
+      <p>服务端不存对话正文（<code>bf_model_calls</code> 只有元数据）。所以先用 <code>bf_tool_events</code> 统计最近 14 天真实使用分布，用它决定测什么：</p>
+      <table>
+        <tr><th style="width:210px">真实信号</th><th>次数</th><th>含义</th></tr>
+        <tr><td>精细版式 <code>detailed_layout</code></td><td>10</td><td>用户在要求具体版式、多栏、分区</td></tr>
+        <tr><td>品牌准确 <code>brand_accuracy</code></td><td>9</td><td>品牌名、型号、参数不能错</td></tr>
+        <tr><td>素材上传</td><td>142</td><td>大量带图需求</td></tr>
+        <tr><td>同步失败</td><td>70</td><td>客户端断网重试</td></tr>
+      </table>
+      <p>结论：真实需求是「品牌内容图 + 精细版式」。所以挑了最近没测过的两个硬场景。</p>
+      <h4>两个场景</h4>
+      <table>
+        <tr><th style="width:100px">场景</th><th>对话</th><th>核心要求</th></tr>
+        <tr><td>智能安防</td><td>47 轮</td><td>六款设备型号参数一个不能错，电话必须印对，参考旧单页</td></tr>
+        <tr><td>少儿编程</td><td>45 轮</td><td>六个阶段年龄课时写全，电话醒目，能贴公告栏也能发家长群</td></tr>
+      </table>
+      <h4>出图前先本地验证提示词</h4>
+      <p>安防 1064 字、编程 996 字，都是 full 档、6 卡、画布 3:4。</p>
+      <h4>结果</h4>
+      <table>
+        <tr><th style="width:120px">指标</th><th>安防</th><th>编程</th></tr>
+        <tr><td>六条目齐全</td><td><span class="pill ok">6 / 6</span></td><td><span class="pill bad">5 / 6（S3 重复）</span></td></tr>
+        <tr><td>电话</td><td><span class="pill ok">正确、大号</span></td><td><span class="pill ok">正确、大号</span></td></tr>
+        <tr><td>价格</td><td><span class="pill bad">六款一个没印</span></td><td>—</td></tr>
+        <tr><td>排版对称</td><td><span class="pill ok">三列两行严格对齐</span></td><td><span class="pill warn">阶梯错落但编号乱</span></td></tr>
+        <tr><td>配图</td><td><span class="pill ok">每卡设备图</span></td><td><span class="pill warn">只有图标</span></td></tr>
+      </table>
+      <div class="note">
+        <b>这轮最确定的结论：素材决定上限。</b>安防有 6 张设备图，六条目全对且对称；编程没有阶段配图，模型把精力花在编号和箭头上，条目就漏了。<br>
+        产品侧据此可以引导：要求写全多条目时，提示上传对应产品图，比反复调提示词有效。
+      </div>
+      <p>花费：¥1.23 / 1.50（2 张图 + 视觉审计 + 92 轮对话）。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">18:52</span>你要求三步修复，并追问 GitHub 提交</h3>
+    <div class="card">
+      <div class="q"><b>你的指令：</b>「三步同步进行 然后确定你是否每次修改都在github有文档说明 提交记录」</div>
+      <h4>三步</h4>
+      <table>
+        <tr><th style="width:34px">#</th><th>改动</th><th>依据</th></tr>
+        <tr>
+          <td>①</td>
+          <td>结构审计补「编号重复」判定：同一编号（S3）在图上出现 ≥2 次即判条目被合并，触发重跑</td>
+          <td>编程那张 S1/S2/S3/<b>S3</b>/S4/S5，实际只排 5 个阶段</td>
+        </tr>
+        <tr>
+          <td>②</td>
+          <td>价格粘进名称块：<code>「AC-2000 双目球机 ¥1280」</code></td>
+          <td>拆成两个引号块时报价会被整体省略</td>
+        </tr>
+        <tr>
+          <td>③</td>
+          <td>同步失败排查</td>
+          <td>见下</td>
+        </tr>
+      </table>
+      <h4>同步失败 70 次的结论</h4>
+      <table>
+        <tr><th style="width:130px">维度</th><th>结果</th></tr>
+        <tr><td>来源</td><td>同一个账号 + 同一个旧包（2026100901，10-09 构建）+ iOS</td></tr>
+        <tr><td>时间</td><td>11-09 01:18 → 11-11 01:41，<b>之后零复现</b></td></tr>
+        <tr><td>代码侧</td><td>sync 接口有 v1/v2，<b>没有最低版本校验</b></td></tr>
+      </table>
+      <p><b>不改代码</b>：加 426 能让旧包停止重试，但如果还有人用那个包，加了等于让他们同步直接失败。为已消失的问题引入新风险不划算，已记文档、下次出包再评估。</p>
+      <h4>GitHub 查出来的问题（比预想严重）</h4>
+      <div class="badbox">
+        远端最新提交停在 <b>11-20 20:53</b>，11-21、11-22 两天一条没提交；<br>
+        更严重：<code>prompt-contract.js</code>、<code>number-audit.js</code> <b>只存在于部署副本，仓库里从来没有这两个文件</b>；<br>
+        根因：<code>.gitignore</code> 整体忽略 <code>cloudfunctions/*/shared/</code>，而里面全是源码。<br>
+        后果：从仓库重新部署会得到一份缺文字契约和出图审计的服务端代码。
+      </div>
+      <h4>已修</h4>
+      <ul>
+        <li>解除 <code>shared/</code> 忽略（只留 <code>shared/node_modules/</code>）</li>
+        <li>8 个文件同步回仓库源码，逐文件 md5 一致</li>
+        <li>写 <code>docs/ops/poster-contract-20261122.md</code>，补 CHANGELOG 11-21、11-22 两条</li>
+        <li>提交 <code>287d8a9</code>（16 文件）+ <code>dc92e5c</code>（17 文件）</li>
+      </ul>
+      <h4>效果</h4>
+      <p>本地自检 12 项、单测 21/21、接口回归 6/6、线上逐文件 0 差异。这轮没出图，不耗额度。</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <h3><span class="ts">19:44</span>你追问文档写哪去了</h3>
+    <div class="card">
+      <div class="q"><b>你的原话：</b>「那之前我不是让你和我的chatgpt每次修改都写文档说明 你们两写哪去了」</div>
+      <h4>查出来的事实</h4>
+      <table>
+        <tr><th style="width:170px">问题</th><th>实际</th></tr>
+        <tr><td>规矩在哪</td><td><code>AGENTS.md</code> 第 12 条：每次修改都追加北京时间、现象、根因、改动、验证、上线状态、回滚依据</td></tr>
+        <tr><td>文档写了吗</td><td>写了。docs/ops 下 65 个文件，含 11-21 三篇、11-22 完整契约说明</td></tr>
+        <tr><td>为什么看不到</td><td><b>从 11-10 起一篇都没提交</b>，<code>git status</code> 里 53 个 <code>??</code>。文档只在本地工作区</td></tr>
+        <tr><td>ChatGPT 那路</td><td>11-03 记录有它留下的 11 个未提交服务端改动 + 5 个新文件；远端有几篇本地没有的文档，说明它提交过一部分，同样不完整</td></tr>
+      </table>
+      <h4>补上的</h4>
+      <ul>
+        <li>提交 <code>712482f</code>：54 个文档（1.16MB）全部进仓库</li>
+        <li>发现换行符问题：我提交时是 CRLF、远端是 LF，导致 CHANGELOG 整文件 907 行红绿 diff（内容没丢，忽略行尾后 diff 为空）</li>
+        <li>提交 <code>c122f88</code>：23 个文件转 LF + 新增 <code>.gitattributes</code> 防复发</li>
+        <li><code>AGENTS.md</code> 加硬约束：文档必须当天提交，判断标准是 <code>git status --porcelain docs/</code> 为空</li>
+      </ul>
+      <h4>结论</h4>
+      <p>文档确实写了，但没交作业。两边都没做到「每次修改都提交」。现在是远端 <code>docs/ops</code> 51 个文件、CHANGELOG 与本地内容一致（忽略行尾后 diff 为空）。</p>
+    </div>
+  </div>
+
+  <h2 id="s4">附一：线上完整提示词（全文）</h2>
+
+  <div class="card">
+    <p>这是当前 bf-api 实际发给 Seedream 的提示词，由 <code>prompt-contract.js</code> 生成。模型自己写的画面描述只占开头一小段，其余全是逐字清单与约束。</p>
+    <div class="kv"><b>结构</b>用途 → 素材 → 画面（含标题锁定）→ 风格（含网格）→ 逐字清单 → 排版 → 禁止</div>
+    <div class="kv"><b>长度</b>安防 1058 字 / 口腔 1003 字（上限 1100）</div>
+    <div class="kv"><b>画布</b>强制 3:4（模型给 2:3 也会被改回）</div>
+  </div>
+
+  <h3>场景一：安防（六款设备带价格）</h3>
+  <pre><code>用途：竖版门店海报。
+素材：图1 是实拍照片，只作主视觉用一次，不要在其他区块重复，人物与设备保持原比例；图2 是公司 Logo 原件，原样使用，不加白底或边框。
+画面：画面上方是全图最大的标题「全域感知 智能守护」（品牌既定文案，逐字照写，不许换词、不许加前后缀）；竖版解决方案海报。天花板白色双目摄像机作为主视觉置于上方，深蓝与青灰科技色，网格与电路纹理背景，六款设备以小卡片分区陈列，画面下方深色信息带
+风格：商业海报级成品，信息密集、分区清楚。底色要有色调与材质，不要大面积纯白；分区用色块、描边、丝带、印章，不要只靠细线；每个区块都要有图形（实拍、图标、示意图或插画），没有实拍就画示意图，不要只摆文字；标题周围与四角加装饰。严格遵循网格系统：同一行卡片等高、同栏等宽、元素对齐、间距统一、比例协调。构图重心在上方主视觉，向下自然过渡到浅色信息面（渐隐、羽化，不要硬边横切），底部留一条浅色信息带放联系方式。
+以下文字逐字照写、不得改动；画面不出现其它文字、伪字或乱码：
+主标题「全域感知 智能守护」——全图最大，粗黑体，置于画面上方
+副标题「六款自研设备 · 全场景覆盖」——约为主标题的三分之一大小，常规体，紧跟主标题下方
+产品卡（六张卡集中在同一区域，两列三行，不许拆散、不许合并；等高、等宽；卡片左侧画示意图或图标（产品轮廓、结构剖面、器械简图），不要只放文字；名称加粗、价格大号、说明一行写完且六张长度接近；数字原样照写）：
+「AC-2000 双目球机 ¥1280」「400万像素 星光夜视」
+「AC-3100 枪机 ¥1960」「800万像素 电动变焦」
+「AC-4200 半球 ¥980」「500万像素 广角」
+「AC-5300 人脸闸机 ¥8600」「活体识别 0.3秒」
+「AC-6100 NVR ¥4200」「64路 8盘位」
+「AC-7000 平台 ¥28000」「私有化部署」
+底部信息带（画面最下方一条浅色带，必填，不得用标语替换；整带只出现一次，不要重复）：
+「全国服务热线 400-6632-909」　「安驰科技 ANCHE TECH」　——同一行，顺序不变
+排版：同类信息归成一区、每区有区头，不要摊平；文字不压图、不出血。
+禁止：不出现上面没列出的文字（含栏目名、标语、数据标签）；不写超过 20 字的连续长段落（品牌故事、公司简介、免责声明一律不写）；不出现销售额、订单数这类统计块；不出现看板、仪表盘、POS 或手机界面截图；不写「二维码空位」这类占位说明，留白即可。</code></pre>
+
+  <h3>场景二：口腔（六卡带规格说明）</h3>
+  <pre><code>用途：竖版门店海报。
+素材：图1 是实拍照片，只作主视觉用一次，不要在其他区块重复，人物与设备保持原比例；图2 是公司 Logo 原件，原样使用，不加白底或边框。
+画面：画面上方是全图最大的标题「重新长出一口好牙」（品牌既定文案，逐字照写，不许换词、不许加前后缀）；明亮诊室实景，数字化口扫设备，白色与薄荷绿，干净专业的医疗质感，自然光
+风格：商业海报级成品，信息密集、分区清楚。底色要有色调与材质，不要大面积纯白；分区用色块、描边、丝带、印章，不要只靠细线；每个区块都要有图形（实拍、图标、示意图或插画），没有实拍就画示意图，不要只摆文字；标题周围与四角加装饰。严格遵循网格系统：同一行卡片等高、同栏等宽、元素对齐、间距统一、比例协调。构图重心在上方主视觉，向下自然过渡到浅色信息面（渐隐、羽化，不要硬边横切），底部留一条浅色信息带放联系方式。
+以下文字逐字照写、不得改动；画面不出现其它文字、伪字或乱码：
+主标题「重新长出一口好牙」——全图最大，粗黑体，置于画面上方
+副标题「CBCT 三维评估 · 数字化导板种植」——约为主标题的三分之一大小，常规体，紧跟主标题下方
+产品卡（六张卡集中在同一区域，两列三行，不许拆散、不许合并；等高、等宽；卡片左侧画示意图或图标（产品轮廓、结构剖面、器械简图），不要只放文字；名称加粗、价格大号、说明一行写完且六张长度接近；数字原样照写）：
+「韩国奥齿泰 ¥4980」「含基台与全瓷冠·质保10年」
+「瑞士 ITI ¥9800」「亲水表面，质保15年」
+「瑞典诺贝尔 ¥12800」「钛易耐表面，终身质保」
+「全瓷贴面 ¥2680」「美学修复，少磨牙」
+「隐形矫正 ¥23800」「隐形舒适，不影响美观」
+「儿童窝沟封闭 ¥180」「预防龋齿，保护恒牙」
+底部信息带（画面最下方一条浅色带，必填，不得用标语替换；整带只出现一次，不要重复）：
+「全国服务热线 400-9902-517」　「齿悦口腔 CHIYUE DENTAL」　——同一行，顺序不变
+排版：同类信息归成一区、每区有区头，不要摊平；文字不压图、不出血。
+禁止：不出现上面没列出的文字（含栏目名、标语、数据标签）；不写超过 20 字的连续长段落（品牌故事、公司简介、免责声明一律不写）；不出现销售额、订单数这类统计块；不出现看板、仪表盘、POS 或手机界面截图；不写「二维码空位」这类占位说明，留白即可。</code></pre>
+
+  <div class="card">
+    <h4>每条约束是怎么来的（都不是拍脑袋）</h4>
+    <table>
+      <tr><th style="width:210px">提示词里的句子</th><th>来源</th></tr>
+      <tr><td>「品牌既定文案，逐字照写，不许换词」</td><td>实测标题被改成「秋天的栗香」「用一颗面包温暖每一天」</td></tr>
+      <tr><td>「逐字照写、不得改动」+ 每个词加「」</td><td>官方 Seedream 5.5 指南：要生成的文字放双引号中可提升准确率</td></tr>
+      <tr><td>「严格遵循网格系统：等高、等宽、对齐」</td><td>StartAI《Seedream 5.5 海报提示词公式》原文</td></tr>
+      <tr><td>「没有实拍就画示意图，不要只摆文字」</td><td>口腔场景无产品素材时卡片全变文字块</td></tr>
+      <tr><td>「名称与价格同一行」（价格粘进名称块）</td><td>安防六款报价被整体省略</td></tr>
+      <tr><td>「不写超过 20 字的连续长段落」</td><td>模型自己补 200 字品牌故事，全是伪字</td></tr>
+      <tr><td>「不写『二维码空位』这类占位说明」</td><td>模型把占位标注当正文印出来</td></tr>
+      <tr><td>「向下自然过渡（渐隐、羽化，不要硬边横切）」</td><td>你的原话：「直接方形切割，一条竖线切割，会很割裂」</td></tr>
+    </table>
+  </div>
+
+  <h2 id="s5">附二：测试报告索引</h2>
+
+  <div class="card">
+    <table>
+      <tr><th style="width:250px">报告</th><th>内容</th></tr>
+      <tr><td><code>report-real-scenes-20261122.html</code></td><td>真实场景测试（安防 / 编程），含成本核算与「素材决定上限」结论</td></tr>
+      <tr><td><code>report-git-and-fixes-20261122.html</code></td><td>三步修复 + GitHub 提交记录核查</td></tr>
+      <tr><td><code>report-v3-20261122.html</code></td><td>排版对称与配图修复（网格系统、社区方案依据）</td></tr>
+      <tr><td><code>report-v2-20261122.html</code></td><td>海报丰富度与文字修复（纯白底根因、8 处改动）</td></tr>
+      <tr><td><code>report-text-final-20261122.html</code></td><td>文字修复终局（11 轮试错记录、最终形态）</td></tr>
+      <tr><td><code>report-number-audit-20261122.html</code></td><td>保数字校验（OCR 回读）上线报告</td></tr>
+      <tr><td><code>report-text-fix-20261122.html</code></td><td>文字修复第一版（引号化 + 层级）</td></tr>
+      <tr><td><code>report-refguard-20261122.html</code></td><td>A+B 修复上线报告（参考冲突、素材超限）</td></tr>
+    </table>
+    <div class="note">这些报告在 <code>outputs/</code> 下，被 .gitignore 忽略，<b>只留本地</b>。要归档进仓库请告诉我，我改 .gitignore 或移到 docs/。</div>
+  </div>
+
+  <div class="card">
+    <h4>可重复执行的测试命令</h4>
+    <pre><code># 1. 本地提示词自检（12 项，不花钱，改动后必跑）
+node scripts/verify-prompt-contract-20261122.cjs
+
+# 2. 单元测试（21 项核心 + 全量 1001 项）
+node --test --no-warnings tests-backend/number-audit-20261122.test.js \
+  tests-backend/prompt-contract-20261121.test.js \
+  tests-backend/reference-conflict-20261122.test.js
+
+# 3. 接口回归（6 项）
+node scripts/preflight-refguard-20261122.cjs
+
+# 4. 客户端链路（3 项）
+node scripts/preflight-overlay-20261121.cjs
+
+# 5. 真实行业出图（消耗额度，谨慎）
+node scripts/multiscenario-test-20261121.cjs --only=security</code></pre>
+  </div>
+
+  <h2 id="s6">附三：代码提交与文档</h2>
+
+  <div class="card">
+    <h4>GitHub 提交（saas_fix 分支）</h4>
+    <pre><code>c122f88  2026-11-22 19:58  style: 统一文档换行符为 LF（此前 CRLF 覆盖 LF，907 行整文件红绿 diff）
+712482f  2026-11-22 19:50  docs: 补录 11-10 起全部 ops 文档进仓库（此前只存在于本地）
+dc92e5c  2026-11-22 19:03  docs: 补 11-21 文字层探索记录 + 提交纪律（API 提交方式）
+287d8a9  2026-11-22 19:00  fix(poster): 文字契约与出图审计（风格段不再被丢弃、标题锁定、画布锁 3:4）
+d8590a7  2026-11-20 20:53  fix(image): 元素必须服务内容（纯文字区块视为不合格）</code></pre>
+    <h4>为什么用 API 提交</h4>
+    <p>本地历史与远端已分叉（内容一致、SHA 不同，早期提交是 API 生成的），<code>git push</code> 必被拒，<code>--force</code> 会冲掉远端。</p>
+    <pre><code>node scripts/commit-via-api-20261122.cjs      # 代码与配置
+node scripts/commit-docs-via-api-20261122.cjs # 文档（自动收集 docs/ 下未提交文件）</code></pre>
+    <h4>文档体系</h4>
+    <table>
+      <tr><th style="width:210px">位置</th><th>作用</th></tr>
+      <tr><td><code>docs/CHANGELOG.md</code></td><td><b>索引</b>：30 条，按时间倒序，写现象/根因/做法/状态/是否出包</td></tr>
+      <tr><td><code>docs/ops/*.md</code></td><td><b>正文</b>：65 篇，每篇讲透一个主题的实现与取舍</td></tr>
+      <tr><td><code>AGENTS.md</code></td><td>协作纪律：修改前先读 CHANGELOG，改完当天提交</td></tr>
+      <tr><td><code>docs/RELEASE-BACKLOG.md</code></td><td>出包待办台账</td></tr>
+    </table>
+  </div>
+
+  <h2 id="s7">附四：遗留问题</h2>
+
+  <div class="card">
+    <table>
+      <tr><th style="width:34px">#</th><th>问题</th><th>影响</th><th>建议</th></tr>
+      <tr>
+        <td>1</td>
+        <td>卡片说明会被润色成卖点（「栗子泥 40 克」→「栗子奶油」）</td>
+        <td><span class="pill warn">中</span></td>
+        <td>提示词压不住，靠 OCR 审计报告逐条列出缺了什么；对外不要承诺「说明逐字」</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td>价格可能被整体省略（已用「价格粘名称」缓解）</td>
+        <td><span class="pill warn">中</span></td>
+        <td>客户要报价时，考虑独立「价格条」</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td>「对称 + 六条目 + 说明 + 配图」四件同时要，Seedream 单张做不到</td>
+        <td><span class="pill bad">高</span></td>
+        <td>需服务端接管文字层（overlay 能力已在，版式观感需重做）</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td>长文全文排版分流未接</td>
+        <td><span class="pill info">低</span></td>
+        <td><code>longformTree</code> 已就绪，等确认默认策略</td>
+      </tr>
+      <tr>
+        <td>5</td>
+        <td>大图上传 &gt;24MB 仍会被拒</td>
+        <td><span class="pill warn">中</span></td>
+        <td>需客户端上传前压缩，<b>要出包</b></td>
+      </tr>
+      <tr>
+        <td>6</td>
+        <td>客户端「比例不符不丢图」的改动未生效</td>
+        <td><span class="pill warn">中</span></td>
+        <td>代码已改，<b>要出包</b></td>
+      </tr>
+      <tr>
+        <td>7</td>
+        <td>CHANGELOG 在 11-17~11-19 空白</td>
+        <td><span class="pill info">低</span></td>
+        <td>需核对那三天是否有服务端改动，有则补记</td>
+      </tr>
+      <tr>
+        <td>8</td>
+        <td>error-catalog 未登记 20 个业务错误码</td>
+        <td><span class="pill info">低</span></td>
+        <td>只补该文件、只推这一个文件</td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h4>下次出包时需要一起验收的</h4>
+    <ul>
+      <li>比例不符时保留图片并提示，而不是丢弃（C 项）</li>
+      <li>上传前自动压缩到 ≤8MB（避免 24MB 上限被拒）</li>
+      <li>读不到原图像素时的提示文案（现在复用了「比例不符」，会误导排查）</li>
+    </ul>
+  </div>
+
+  <div class="meta" style="margin-top:28px;text-align:center">
+    本文由 2026-11-22 会话整理 &nbsp;·&nbsp; 数据来源：docs/CHANGELOG.md、docs/ops/*.md、函数日志、GitHub 提交记录
+  </div>
+
+</div>
+</body>
+</html>
