@@ -18,3 +18,7 @@ TestArtifacts/
 BossAI.zip
 node_modules/
 outputs/
+# 2026-11-22：shared 目录下都是源码（asset-store / error-catalog / number-audit 等），
+# 之前整体忽略导致「线上有、仓库没有」，改完的东西进不了版本控制。
+# 现在只忽略依赖，不忽略源码。
+cloudfunctions/*/shared/node_modules/

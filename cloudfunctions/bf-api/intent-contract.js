@@ -95,6 +95,9 @@ function resolve({ messages = [], memories = [] } = {}) {
   return {
     orientation, orientSource, ratio, ratioSource, contact, company,
     redesign, additive,
+    // 用户本轮原话：判断「是不是海报任务」时以用户说法为准，
+    // 不依赖模型自己在 tool 参数里填 render_intent（实测它经常不填）。
+    userText: latest,
     hasAny: !!(orientation || contact || company),
   };
 }
@@ -133,9 +136,48 @@ function cleanPlaceholders(blocks, company) {
   return { blocks: out, changed };
 }
 
+/**
+ * 是否是「海报 / 宣传物料」类请求。
+ * 只有这类才需要按版式组织文案；普通配图（画一只猫、一张插画、换背景）
+ * 必须原样把 prompt 交给模型，不能追加任何海报约束。
+ */
+function wantsPosterLayout(args, blocks, intent) {
+  const ri = String(args.render_intent || "").toLowerCase();
+  if (["poster", "advertisement", "banner", "flyer", "promo", "campaign"].includes(ri)) return true;
+  const tm = String(args.text_mode || "").toLowerCase();
+  if (tm === "overlay") return true;
+  // 有结构化文案（3 条以上）通常是海报/价目表/宣传物料
+  // 有 2 条以上文案，基本就是「海报/价目表/宣传物料」而非普通配图
+  if (Array.isArray(blocks) && blocks.length >= 2) return true;
+  // blocks 只认 text 数组；模型常用 labels/bodies、products、items 这些形态，
+  // 这时 blocks 是 null，判定会漏，画布也就不会被规范化（实测出过 2:3）。
+  const st = args.structured;
+  if (st && typeof st === "object") {
+    const counts = ["labels", "bodies", "products", "items", "text"].map(k => (Array.isArray(st[k]) ? st[k].filter(Boolean).length : 0));
+    if (Math.max(...counts) >= 2) return true;
+  }
+  // 以用户原话为准：模型经常不填 render_intent，只看 tool 参数会漏判，
+  // 结果海报走了普通配图路径、画面上的字全靠模型猜。
+  const userText = String((intent && intent.userText) || "");
+  const p = String(args.prompt || "");
+  if (/海报|宣传|展架|易拉宝|物料|门店贴|促销|广告图|朋友圈图|banner|poster|flyer/i.test(userText + " " + p)) return true;
+  // 2026-11-22：只在最后一句找关键词会漏判——用户上一轮说「按这个做吧」，
+  // 关键词全在前面的对话里，结果契约没追加，标题和规格被模型自由发挥。
+  // 商业物料的确定性信号：有联系电话/公司署名，或画面里出现两个以上价格。
+  if (intent && (intent.contact || intent.company)) return true;
+  if ((p.match(/[¥￥]\s*\d+/g) || []).length >= 2) return true;
+  return false;
+}
+
 function blocksOf(args) {
   const t = args && args.structured && args.structured.text;
-  return Array.isArray(t) ? t : null;
+  if (Array.isArray(t)) return t;
+  // 实测：模型经常把全部文案写成「多行字符串」而不是对象数组。
+  // 旧实现只认数组，字符串一律当空，导致文案被兜底逻辑吃掉，只剩公司名和电话。
+  if (typeof t === "string" && t.trim()) {
+    try { return require("./prompt-contract").parseTextString(t); } catch { return null; }
+  }
+  return null;
 }
 
 function hasContact(blocks, contact) {
@@ -151,6 +193,8 @@ function hasContact(blocks, contact) {
  * @param {(fields:object)=>void} [observe]
  */
 function apply(calls, intent, observe) {
+  const refLines = Array.isArray(intent && intent.referenceLines) ? intent.referenceLines : null;
+  const repair = refLines ? require("./reference-text").repairTerms : null;
   if (!Array.isArray(calls) || !intent) return calls;
   const touched = [];
   const out = calls.map(call => {
@@ -159,8 +203,40 @@ function apply(calls, intent, observe) {
     let args;
     try { args = JSON.parse(fn.arguments); } catch { return call; }
 
-    const blocks = blocksOf(args);
+    let blocks = blocksOf(args);
     let changed = null;
+    // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组
+    if (blocks && blocks.length && typeof (args.structured && args.structured.text) === "string") {
+      args.structured = { ...(args.structured || {}), text: blocks };
+      changed = changed || {};
+      changed.copyParsed = { count: blocks.length };
+    }
+    // 兜底：模型漏了 structured.text 时，至少把已知的公司与电话补上，
+    // 否则 prompt 里一条文字都没有，画面文字只能由生成模型瞎猜。
+    if ((!blocks || !blocks.length) && intent.enforceSpec) {
+      const seed = [];
+      if (intent.enforceSpec.company) seed.push({ key: "company_name", role: "footer", text: String(intent.enforceSpec.company) });
+      if (intent.enforceSpec.contact) seed.push({ key: "contact_hotline", role: "contact", text: `全国服务热线 ${intent.enforceSpec.contact}` });
+      if (seed.length) {
+        args.structured = { ...(args.structured || {}), text: seed };
+        blocks = seed;
+        changed = changed || {};
+        changed.copyBackfill = { added: seed.length };
+      }
+      if (typeof observe === "function") {
+        try { observe({ tag: "image_call_without_structured_text", backfilled: seed.length }); } catch { /* ignore */ }
+      }
+    }
+    // 交付要求硬校验：占位/重复/必需字段
+    if (blocks && intent.enforceSpec) {
+      const r = require("./requirement-guard").enforce(blocks, intent.enforceSpec);
+      if (r.issues.length) {
+        args.structured = { ...(args.structured || {}), text: r.blocks };
+        blocks = r.blocks;
+        changed = changed || {};
+        changed.enforced = { issues: r.issues };
+      }
+    }
 
     // ① 比例：只有「方向明显冲突」或「用户明确给了比例但模型没用」才改
     const current = ratioValue(String(args.aspect_ratio || ""));
@@ -180,6 +256,30 @@ function apply(calls, intent, observe) {
       changed.aspect_ratio = { from: current ? current.label : "(未给)", to, why: wrongDirection ? "方向与要求相反" : "未给比例" };
     }
 
+    // ①.8 海报画布规范化（2026-11-22）
+    // 模型会自己挑比例：同一段烘焙需求出过 2:3、4:5、3:4 三种。客户端按请求比例做几何校验，
+    // 一不一致就判「画布比例与要求不同」并把整张图丢掉——用户白等 40 秒还看不到图。
+    // 用户没明确要求比例时，海报统一锁 3:4（门店海报通行比例），减少这类误杀。
+    if (!explicit && wantsPosterLayout(args, blocks, intent)) {
+      const cur = ratioValue(String(args.aspect_ratio || ""));
+      if (!cur || Math.abs(cur.value - 0.75) / 0.75 > 0.02) {
+        args.aspect_ratio = "3:4";
+        changed = changed || {};
+        changed.canvas = { from: cur ? cur.label : "(未给)", to: "3:4", why: "海报画布规范化" };
+      }
+    }
+
+    // ①.5 术语校正：模型把逐字稿里的词写歪了，就改回逐字稿的写法
+    if (blocks && repair) {
+      let touchedTerm = false;
+      args.structured = { ...(args.structured || {}), text: blocks.map(b => {
+        const r = repair(String((b && b.text) || ""), refLines);
+        if (r.fixed.length) { touchedTerm = true; return { ...b, text: r.text }; }
+        return b;
+      }) };
+      if (touchedTerm) { changed = changed || {}; changed.terms = { repaired: true }; }
+    }
+
     // ② 占位文字：有公司名就写实，没有就删掉
     if (blocks) {
       const r = cleanPlaceholders(blocks, intent.company);
@@ -197,6 +297,31 @@ function apply(calls, intent, observe) {
       changed.contact = { added: intent.contact };
     }
 
+    // 提示词契约：按官方指南补「用途 / 参考图角色 / 版式关系 / 引号文字」，版式仍由模型自己排
+    // 只对「海报/宣传物料」类请求追加排版契约。
+    // 旧实现在有任何 prompt 时都追加，会把「画一只猫」改成商业海报并塞进一堆
+    // 版式与文字要求，严重破坏普通配图——上线前必须按意图分流。
+    if (args.prompt && wantsPosterLayout(args, blocks, intent)) {
+      // fail-open：排版契约只是锦上添花，任何异常都不能让整条回复流中断
+      //（历史事故：一个未定义的函数就让客户端看到「输出尚未完成」）。
+      try {
+        args.prompt = require("./prompt-contract").augment(args.prompt, {
+          roles: intent.roles,
+          aspectRatio: args.aspect_ratio,
+          texts: (blocks || []).map(b => String((b && b.text) || "")).filter(Boolean),
+          blocks: blocks || [],
+          structured: args.structured,
+          company: intent.enforceSpec && intent.enforceSpec.company,
+          contact: intent.enforceSpec && intent.enforceSpec.contact,
+        });
+        changed = changed || {};
+        changed.promptContract = { augmented: true, chars: args.prompt.length };
+      } catch (e) {
+        if (typeof observe === "function") {
+          try { observe({ tag: "prompt_contract_failed", code: String((e && (e.code || e.message)) || "UNKNOWN").slice(0, 120) }); } catch { /* ignore */ }
+        }
+      }
+    }
     if (!changed) return call;
     touched.push({ tool: fn.name, ...changed });
     return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };
@@ -222,6 +347,12 @@ function guidance(intent) {
     `【本轮硬约束】${parts.join("；")}。这些是从用户历史里确认过的要求，不是让你重写画面内容。`,
     "【照抄规则】参考图里已有的栏目名、接口名、型号、参数必须逐字照抄，不得换成近义术语（例如 PGM 接口不能写成 PWM/PoE，多防区接口不能写成多协议接口）；拿不准就保留原图文字。",
     "【禁占位】画面不得出现「品牌名称」「公司名称」「待补充」「XXX」「您好」这类占位或示例文字；已知信息直接写实，未知信息就留空不写字。",
+    "【structured.text 要写全】image_generate / image_edit 的 structured.text 至少 4 条：主标题、副标题、各区块标题与说明、电话。限长：title ≤8 字只 1 条；subtitle ≤20 字只 1 条；label ≤8 字；body ≤14 字、一条一个事实；contact 电话照抄；footer 公司署名。",
+    "【prompt 只写画面】prompt 只描述主体、场景、材质、光线、气质，≤180 字；不要把文案抄进 prompt，也不要写 1./2./3. 版式清单或坐标。",
+    "【长段落不进画面】品牌故事、公司简介、免责声明这类超过 40 字的段落不要放进 structured.text（印上去必然糊），提炼成 3–5 条≤14 字的事实短句，保留数字、年限、工艺、承诺。价格、参数、型号、卖点一个都不能少。",
+    "【风格贴合场景】按行业定视觉基调，并配上该行业的内容型元素：食品烘焙用暖色食欲感，配产品特写缩略图与原料/工艺插画；医疗用干净克制，配诊室实景与设备示意；教育培训用明亮亲和，配课堂场景与进阶路径图；工程安防用专业冷静，配城市剪影、设备特写与系统联动示意。不要所有行业都套同一种深色科技风，也不要只有配色没有元素。",
+    "【画面要有元素】不能是纯色底+文字块：用色带或圆角卡片分区、图标、场景缩略图、大数字、示意图承载信息，元素必须来自内容本身（烘焙用食材与工艺，安防用设备与联动节点，医疗用诊室与设备）。只挑用得上的，不要全堆。",
+    "【直接执行】以上是执行约束，不要在回复里复述或列计划，直接调用工具。",
   ].join("\n");
 }
 

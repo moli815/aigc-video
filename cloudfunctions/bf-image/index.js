@@ -33,7 +33,66 @@ const {
 } = require("./media-guards");
 const { resolveImageSize } = require("./image-sizing");
 const { publicError, CATALOG } = require("./error-catalog");
+const { providerPromptOptions } = require("./shared/image-policy");
+const { cleanImageRequest } = require("./shared/image-delivery");
+const { authorizeImageExecution } = require("./image-execution-gate");
+let __commercialComposition;
+function commercialCompositionOf(){
+  if(!__commercialComposition){getDb();__commercialComposition=require("./commercial-composition-runtime").createCommercialComposition({app:__APP,
+    assetStore:require("./shared/asset-store").createAssetStore({db:__db,app:__APP}),
+    log:fields=>logStage("image_composition",fields)});}
+  return __commercialComposition;
+}
+let _nativeCopyRuntime;
+async function nativeVisionConfig(expectedModel){
+  const row=require('./shared/document-store').documentOf(await getDb().collection('bf_config').doc('runtime').get()),config=row?.data||{};
+  if(String(config.CHAT_PROVIDER||process.env.CHAT_PROVIDER||'qwen')!=='qwen')throw Object.assign(Error('COPY_VISION_NOT_READY'),{code:'COPY_VISION_NOT_READY'});
+  const model=expectedModel||config.CHAT_MODEL_VISION,base=String(config.CHAT_PROVIDER_BASE||'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/,''),endpoint=new URL(base);
+  if(endpoint.protocol!=='https:'||endpoint.username||endpoint.password||endpoint.search||!/(^|\.)(?:dashscope\.aliyuncs\.com|maas\.aliyuncs\.com)$/.test(endpoint.hostname)||!config.CHAT_API_KEY||typeof model!=='string'||!/^[\w.-]{1,120}$/.test(model))throw Object.assign(Error('COPY_VISION_NOT_READY'),{code:'COPY_VISION_NOT_READY'});
+  const catalog=require('./shared/document-store').documentOf(await getDb().collection('bf_config').doc('supplier_cost_catalog').get())||{};
+  const snapshot=require('./shared/supplier-pricing').ratesFor(catalog,config,'aliyun-bailian',model,Date.now());
+  if(!snapshot)throw Object.assign(Error('COPY_COST_UNAVAILABLE'),{code:'COPY_COST_UNAVAILABLE'});
+  return{model,base,apiKey:config.CHAT_API_KEY,snapshot};
+}
+function nativeCopyRuntimeOf(){
+ if(!_nativeCopyRuntime){getDb();const store=require('./shared/asset-store').createAssetStore({db:__db,app:__APP});
+  const invoke=async(base,key,payload,signal)=>{const r=await modelLedger.fetch(base,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},body:JSON.stringify(payload),signal},fetch);return{ok:r.ok,status:r.status,modelCallId:r.modelCallId,data:await r.json()};};
+  _nativeCopyRuntime=require('./native-copy-runtime').createRuntime({db:__db,store,composition:commercialCompositionOf(),getVision:nativeVisionConfig,
+   requestImage:(payload,signal)=>invoke(IMAGE_BASE+'/images/generations',RT.IMAGE_API_KEY,payload,signal),
+   requestVision:(config,payload,signal)=>invoke(config.base+'/chat/completions',config.apiKey,payload,signal),
+   recordCost:async(owner,call,basis)=>{const ref=__db.collection('bf_model_calls').doc(call.modelCallId),row=require('./shared/document-store').documentOf(await ref.get());if(row?.accountId!==owner)throw Object.assign(Error('COPY_COST_LEDGER_UNAVAILABLE'),{code:'COPY_COST_LEDGER_UNAVAILABLE'});await ref.update({supplierCostEstimateCny:call.supplierCostEstimateCny,costBasis:basis||'configured_55_actual_sizes_estimate_not_invoice'});},
+  });
+ }return _nativeCopyRuntime;
+}
+function nativeCopyFingerprint(body,mixedFingerprint){
+ const images=(Array.isArray(body.image)?body.image:body.image?[body.image]:[]).map(value=>{const raw=String(value);try{const u=new URL(raw);if(/^\/user\/[a-f0-9]{24}\/assets\/[a-f0-9]{64}\.(png|jpg|webp|gif)$/.test(u.pathname)&&u.hostname.endsWith('.myqcloud.com'))return u.origin+u.pathname;}catch{}return crypto.createHash('sha256').update(raw).digest('hex');});
+ const refs=mixedFingerprint||crypto.createHash('sha256').update(JSON.stringify(images)).digest('hex');
+ return require('./shared/image-reference-merge').bindReferenceRequest(refs,body);
+}
+async function saveNativeCopyInput(rid,owner,input){
+ await getDb().collection('bf_image_jobs').doc(idemKey(rid,owner)).update({copyInput:input,state:'copy_waiting',ts:Date.now()});
+}
+const { createSyncedImageReferenceStore } = require("./shared/image-reference-store");
+let _protectionRuntime;
+function protectedAssetCompositionOf(){
+  if(!_protectionRuntime){getDb();const store=require("./shared/asset-store").createAssetStore({db:__db,app:__APP});
+    _protectionRuntime=require("./image-protection-runtime").createProtectionRuntime({assetStore:store,
+      readAsset:async(owner,id)=>{const row=require("./shared/document-store").documentOf(await getDb().collection("bf_assets").doc(id).get());return row?.accountId===owner?row:null;},
+      locate:async(body,authorization)=>{
+        const r=await fetch(BF_API_BASE+"/image-layout",{method:"POST",headers:{"Content-Type":"application/json",Authorization:authorization,"X-Request-Id":String(reqStore.getStore()?.requestId||"").slice(0,44)+":layout"},body:JSON.stringify(body),signal:AbortSignal.timeout(65000)});
+        if(!r.ok)throw Error("IMAGE_LAYOUT_UNAVAILABLE");return r.json();
+      },log:fields=>logStage("protected_assets",fields)});
+  }return _protectionRuntime;
+}
+const { referenceRequestFingerprint, prepareSeriesReferenceInput, resolveSeriesReferenceInput } = require("./shared/series-reference-input");
+function imageReferenceStoreOf() {
+  const db = getDb();
+  return createSyncedImageReferenceStore({ db,
+    assetStore: require("./shared/asset-store").createAssetStore({ db, app: __APP }) });
+}
+const { autoDecision, parseAutoPolicy, canFallbackToPro } = require("./image-routing");
 const { AsyncLocalStorage } = require("async_hooks");
+const { createModelCallLedger } = require("./shared/model-call-ledger");
 const reqStore = new AsyncLocalStorage();
 function currentRequestId() {
   const st = reqStore.getStore();
@@ -42,6 +101,11 @@ function currentRequestId() {
 
 const PORT = 9000;   // 云函数 HTTP 固定 9000（不要读 process.env.PORT，SCF 可能注入其他值）
 const IMAGE_BASE = "https://ark.cn-beijing.volces.com/api/v3";
+const modelLedger = createModelCallLedger({ db: getDb, context: () => reqStore.getStore(), source: "bf-image", log: logSafe,
+  pricing: payload => ({ unitCostCny: upstreamCostOf({ size: payload.size, model: payload.model,
+    inputImages: Array.isArray(payload.image) ? payload.image.length : payload.image ? 1 : 0,
+    layerDecomposition: payload.layer_decomposition === true }) }),
+});
 
 // ── 10-23：运行时配置统一入口 ─────────────────────────────────────────────
 // 此前 bf-image 只读 process.env，并把 optimize_prompt_options 硬编码成 fast；
@@ -55,20 +119,48 @@ const RT = {
   IMAGE_MODEL_PRO: process.env.IMAGE_MODEL_PRO || "",
   IMAGE_MODEL_SERIES: process.env.IMAGE_MODEL_SERIES || "",
   IMAGE_ROUTING_MODE: process.env.IMAGE_ROUTING_MODE || "auto",
+  IMAGE_AUTO_POLICY: process.env.IMAGE_AUTO_POLICY || "{}",
+  IMAGE_COMPOSITION_POLICY: process.env.IMAGE_COMPOSITION_POLICY || "{}",
+  IMAGE_MIXED_REFERENCES_POLICY: process.env.IMAGE_MIXED_REFERENCES_POLICY || "{}",
   IMAGE_FAST_MODE: process.env.IMAGE_FAST_MODE || "0",
   IMAGE_SIZE: process.env.IMAGE_SIZE || "2K",
-  IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "0.3",   // Flash ≤1.5K（官方成本 0.12）
-  IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "0.45", // Pro ≤1.5K（官方成本 0.30）
-  IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "0.9",        // Pro >1.5K（官方成本 0.60）
+  // ── 10-29 定价改为"成本 × 倍数"：售价不再手填，避免改成本忘了改售价 ──
+  // 上游官方成本（火山方舟 2026-10 核实）：
+  //   Pro   ≤261 万像素 0.30 / >261 万像素 0.60 / 图层拆分 0.15 / 0.30
+  //   Flash 0.12（不分尺寸）· Lite 0.22 · 4.5 0.25 · 4.0 0.20
+  //   多图输入：Pro 首张免费，第 2 张起 0.02/张；Flash/Lite 输入免费
+  IMAGE_COST_PRO_SMALL: process.env.IMAGE_COST_PRO_SMALL || "0.3",
+  IMAGE_COST_PRO_LARGE: process.env.IMAGE_COST_PRO_LARGE || "0.6",
+  IMAGE_COST_PRO_LAYER_SMALL: process.env.IMAGE_COST_PRO_LAYER_SMALL || "0.15",
+  IMAGE_COST_PRO_LAYER_LARGE: process.env.IMAGE_COST_PRO_LAYER_LARGE || "0.3",
+  IMAGE_COST_FLASH: process.env.IMAGE_COST_FLASH || "0.12",
+  IMAGE_COST_LITE: process.env.IMAGE_COST_LITE || "0.22",
+  IMAGE_COST_45: process.env.IMAGE_COST_45 || "0.25",
+  IMAGE_COST_40: process.env.IMAGE_COST_40 || "0.2",
+  IMAGE_COST_EXTRA_INPUT: process.env.IMAGE_COST_EXTRA_INPUT || "0.02",
+  // Seedream 5.5 官方单价（2026-11-13 价格表）：输入图 0.05/张；输出图按单张像素分档，
+  // ≤261 万 0.13、261–463 万 0.23。拆层场景每个图层按自己的像素独立落档。
+  IMAGE_COST_55_INPUT: process.env.IMAGE_COST_55_INPUT || "0.05",
+  IMAGE_COST_55_OUT_SMALL: process.env.IMAGE_COST_55_OUT_SMALL || "0.13",
+  IMAGE_COST_55_OUT_LARGE: process.env.IMAGE_COST_55_OUT_LARGE || "0.23",
+  /// 售价 = 成本 × 倍数。2 = 毛利 100%，正好覆盖一次上游重试与调价波动。
+  IMAGE_PRICE_MULTIPLIER: process.env.IMAGE_PRICE_MULTIPLIER || "2",
+  IMAGE_PRICE_FAST: process.env.IMAGE_PRICE_FAST || "",      // 弃用：仅保留键位兼容
+  IMAGE_PRICE_SMALL: process.env.IMAGE_PRICE_SMALL || "",    // 弃用
+  IMAGE_PRICE_2K: process.env.IMAGE_PRICE_2K || "",          // 弃用
   RATE_IMAGE_PER_HOUR: process.env.RATE_IMAGE_PER_HOUR || "120",
+  CAP_IMAGE_ENABLED: process.env.CAP_IMAGE_ENABLED || "1",
   IMAGE_API_KEY: process.env.IMAGE_API_KEY || "",
 };
 // 注意：IMAGE_API_KEY 是主链路密钥，只认环境变量，**不参与** DB 覆盖——
 // 避免 bf_config 里遗留的旧值把线上出图整体打挂。其余为非敏感调参项，可从 DB 覆盖。
 const RT_KEYS = [
   "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES", "IMAGE_ROUTING_MODE",
-  "IMAGE_FAST_MODE", "IMAGE_SIZE",
-  "IMAGE_PRICE_FAST", "IMAGE_PRICE_SMALL", "IMAGE_PRICE_2K", "RATE_IMAGE_PER_HOUR",
+  "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_AUTO_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_MIXED_REFERENCES_POLICY",
+  "IMAGE_COST_PRO_SMALL", "IMAGE_COST_PRO_LARGE", "IMAGE_COST_PRO_LAYER_SMALL", "IMAGE_COST_PRO_LAYER_LARGE",
+  "IMAGE_COST_FLASH", "IMAGE_COST_LITE", "IMAGE_COST_45", "IMAGE_COST_40", "IMAGE_COST_EXTRA_INPUT",
+  "IMAGE_COST_55_INPUT", "IMAGE_COST_55_OUT_SMALL", "IMAGE_COST_55_OUT_LARGE",
+  "IMAGE_PRICE_MULTIPLIER", "RATE_IMAGE_PER_HOUR", "CAP_IMAGE_ENABLED",
 ];
 /**
  * 10-24 模型能力表。**未知 model ID 一律走保守默认**（不传 fast、不支持组图/图层），
@@ -81,11 +173,15 @@ const RT_KEYS = [
  *   Lite  — 只支持 standard、组图、联网搜索；不支持交互编辑与图层拆分
  */
 const MODEL_CAPS = {
+  // 5.5：文生图 / 单图+多参考图(≤10) / 图层拆分(1 底图+≤99 层) / 原生 RGBA / 100 轮编辑。
+  // 只有标准提示词模式，没有极速模式；不支持组图（series 走 Lite）。
+  "doubao-seedream-5-5-261028":      { fastPromptMode: false, series: false, edit: true,  layers: true  },
   "doubao-seedream-5-0-pro-260628":   { fastPromptMode: true,  series: false, edit: true,  layers: true  },
   "doubao-seedream-5-0-flash-260915": { fastPromptMode: false, series: false, edit: true,  layers: true  },
   "doubao-seedream-5-0-260128":       { fastPromptMode: false, series: true,  edit: false, layers: false },
   "doubao-seedream-5-0-lite-260128":  { fastPromptMode: false, series: true,  edit: false, layers: false },
-  "doubao-seedream-4-0-250828":       { fastPromptMode: true,  series: false, edit: true,  layers: false },
+  "doubao-seedream-4-0-250828":       { fastPromptMode: true,  series: true,  edit: true,  layers: false },
+  "doubao-seedream-4-5-251128":       { fastPromptMode: false, series: true,  edit: true,  layers: false },
 };
 
 /// 能力查询：未登记的模型按"保守可用"处理（能文生图，不给 fast/组图/图层）。
@@ -133,7 +229,8 @@ function promptOptimizationMode(routingMode, fastMode) {
     ? "standard" : "fast";
 }
 
-function selectImageRoute({ taskKind, qualityTier }) {
+function selectImageRoute(input) {
+  const { taskKind, qualityTier } = input;
   const m = modelsOf();
   const mode = String(RT.IMAGE_ROUTING_MODE || "auto").trim();
   const kind = String(taskKind || "generate").trim();
@@ -151,15 +248,14 @@ function selectImageRoute({ taskKind, qualityTier }) {
     return { model: "", reason: "series-unsupported", unsupported: true };
   }
   if (kind === "decompose") {
-    if (capsOf(m.pro).layers) return { model: m.pro, reason: "task=decompose" };
-    if (capsOf(m.fast).layers) return { model: m.fast, reason: "task=decompose(fallback-fast)" };
+    const high = autoDecision(input, RT.IMAGE_AUTO_POLICY).tier === "high";
+    const first = high ? m.pro : m.fast, second = high ? m.fast : m.pro;
+    if (capsOf(first).layers) return { model: first, reason: "task=decompose(preferred)" };
+    if (capsOf(second).layers) return { model: second, reason: "task=decompose(capability-fallback)" };
     return { model: "", reason: "decompose-unsupported", unsupported: true };
   }
-  if (tier === "high") return { model: m.pro, reason: "tier=high" };
-  if (tier === "fast") return { model: m.fast, reason: "tier=fast" };
-
-  // auto：尊重当前运行时路由配置，不从自然语言/成品名称二次推断模型档位。
-  return { model: m.fast, reason: "tier=auto" };
+  const decision = autoDecision(input, RT.IMAGE_AUTO_POLICY);
+  return { model: decision.tier === "high" ? m.pro : m.fast, reason: decision.reason };
 }
 
 let _rtLoadedAt = 0;
@@ -197,22 +293,107 @@ async function refreshRuntime() {
  * 现行售价（用户 2026-10-24 拍板）：
  *   Flash ≤1.5K 0.30（2.5×成本） / Pro ≤1.5K 0.45（1.5×） / Pro >1.5K 0.90（1.5×）
  */
-function priceForSize(size, model) {
-  const s = String(size || RT.IMAGE_SIZE || "1.5K").toUpperCase();
-  const mdl = String(model || "");
-
-  // 先判像素档
+/**
+ * 上游真实成本（元/张）。这是记账口径，不是售价。
+ *
+ * 为什么单独存在：旧实现把"售价"同时当成本写进流水，
+ * 成本看板显示的其实是售价，毛利永远算不出来；改成本时也容易忘改售价。
+ * 现在唯一事实源是官方单价，售价由 cost × multiplier 推导。
+ */
+function upstreamCostOf(opts) {
+  const o = opts || {};
+  const s = String(o.size || RT.IMAGE_SIZE || "1.5K").toUpperCase();
+  const mdl = String(o.model || "");
   let px = 2_250_000;                        // 1.5K 视为约 225 万像素
   if (s === "2K") px = 4_000_000;
   else {
     const m = /^(\d+)\s*[X×]\s*(\d+)$/.exec(s);
     if (m) px = Number(m[1]) * Number(m[2]);
   }
-  if (px > 2_360_000) return Number(RT.IMAGE_PRICE_2K);
+  // 官方档位分界是 261 万像素（不是旧代码里的 236 万）：
+  // 1.5K 3:4 = 1344×1792 = 241 万 → 0.30；2K 3:4 = 1776×2368 = 421 万 → 0.60。
+  // 用 236 万当界会把 1.5K 也划进大图，每张多记 0.30 成本。
+  const large = px > 2_610_000;
+  const layers = o.layerDecomposition === true;
+  let cost;
+  if (/seedream-5-5/i.test(mdl)) {
+    // 官方按"输入图 × 0.05 + 输出图 × 像素档位"两段计费，文本 token 免费。
+    cost = Number(large ? RT.IMAGE_COST_55_OUT_LARGE : RT.IMAGE_COST_55_OUT_SMALL);
+    cost += Math.max(0, Number(o.inputImages || 0)) * Number(RT.IMAGE_COST_55_INPUT || 0);
+  } else if (/seedream-5-0-pro/i.test(mdl)) {
+    cost = Number(layers
+      ? (large ? RT.IMAGE_COST_PRO_LAYER_LARGE : RT.IMAGE_COST_PRO_LAYER_SMALL)
+      : (large ? RT.IMAGE_COST_PRO_LARGE : RT.IMAGE_COST_PRO_SMALL));
+  } else if (/seedream-5-0-flash/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_FLASH);
+  } else if (/seedream-5-0-lite/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_LITE);
+  } else if (/seedream-4-5/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_45);
+  } else if (/seedream-4-0/i.test(mdl)) {
+    cost = Number(RT.IMAGE_COST_40);
+  } else {
+    cost = Number(RT.IMAGE_COST_PRO_SMALL);   // 未知模型按 Pro 小图保守计
+  }
+  // 多图输入附加费：官方仅 Pro 收（首张免费，第 2 张起 0.02/张）
+  if (/seedream-5-0-pro/i.test(mdl)) {
+    const extra = Math.max(0, Number(o.inputImages || 0) - 1);
+    cost += extra * Number(RT.IMAGE_COST_EXTRA_INPUT || 0);
+  }
+  return Math.max(0, Number(cost.toFixed(4)));
+}
 
-  // 再判模型：Flash 单独一档
-  if (/seedream-5-0-flash/i.test(mdl)) return Number(RT.IMAGE_PRICE_FAST);
-  return Number(RT.IMAGE_PRICE_SMALL);
+const pixelCountOf = s => {
+  const m = /^(\d+)\s*[x×]\s*(\d+)$/.exec(String(s || ""));
+  return m ? Number(m[1]) * Number(m[2]) : 0;
+};
+
+/**
+ * 按供应商**实际返回的用量**算真实成本，是"先核实实际成本再扣额度"的唯一入口。
+ *
+ * 三个必须按实际算的原因：
+ *  1. 5.5 拆层会返回 1 张底图 + N 个图层，每张按自己的像素独立落档，只算 1 张会少扣十几倍；
+ *  2. 5.5 每张输入图 0.05，过去完全没有计入；
+ *  3. 尺寸档位只是请求参数，最终出图尺寸由模型决定，不能拿请求值当实际值。
+ * usage 缺失时才回落到按尺寸预估；回落时按实际张数乘，绝不默认 1 张。
+ */
+function actualUpstreamCostOf(opts) {
+  const o = opts || {};
+  const mdl = String(o.model || "");
+  const usage = o.usage || {};
+  const small = Number(RT.IMAGE_COST_55_OUT_SMALL || 0.13);
+  const big = Number(RT.IMAGE_COST_55_OUT_LARGE || 0.23);
+  const generated = Number(usage.generated_images);
+  if (/seedream-5-5/i.test(mdl) && Number.isSafeInteger(generated)) {
+    const inputCost = Math.max(0, Number(usage.input_images || 0)) * Number(RT.IMAGE_COST_55_INPUT || 0.05);
+    const sizes = Array.isArray(usage.output_sizes) ? usage.output_sizes : [];
+    let outputCost = 0;
+    if (sizes.length) {
+      for (const s of sizes) outputCost += pixelCountOf(s) > 2_610_000 ? big : small;
+    } else {
+      const fallbackPx = pixelCountOf(o.size) || (String(o.size || "").toUpperCase() === "2K" ? 4_000_000 : 2_250_000);
+      outputCost = Math.max(1, generated) * (fallbackPx > 2_610_000 ? big : small);
+    }
+    return Math.max(0, Number((inputCost + outputCost).toFixed(4)));
+  }
+  return upstreamCostOf(o);
+}
+
+/** Cost precision is retained: rounding every call to cents distorts small usage. */
+function customerPriceOf(costCny) {
+  const cost = Math.max(0, Number(costCny) || 0);
+  const mult = reqStore.getStore()?.costBudgetPolicy?.version===1?1:Math.max(1, Number(RT.IMAGE_PRICE_MULTIPLIER) || 2);
+  return Number((cost*mult).toFixed(8));
+}
+
+/** 兼容旧调用点：只需要"该收多少钱"的地方走这里。 */
+function priceForSize(size, model, opts) {
+  return customerPriceOf(upstreamCostOf(Object.assign({ size: size, model: model }, opts || {})));
+}
+function worstSeriesUnitPrice(size, inputImages = 0) {
+  const models = modelsOf();
+  return Math.max(priceForSize(size, models.pro || RT.IMAGE_MODEL, { inputImages }),
+    priceForSize(size, models.fast || RT.IMAGE_MODEL, { inputImages }));
 }
 
 /**
@@ -243,8 +424,8 @@ function seriesPrompt(base, index, total) {
  * 任务永远不是 done，flushJobs 永远扫不到，于是这一张既不进账本也不进账务。
  */
 async function runSeriesChild(opts) {
-  const { parentRid, index, total, accountId, prompt, image, size, structured,
-          renderIntent, aspectRatio, qualityTier, resolved } = opts;
+  const { parentRid, index, total, accountId, prompt, size, structured,
+          renderIntent, aspectRatio, qualityTier, resolved, referenceManifest } = opts;
   const subRid = parentRid + "::s" + index;
   const claim = await claimIdem(subRid, accountId);
 
@@ -256,9 +437,35 @@ async function runSeriesChild(opts) {
     };
   }
   if (claim.state === "busy") {
-    return { index, ok: false, message: "这一张还在生成中，请稍后重试。", errorCategory: "in_progress" };
+    return { index, ok: false, unknownOutcome:true, message: "这一张还在生成中，请稍后重试。", errorCategory: "in_progress" };
   }
+  if (claim.state !== "new") return { index, ok: false, message: "暂时无法确认生成状态，尚未重复生成。", errorCategory: "storage" };
 
+  let source;
+  try {
+    source = referenceManifest ? await resolveSeriesReferenceInput({ store: imageReferenceStoreOf(),
+      owner: accountId, manifest: referenceManifest, image: opts.image }) : { image: opts.image };
+  } catch {
+    await abortIdem(subRid, accountId, "reference_unavailable");
+    logStage("series_reference_unavailable", { index });
+    return { index, ok: false, message: "需要的原图暂时无法读取，请确认素材已同步后再试。", errorCategory: "reference_unavailable" };
+  }
+  const image = source.image;
+  let imageBudgetId;
+  if(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1){
+    imageBudgetId='single_budget_'+idemKey(subRid,accountId);
+    const amountCny=worstSeriesUnitPrice(resolved,Array.isArray(image)?image.length:image?1:0);
+    const reserved=await require('./image-cost-budget').child({db:getDb(),accountId,key:imageBudgetId,parentKeys:[parentRid,'series_budget_'+idemKey(parentRid,accountId)],amountCny,capCny:reqStore.getStore()?.quotaCapCny});
+    if(reserved.state!=='reserved'){await abortIdem(subRid,accountId,'quota_insufficient');return{index,ok:false,errorCategory:'quota',message:'暂时无法为这一张预留额度，请稍后再试。'};}
+  }
+  // All series protocols converge here, so rate is charged per actual new image,
+  // not per HTTP request and never for an idempotent replay.
+  const rateMessage = await claimRate(accountId);
+  if (rateMessage) {
+    if(imageBudgetId)await require('./image-cost-budget').release({db:getDb(),accountId,key:imageBudgetId,reason:'generation_rejected'});
+    await abortIdem(subRid, accountId, "rate_limited");
+    return { index, ok: false, message: rateMessage, errorCategory: "rate_limited" };
+  }
   const r = await generate({
     prompt: seriesPrompt(prompt, index, total),
     image, size, structured, renderIntent, aspectRatio,
@@ -266,10 +473,12 @@ async function runSeriesChild(opts) {
     taskKind: "generate",          // 子任务一律按单图生成，路由走 generate 规则
     qualityTier,
     requestedCount: 1,
+    referenceRoles: source.referenceRoles, accountId,
   });
 
   if (!r.ok) {
-    await abortIdem(subRid, accountId, String(r.reason || "upstream").slice(0, 40));
+    if(imageBudgetId&&!r.unknownOutcome)await require('./image-cost-budget').release({db:getDb(),accountId,key:imageBudgetId,reason:'generation_rejected'});
+    await abortIdem(subRid, accountId, String(r.reason || "upstream").slice(0, 40), r.unknownOutcome === true);
     logStage("series_item_failed", {
       index, reason: String(r.reason || "").slice(0, 40), msg: String(r.msg || "").slice(0, 120),
     });
@@ -278,19 +487,23 @@ async function runSeriesChild(opts) {
       index, ok: false,
       message: "这一张没有生成成功，可以单独重试。",
       errorCategory: String(r.reason || "upstream").slice(0, 40),
+      unknownOutcome:r.unknownOutcome===true,
     };
   }
 
   const model = String(r.model || RT.IMAGE_MODEL || "");
-  const price = priceForSize(resolved, model);
+  // 成本与售价分开算：优先用上游返回的真实用量（张数 + 每张像素），缺失才回落到按尺寸预估。
+  const upstream = actualUpstreamCostOf({ size: resolved, model, inputImages: Number.isSafeInteger(r.providerInputCount)?r.providerInputCount:(Array.isArray(image) ? image.length : image ? 1 : 0), usage: r.providerUsage });
+  const price = customerPriceOf(upstream);
   const persisted = await finishIdem(subRid, accountId, r.url, price, model, {
-    kind: "series_child", parentJobId: parentRid, index,
+    kind: "series_child", parentJobId: parentRid, index, upstreamCostCny: upstream, modelCallId: r.modelCallId,asset:r.asset,imageBudgetId,
   });
   let costState = persisted ? "queued" : "pending";
   if (!persisted) {
     // 台账写不进去：直接走幂等账务事件（事件 ID 同样由 subRid 派生），避免漏账
     const direct = await addImageCost(accountId, price, {
       model, jobKey: subRid, kind: "series_child", parentJobId: parentRid, index,
+      upstreamCostCny: upstream, modelCallId: r.modelCallId,imageBudgetId,
     });
     costState = direct ? "committed" : "pending";
   }
@@ -310,31 +523,38 @@ const RESERVE_TTL_MS = 30 * 60 * 1000;
 
 function authSubOf(req) {
   try {
-    const payload = verifyToken(bearer(req));
+    const payload = verifyToken(bearer(req),SECRETS?.tokenSecret);
     return (payload && payload.sub) || "";
   } catch (e) { return ""; }
 }
 
-async function activeReservedCny(accountId) {
-  if (!accountId) return 0;
+async function activeReservedCny(accountId,breakdown=false,excludeKey='') {
+  if (!accountId) return breakdown?{total:0,nonNative:0}:0;
   try {
     const r = await getDb().collection(RESERVE_COLL)
-      .where({ accountId, state: "active" }).limit(50).get();
+      .where({ accountId, state: "active" }).limit(51).get();
+    if((r?.data||[]).length>50)return null;
     const now = Date.now();
-    let sum = 0;
+    let sum = 0,nonNative=0;
     for (const d of (r && r.data) || []) {
-      if (Number(d.expiresAt || 0) > now) sum += Number(d.amountCny || 0);
+      if(d._id===excludeKey)continue;
+      if (d.kind==='native_copy'||d.kind==='image_budget'||Number(d.expiresAt || 0) > now) {const amount=Number(d.amountCny);if(!Number.isFinite(amount)||amount<0)return null;sum += amount;if(d.kind!=='native_copy')nonNative+=amount;}
     }
-    return Number(sum.toFixed(4));
+    return breakdown?{total:Number(sum.toFixed(4)),nonNative:Number(nonNative.toFixed(4))}:Number(sum.toFixed(4));
   } catch (e) {
     logStage("reserve_read_failed", { err: String((e && e.message) || e).slice(0, 120) });
-    return 0;   // 读不到预留时按 0 处理（宁可放行，不阻断正常用户）
+    // Unknown reservations cannot prove that concurrent paid tasks fit the pool.
+    return null; // quotaExhausted treats this as unavailable and fails closed.
   }
 }
 
-async function reserveQuota(taskId, accountId, amountCny) {
+async function reserveQuota(taskId, accountId, amountCny, capCny) {
   if (!(Number(amountCny) > 0)) return false;
   await ensureCollection(RESERVE_COLL);
+  if(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1){
+    const r=await require('./image-cost-budget').reserve({db:getDb(),accountId,key:taskId,amountCny,capCny,kind:'series',enabled:true});
+    return r.state==='reserved';
+  }
   try {
     await getDb().collection(RESERVE_COLL).add({
       _id: taskId, accountId, amountCny: Number(amountCny),
@@ -350,6 +570,8 @@ async function reserveQuota(taskId, accountId, amountCny) {
 async function releaseQuota(taskId, reason) {
   if (!taskId) return;
   try {
+    const row=require('./shared/document-store').documentOf(await getDb().collection(RESERVE_COLL).doc(taskId).get());
+    if(row?.kind==='image_budget')return require('./image-cost-budget').release({db:getDb(),accountId:row.accountId,key:taskId,reason});
     await getDb().collection(RESERVE_COLL).doc(taskId).update({
       state: "released", releasedAt: Date.now(), releaseReason: String(reason || "").slice(0, 40),
     });
@@ -439,6 +661,7 @@ async function recordSeriesItem(taskId, index, item) {
 async function refreshTaskState(taskId) {
   const doc = await readOne(SERIES_COLL, taskId);
   if (!doc) return null;
+  await refreshSeriesCostStates(doc.clientRequestId,doc.accountId,doc.items||[]);
   const st = deriveTaskState(doc.items, Number(doc.requested || 0), doc.status === "cancelled");
   const patch = {
     status: st.status,
@@ -466,9 +689,36 @@ async function executeSeriesStep(task, index, accountId) {
     structured: task.structured, renderIntent: task.renderIntent,
     aspectRatio: task.aspectRatio, qualityTier: task.qualityTier,
     resolved: task.sizeResolved,
+    referenceManifest: task.referenceManifest,
   });
   await recordSeriesItem(task._id, index, item);
   return item;
+}
+
+/** Retry v2 tasks through the legacy retry endpoint used by shipped phones. */
+async function retryStoredSeriesTask(task, accountId, rawIndices, quota) {
+  if (task.accountId !== accountId) return { status: 403, payload: { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" } };
+  if (task.status === "cancelled") return { status: 409, payload: { ...seriesTaskPayload(task), error: "TASK_CANCELLED", msg: "这次任务已取消，请重新开始。" } };
+  const failed = (task.items || []).filter(i => i && !i.ok).map(i => Number(i.index));
+  const wanted = Array.isArray(rawIndices) && rawIndices.length ? rawIndices : failed;
+  const targets = [...new Set(wanted.map(Number).filter(i => Number.isInteger(i) && failed.includes(i)))];
+  const resolved = task.sizeResolved || resolveSize(task.size, task.aspectRatio);
+  const need = targets.length * worstSeriesUnitPrice(resolved, task.referenceManifest ? task.referenceManifest.references.length : 0);
+  const remaining = Number.isFinite(quota && quota.remainingCny) ? quota.remainingCny : Infinity;
+  if (remaining + 1e-6 < need) return { status: 402, payload: { ok: false, error: "QUOTA_INSUFFICIENT",
+    msg: "剩余额度不足以补齐这些图片，可以先补一张或续费后再试。", needCny: Number(need.toFixed(4)), remainingCny: remaining,
+    actions: ["single_only", "renew", "cancel"] } };
+  for (const i of targets) await executeSeriesStep(task, i, accountId);
+  await flushJobs(targets.length + 2);
+  const latest = await readSeriesTask(task._id) || task;
+  const items = (latest.items || []).filter(Boolean);
+  await refreshSeriesCostStates(task._id, accountId, items);
+  for (const i of targets) {
+    const item = items.find(item => Number(item.index) === i);
+    if (item) await recordSeriesItem(task._id, i, item);
+  }
+  const updated = await refreshTaskState(task._id) || latest;
+  return { status: 200, payload: { ...seriesTaskPayload(updated), retriedIndices: targets, cached: !targets.length } };
 }
 
 /** flushJobs 之后再读一次子任务，把 queued 更新成真实 committed —— 响应里的金额必须是账本状态 */
@@ -559,6 +809,13 @@ async function requireMember(req) {
   if (!secrets) return null;
   const payload = verifyToken(bearer(req), secrets.tokenSecret);
   if (!payload || payload.t !== "member") return null;
+  const callContext = reqStore.getStore();
+  if (callContext) {
+    callContext.accountId = payload.sub; callContext.memberAuthorization = "Bearer "+bearer(req);
+    const result=await getDb().collection('bf_accounts').doc(payload.sub).get();
+    const account=Array.isArray(result.data)?result.data[0]:result.data;
+    callContext.costBudgetPolicy=account?.costBudgetPolicy||null;
+  }
   return payload;
 }
 
@@ -574,13 +831,9 @@ function logStage(stage, extra) {
 // ── 额度拦截：向 bf-api /me 查剩余百分比（复用唯一真相，避免两处各算一套）──
 const BF_API_BASE = process.env.BF_API_BASE || "https://xmy-test-d5g8c0xcifcefcfd5-1449098021.ap-shanghai.app.tcloudbase.com/api";
 async function quotaExhausted(req) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 4000);
   try {
-    const r = await fetch(BF_API_BASE + "/me", {
-      headers: { Authorization: "Bearer " + bearer(req) },
-      signal: ctrl.signal,
-    });
+    const r = await require("./quota-read").readQuotaResponse(BF_API_BASE + "/me?require_active=1",
+      { Authorization: "Bearer " + bearer(req) }, fetch);
     // 10-24 安全修复：授权/额度检查必须 fail-closed。
     // 旧实现 catch 里返回 exhausted:false —— /me 挂掉时所有人都能免费出图（成本敞口）。
     if (!r.ok) {
@@ -607,13 +860,29 @@ async function quotaExhausted(req) {
       logStage("quota_check_bad_body", { ok: j && j.ok });
       return { exhausted: true, unavailable: true, reason: "bad-response", resetAt: null };
     }
+    // Defence during rolling releases: /me can be readable for renewal while
+    // paid generation must still deny expiry, even with an older API instance.
+    if (require("./shared/member-access").membershipExpired(j.memberUntil)) {
+      return { exhausted: true, unavailable: false, denied: 403, code: "MEMBERSHIP_EXPIRED",
+        message: "会员已到期，请联系续费", reason: "denied-MEMBERSHIP_EXPIRED" };
+    }
     const month = j && j.limits && j.limits.month;
     const pct = month && month.remainingPct;
     const usedCny = j && j.usage && j.usage.pool && j.usage.pool.usedCny;
     const capCny = j && j.usage && j.usage.pool && j.usage.pool.capCny;
+    if(reqStore.getStore())reqStore.getStore().quotaCapCny=capCny;
+    if (!Number.isFinite(capCny) || capCny <= 0 || !Number.isFinite(usedCny) || usedCny < 0) {
+      logStage("quota_check_bad_snapshot", {});
+      return { exhausted: true, unavailable: true, reason: "bad-quota", resetAt: null };
+    }
     // 10-24 P1-12：生效中的组图预留也要占额度，否则并发两次组图都能通过预检（超额）。
-    const reserved = await activeReservedCny(authSubOf(req));
-    if (month && month.enabled && typeof pct === "number" && pct <= 0) {
+    const reservationSummary=await activeReservedCny(authSubOf(req),true,reqStore.getStore()?.excludedReservationId||'');
+    const pendingChat=Number(j?.usage?.pool?.reservedCny||0);
+    const reserved = reservationSummary?.total==null?null:reservationSummary.total+pendingChat;
+    if (!Number.isFinite(reserved) || reserved < 0 || !Number.isFinite(pct)) {
+      return { exhausted: true, unavailable: true, reason: "bad-quota", resetAt: null };
+    }
+    if (month && month.enabled && typeof pct === "number" && pct <= 0 && usedCny+reserved>=capCny) {
       return { exhausted: true, resetAt: month.resetAt || null, usedCny, capCny, reservedCny: reserved };
     }
     // 有额度池但拿不到剩余比例：无法确认，按不可用处理（不放行）
@@ -624,14 +893,26 @@ async function quotaExhausted(req) {
     const remainingCny = (typeof capCny === "number" && typeof usedCny === "number")
       ? Number((capCny - usedCny - reserved).toFixed(4))
       : undefined;
-    return { exhausted: false, remainingPct: pct, usedCny, capCny, reservedCny: reserved, remainingCny };
+    if (remainingCny <= 0) {
+      return { exhausted: true, resetAt: (month && month.resetAt) || null, usedCny, capCny, reservedCny: reserved };
+    }
+    return { exhausted: false, remainingPct: pct, usedCny, capCny, reservedCny: reserved,nonNativeReservedCny:reservationSummary.nonNative, remainingCny };
   } catch (e) {
     // 超时 / 网络异常：无法确认授权与额度 → 拒绝，避免成本敞口
     logStage("quota_check_failed", { err: String((e && e.message) || e).slice(0, 120) });
     return { exhausted: true, unavailable: true, reason: "unreachable", resetAt: null };
-  } finally {
-    clearTimeout(timer);
   }
+}
+
+// Every paid route consumes the same capability/quota decision. Per-image rate
+// claims happen at execution time so idempotent status/cache reads stay free.
+async function paidImageGate(req) {
+  const result = await authorizeImageExecution(req, { enabled: RT.CAP_IMAGE_ENABLED, quotaExhausted });
+  if (!result.ok) {
+    logStage("paid_execution_denied", { status: result.denial.status, code: result.denial.body.error });
+    return { ...result, denial: { ...result.denial, body: { ...result.denial.body, requestId: currentRequestId() } } };
+  }
+  return result;
 }
 
 /** 会员侧拒绝（401/403）原样转出：文案与错误码跟 bf-api 保持一致，不要改写成"额度不可用" */
@@ -737,17 +1018,11 @@ async function readOne(coll, id) {
 }
 
 /**
- * 10-24 账务幂等（P0-4）：
- *   ① 用唯一 _id 领取账务事件 —— 重复提交必然失败，天然去重；
- *   ② 账户累计用「CAS 标记 → inc」两步：先原子地把 accountApplied 从 false 改成 true，
- *      只有抢到标记的那一次才执行 inc；inc 失败时回滚标记，下一轮可重试；
- *   ③ 明细 bf_usage_logs 复用同一个 _id —— 重复写入直接失败，不可能出现两条流水。
- *
- * 残余风险（已在交付说明中标注）：CAS 成功后、inc 完成前进程被杀，这一笔会少计。
- * 这里选择「宁可少收、不可重复扣用户」；对账可用事件表重算账户累计。
+ * 账务幂等：账户、usage 明细和 event 状态在同一数据库事务提交。
+ * 新建事件与已有事件走同一路径，不再保留新事件绕过 CAS 的并发窗口。
+ * 旧的 accountApplied=true 事件只补剩余状态，避免迁移期二次扣费。
  */
-async function addImageCost(accountId, costCny, meta) {
-  const cost = Math.max(0, Number(costCny) || 0);
+async function addImageCost(accountId, chargeCny, meta) {
   const m = meta || {};
   const jobKey = String(m.jobKey || m.jobId || "");
   const eventId = billingEventIdOf(
@@ -755,106 +1030,29 @@ async function addImageCost(accountId, costCny, meta) {
     jobKey || ("anon-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8))
   );
   await ensureCollection(BILLING_COLL);
-  const col = getDb().collection(BILLING_COLL);
-
-  // ① 领取事件（_id 唯一 → 只有一个调用点能成功）
-  let isNew = false;
-  let ev = null;
+  let result;
   try {
-    await col.add({
-      _id: eventId, accountId, costCny: cost, model: m.model || "", kind: m.kind || "image",
-      jobId: jobKey, parentJobId: m.parentJobId || "",
-      index: Number.isFinite(Number(m.index)) ? Number(m.index) : null,
-      state: "pending", accountApplied: false, usageApplied: false, ts: new Date(),
+    result = await require("./image-billing").settleImageCharge({
+      db: getDb(), accountId, chargeCny, meta: { ...m, jobKey }, eventId,
     });
-    isNew = true;
-  } catch (e) {
-    ev = await readOne(BILLING_COLL, eventId);
-    if (!ev) {
-      logStage("billing_event_read_failed", { eventId: eventId.slice(0, 16) });
-      return false;
-    }
-    if (ev.state === "committed") return true;   // 已完全提交：幂等命中
+  } catch (error) {
+    logStage("billing_transaction_failed", { eventId: eventId.slice(0, 16),
+      err: String((error && error.message) || error).slice(0, 120) });
+    return false;
   }
-
-  // ② 账户累计（CAS 抢占，避免重复 inc）
-  let accountOk = false;
-  if (!isNew && ev && ev.accountApplied) {
-    accountOk = true;                            // 上一轮已累加过，跳过
-  } else {
-    let grabbed = isNew;
-    if (!isNew) {
-      try {
-        const r = await col.where({ _id: eventId, accountApplied: false })
-          .update({ accountApplied: true, accountAppliedAt: Date.now() });
-        grabbed = Number((r && (r.updated !== undefined ? r.updated : r.updatedCount)) || 0) > 0;
-      } catch (e) {
-        // 环境不支持条件更新：退化为「先 inc 再标记」，并明确记录这条降级
-        logStage("billing_cas_unsupported", { eventId: eventId.slice(0, 16) });
-        grabbed = true;
-      }
-    }
-    if (grabbed) {
-      if (isNew) {
-        try { await col.doc(eventId).update({ accountApplied: true, accountAppliedAt: Date.now() }); }
-        catch (e) { /* 标记失败只影响重试效率，不影响本次金额 */ }
-      }
-      try {
-        await getDb().collection(C.accounts).doc(accountId).update({
-          imageUsedCny: getDb().command.inc(cost),
-          dayUsedCny: getDb().command.inc(cost),
-          weekUsedCny: getDb().command.inc(cost),
-        });
-        accountOk = true;
-      } catch (e) {
-        try { await col.doc(eventId).update({ accountApplied: false }); } catch (e2) { /* 忽略 */ }
-        logStage("billing_account_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: cost,
-          err: String((e && e.message) || e).slice(0, 120),
-        });
-      }
-    } else {
-      logStage("billing_event_busy", { eventId: eventId.slice(0, 16) });
-      return false;                              // 交给下一轮 flush 重试
-    }
+  if (result.state !== "committed") {
+    logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), state: result.state });
+    return false;
   }
-
-  // ③ 明细：_id 复用事件 ID → 天然去重
-  let usageOk = !!(!isNew && ev && ev.usageApplied);
-  if (!usageOk) {
-    try {
-      await getDb().collection(C.usage).add({
-        _id: eventId, accountId, kind: "image", costCny: cost, ts: new Date(),
-        model: m.model || "unknown", estimated: false, source: "bf-image",
-        jobId: jobKey, parentJobId: m.parentJobId || "",
-      });
-      usageOk = true;
-    } catch (e) {
-      // 已存在说明上一轮写成功过（唯一 _id 冲突）→ 视为已应用
-      usageOk = !!(await readOne(C.usage, eventId));
-      if (!usageOk) {
-        logStage("billing_usage_failed", {
-          accountId: String(accountId).slice(0, 24), costCny: cost,
-          err: String((e && e.message) || e).slice(0, 120),
-        });
-      }
-    }
-  }
-
-  if (accountOk && usageOk) {
-    try {
-      await col.doc(eventId).update({ state: "committed", usageApplied: true, committedAt: Date.now() });
-    } catch (e) { /* 状态位失败不影响账务正确性 */ }
-    return true;
-  }
-  logStage("billing_commit_incomplete", { eventId: eventId.slice(0, 16), accountOk, usageOk, costCny: cost });
-  return false;
+  const applied=result.priceCny??chargeCny;
+  if(m.modelCalls){for(const call of require('./native-copy-task').allocateCharge(require('./native-copy-task').aggregateCosts(m.modelCalls),applied))await modelLedger.charge(call.modelCallId,call.priceCny,eventId);}
+  else await modelLedger.charge(m.modelCallId, Math.max(0, Number(applied) || 0), eventId);
+  return true;
 }
 
 // ── 幂等 + 任务台账（10-23 改为"原子占位"模型）──
 // 旧实现：先查缓存 → 生成 → 写缓存。两个并发同 requestId 请求会同时未命中、各生成一次、各扣一次费。
 // 现在用 bf_image_jobs 的 _id 抢占：add(_id=rid) 成功才算拿到执行权，重复请求直接复用或返回进行中。
-const IDEM_TTL_MS = 5 * 60 * 1000;
 const JOB_COLL = "bf_image_jobs";
 
 /**
@@ -876,44 +1074,18 @@ function normalizeRid(raw) {
   return "srv-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex");
 }
 
-async function claimIdem(rid, accountId) {
+async function claimIdem(rid, accountId, referenceFingerprint,copyFingerprint) {
   const id = normalizeRid(rid);
   const key = idemKey(id, accountId);
-  const col = getDb().collection(JOB_COLL);
-  try {
-    await col.add({
-      _id: key, clientRequestId: String(id).slice(0, 120), state: "processing",
-      accountId, ts: Date.now(), leanSec: Math.floor(Date.now() / 1000),
-    });
-    return { state: "new", key, rid: id };
-  } catch (e) {
+  const db = getDb();
+  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId, referenceFingerprint,copyFingerprint });
+  if (claim.state === "done" && claim.asset) {
     try {
-      const r = await col.doc(key).get();
-      const d = (r && r.data && r.data[0]) || null;
-      // 归属校验：即使 hash 碰撞或旧数据异常，也绝不把别人的结果交出去
-      const sameOwner = !d || String(d.accountId || "") === String(accountId);
-      if (sameOwner && d && d.state === "done" && Date.now() - Number(d.ts || 0) < IDEM_TTL_MS) {
-        // 10-24 P0-3：组图重放必须返回**完整结果**，不能退化成"单图缓存"
-        return {
-          state: "done", url: d.url, key, rid: id,
-          kind: d.kind || "", result: d.result || null, model: d.model || "",
-        };
-      }
-      // 90 秒内仍是 processing：判为并发重复，不重复生成
-      if (sameOwner && d && d.state === "processing" && Date.now() - Number(d.ts || 0) < 90 * 1000) {
-        return { state: "busy", key, rid: id };
-      }
-      // 失败或超时：接管这条任务
-      await col.doc(key).set({
-        clientRequestId: String(id).slice(0, 120), state: "processing", accountId,
-        ts: Date.now(), retried: true,
-      });
-      return { state: "new", key, rid: id };
-    } catch (e2) {
-      // 台账不可用时仍允许出图（可用性），但不再声称"命中幂等"
-      return { state: "none", key, rid: id };
-    }
+      const signed = await require("./shared/asset-store").createAssetStore({ db, app: __APP }).sign(accountId, [claim.asset.id]);
+      claim.url = signed[0].url;
+    } catch { return { state: "unavailable", key, rid: id }; }
   }
+  return { ...claim, key, rid: id };
 }
 /**
  * 10-24 关键修复：finishIdem / abortIdem 必须用与 claimIdem **同一个** key。
@@ -935,10 +1107,24 @@ async function finishIdem(rid, accountId, url, costCny, model, extra) {
     ts: Date.now(), costCommitted: false,
   };
   const ex = extra || {};
+  // A durable recovery marker; retries archive this URL and never invoke the model.
+  if (url && model !== "series") {
+    patch.archiveState = "pending";
+    patch.archiveAttempts = 0;
+  }
+  if(ex.asset){patch.asset=ex.asset;patch.archiveState="done";}
   if (ex.kind) patch.kind = String(ex.kind).slice(0, 24);
   if (ex.result) patch.result = ex.result;
   if (ex.parentJobId) patch.parentJobId = String(ex.parentJobId).slice(0, 80);
+  // 10-29：costCny 是售价，上游成本另存一份，flush 时才能把成本写进流水
+  if (ex.upstreamCostCny != null) patch.upstreamCostCny = Number(ex.upstreamCostCny) || 0;
+  if (ex.modelCallId) patch.modelCallId = String(ex.modelCallId);
+  if(ex.modelCalls)patch.modelCalls=ex.modelCalls;
+  if(ex.nativeReservationId)patch.nativeReservationId=ex.nativeReservationId;
+  if(ex.imageBudgetId)patch.imageBudgetId=ex.imageBudgetId;
   if (ex.input) patch.input = ex.input;
+  if(ex.referenceFingerprint)patch.referenceFingerprint=ex.referenceFingerprint;
+  if(ex.referenceManifest)patch.referenceManifest=ex.referenceManifest;
   if (Number.isFinite(Number(ex.index))) patch.index = Number(ex.index);
   try {
     const r = await getDb().collection(JOB_COLL).doc(key).update(patch);
@@ -971,12 +1157,13 @@ async function touchIdem(rid, accountId) {
   } catch (e) { /* 续租失败不影响本次执行 */ }
 }
 
-async function abortIdem(rid, accountId, reason) {
+async function abortIdem(rid, accountId, reason, uncertain = false) {
   if (!rid) return false;
   const key = idemKey(rid, accountId);
   try {
     await getDb().collection(JOB_COLL).doc(key).update({
-      state: "failed", reason: String(reason || "").slice(0, 60), ts: Date.now(),
+      state: uncertain ? "uncertain" : "failed", reason: String(reason || "").slice(0, 60), ts: Date.now(),
+      costCommitted: !uncertain,
     });
     return true;
   } catch (e) {
@@ -1003,6 +1190,9 @@ async function flushJobs(maxJobs) {
         model: d.model || "unknown",
         jobKey: String(id),
         kind: d.kind || "image",
+        upstreamCostCny: d.upstreamCostCny,
+        modelCallId: d.modelCallId,
+        modelCalls:d.modelCalls,nativeReservationId:d.nativeReservationId,imageBudgetId:d.imageBudgetId,
         parentJobId: d.parentJobId || "",
         index: d.index,
       });
@@ -1118,6 +1308,47 @@ const EDIT_CONSTRAINTS =
   "\n\n【局部编辑】只执行用户明确要求的修改；尽量保持未指定区域、人物身份、物体位置与原图画布不变。\n" +
   "若用户要求更换背景、色调或光线，则允许对应部分发生变化，不得同时要求该部分保持原样。\n" +
   "新增内容须与场景透视、光照和阴影自然融合；不要添加未提及元素、额外文字或水印。";
+/**
+ * 10-28 交付物边界兜底：图片里不放"核对说明"。
+ *
+ * 事故：用户要一张 AI 热讯周报海报，成品底部印着「数据来源：公开报道整理，截至…」
+ * 和「未核实项：Meta Muse 留存与付费转化未公开…」。
+ * 那是我们自己的数据真实性规则（META_RULE 第 1~5 条）被错误地执行到了**图片**上：
+ * 出处与未核实项本该写在聊天正文，结果印进了交付物。
+ *
+ * 规则独立注入；实际文案清理由 shared/image-delivery 在工具回程和 Provider
+ * 编译前共用。保留用户要求的正文、截止日期及免责声明，不做品类关键词封禁。
+ */
+/**
+ * 10-28 多图输入契约。
+ *
+ * 事故：用户上传「人物照 + 底图」，要求把人物照里的人合成到底图上握手。
+ * 请求里确实到了两张图，但没有任何角色说明，模型只能猜哪张是底图、哪张是素材，
+ * 于是它照 prompt 里的文字重新画了一个"有点像"的人——看起来像合成，其实人换了。
+ *
+ * 规则：输入图 >= 2 时，在 prompt 最前面显式编号并声明合成义务。
+ * 角色由客户端 reference_roles 提供（与图序一一对应）；缺省按「第一张底图、其余素材」，
+ * 这与客户端 ImageReferenceResolver 的顺序契约严格一致，两边不能各说各话。
+ */
+function multiImageContract(image, referenceRoles, taskKind, workflowPlan, scopedReference = false) {
+  const list = Array.isArray(image) ? image : (image ? [image] : []);
+  if (list.length < 2) return "";
+  const roles = Array.isArray(referenceRoles) ? referenceRoles : [];
+  const labels = list.map((_, i) => {
+    const role = String(roles[i] || "").trim().slice(0, 24);
+    if (role) return `图${i + 1}=${role}`;
+    return i === 0 ? `图${i + 1}=底图` : `图${i + 1}=素材${i}`;
+  });
+  return "\n\n【多图输入·素材角色】本次共 " + list.length + " 张输入图（以下编号仅为上游发送槽位，不是用户附件原始编号）：" +
+    labels.join("；") + "。\n" +
+    "① 按底图、人物素材、产品素材、风格参考的角色执行，不能擅自把用户附件编号解释成上面的槽位编号；\n" +
+    "② 素材中未被用户要求修改的人物身份、发型、服装、产品外观必须保留，禁止用相似但不同的人或物替代；\n" +
+    (scopedReference ? "③ 重设计整幅作品不授权重画已标明的真实UI或品牌原件内部，按后文的重新设计范围执行；\n" : workflowPlan ? "③ 以本次作图任务计划界定可变区域与受保护素材，不把真实产品或UI当成可重画的风格参考；\n" : String(taskKind || "") === "reference"
+      ? "③ 本次是重新设计：底图提供主题与内容，必须按新风格重构版式与元素排列，风格参考不作为保持原构图的要求；\n"
+      : "③ 输出画布以底图为准，不裁切；只修改用户指定区域，保留其余构图与内容；\n") +
+    "④ 合成位置、尺度、透视与光影要自然，接触处必须有合理阴影。";
+}
+
 const REFERENCE_CONSTRAINTS =
   "\n\n【参考图重新设计】输入图只提供主题、主体与关键信息，**必须重新设计整张作品**：" +
   "①重做版式与元素排列，不复刻参考图的布局、图标排布、分割方式；" +
@@ -1167,7 +1398,7 @@ function assembleStructured(structured, includeText = true) {
   const order = ["subject", "setting", "composition", "lighting", "material", "negative"];
   const parts = order.map((k) => typeof structured[k] === "string" ? structured[k].trim() : "").filter(Boolean);
   const copy = includeText ? visibleCopyValues(structured.text) : [];
-  if (copy.length) parts.push("画面中必须准确呈现以下文字：" + copy.join("\n"));
+  if (copy.length) parts.push("画面中必须准确呈现以下文字：" + copy.map(value=>JSON.stringify(value)).join("\n"));
   if (!parts.length) return "";
   return parts.join("。") + "。";
 }
@@ -1199,19 +1430,52 @@ const RENDER_INTENT_RULES = {
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
 };
 
-async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, taskKind, qualityTier, model, requestedCount, textMode }) {
+/**
+ * 拆层参数白名单。上游默认 max_images=30，如果客户端指定了更小的值却不通传，
+ * 就会按 30 层去拆，用户按实际张数付费→白花三倍钱。这里只放行两个已文档化的键。
+ */
+function sanitizeLayerOptions(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out = {};
+  const n = Number(raw.max_images);
+  if (Number.isFinite(n)) out.max_images = Math.min(100, Math.max(2, Math.floor(n)));
+  if (raw.text_recognition === true) out.text_recognition = true;
+  return Object.keys(out).length ? out : null;
+}
+
+async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, layerOptions, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles, accountId,deadlineAt,repairNativeCopy=false }) {
+  // 从上游响应提取真实用量。定义在函数内部，保证单独加载 generate 的调用方
+  // （测试、隔离评估）不需要额外注入这个依赖。
+  const providerUsageOf = j => {
+    if (!j || typeof j !== "object") return null;
+    const u = j.usage || {};
+    const rows = Array.isArray(j.data) ? j.data : [];
+    const sizes = rows.map(d => (d && typeof d.size === "string" ? d.size : "")).filter(Boolean);
+    return {
+      input_images: Math.max(0, Number(u.input_images || 0)),
+      generated_images: Number.isSafeInteger(Number(u.generated_images)) ? Number(u.generated_images) : rows.length,
+      output_sizes: sizes,
+    };
+  };
   const apiKey = String(RT.IMAGE_API_KEY || "");
   if (!apiKey) return { ok: false, code: 503, msg: "IMAGE_API_KEY 未配置" };
 
   // 10-24 混合路由：模型由服务端决定，App 只表达任务类型与质量偏好。
-  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier });
+  const route = model ? { model, reason: "explicit" } : selectImageRoute({ taskKind, qualityTier, prompt, image, structured, textMode });
   if (route.unsupported) {
     logStage("route_unsupported", { taskKind: taskKind || "generate", reason: route.reason });
     return { ok: false, code: 422, msg: "当前配置的模型不支持该任务", unsupported: true, reason: route.reason };
   }
-  const selectedModel = String(route.model || "").trim() || String(RT.IMAGE_MODEL || "").trim();
+  let selectedModel = String(route.model || "").trim() || String(RT.IMAGE_MODEL || "").trim();
   if (!selectedModel) return { ok: false, code: 503, msg: "未配置生图模型" };
-  const caps = capsOf(selectedModel);
+  let caps = capsOf(selectedModel);
+  if (String(RT.IMAGE_ROUTING_MODE) === "auto" && parseAutoPolicy(RT.IMAGE_AUTO_POLICY).capabilityFallback
+      && ((layerDecomposition === true && !caps.layers) || (image && !caps.edit))) {
+    const pro = modelsOf().pro, proCaps = capsOf(pro);
+    if (pro && (!layerDecomposition || proCaps.layers) && (!image || proCaps.edit)) {
+      selectedModel = pro; caps = proCaps; route.reason = "auto:capability-pro";
+    }
+  }
   // 10-25 P0：把"最终用了哪个模型、为什么"写进日志。
   // 只打模型 id 与原因码，不打提示词正文（含用户内容），排查够用且不落隐私。
   logStage("image_route", {
@@ -1248,37 +1512,103 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     };
   }
 
+  // 交付物边界兜底：把"数据来源/未核实/仅供参考"这类核对说明从画面文案里剔掉
+  const cleanedPrompt = cleanImageRequest({ prompt, structured });
+  const rawPrompt = String(cleanedPrompt.prompt || "").trim();
+  structured = cleanedPrompt.structured;
+  if (cleanedPrompt.removed > 0) {
+    logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
+  }
+  let reformat;
+  try{reformat=require('./shared/poster-reformat').plan({structured,image,task_kind:taskKind,text_mode:textMode,layer_decomposition:layerDecomposition,render_intent:renderIntent,referenceRoles});}
+  catch(e){return {ok:false,code:422,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:'改版需要读取原海报，这次尚未生成或扣费，请重新选择原图。'};}
+  if(reformat)logStage('poster_reformat_native',{aspectRatio:reformat.intent.target_aspect_ratio,inputImages:Array.isArray(image)?image.length:1,model:selectedModel});
+  let workflowPlan;
+  try{workflowPlan=reformat?null:require("./shared/image-workflow").compile({structured,image,taskKind,textMode,policy:RT.IMAGE_COMPOSITION_POLICY,owner:accountId});}
+  catch(e){logStage("image_plan_rejected",{reason:e.code});return {ok:false,code:422,error:e.code,msg:"作图方案的素材或文字模式不一致，尚未开始生成，请重新选择素材后重试。"};}
+  let protection;
+  if((workflowPlan?.native||workflowPlan?.protectUI)&&workflowPlan.protected_references.some(r=>["ui","logo"].includes(r.role))){
+    try{protection=await protectedAssetCompositionOf().prepare({plan:workflowPlan,image,owner:accountId,structured,authorization:reqStore.getStore()?.memberAuthorization,deferGarbledText:repairNativeCopy});}
+    catch(e){logStage("protected_asset_preflight_failed",{code:e?.code||"ASSET_UNAVAILABLE"});return {ok:false,code:422,error:"IMAGE_ASSET_UNAVAILABLE",msg:"这次需要的原始素材尚未完整读取，尚未生成或扣费，请重新选择原图后再试。"};}
+  }
+  let composition=null;
+  if(accountId && !workflowPlan?.native && !reformat && !repairNativeCopy){
+    try{const input={prompt,structured,renderIntent,taskKind,textMode,layerDecomposition,accountId,resolvedSize:resolveSize(size,aspectRatio)};
+      composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(input,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(input,RT.IMAGE_COMPOSITION_POLICY);}
+    catch(e){
+      logStage("image_composition_preflight_failed",{reason:e?.code||"COMPOSITION_UNAVAILABLE"});
+      if(e?.code==="COMPOSITION_CONTENT_OVERFLOW"||e?.code==="COMPOSITION_COPY_LIMIT")return {ok:false,code:422,error:"COMPOSITION_CONTENT_TOO_DENSE",msg:"这张画布无法清晰放下全部内容，请增加画布高度或拆成多张；尚未开始生成，也未产生作图费用。"};
+      return {ok:false,code:503,msg:"这张图的文字版式或字体暂时没有准备好，尚未开始生成，请稍后重试。"};
+    }
+  }
   // 新请求以 Agent 的 prompt 为唯一视觉描述；旧客户端只有结构化数据时才用它兜底。
-  const overlayMode = String(textMode || "") === "overlay";
-  const rawPrompt = String(prompt || "").trim();
+  const overlayMode = String(textMode || "") === "overlay" || !!composition;
+  const effectiveTextMode=composition?"overlay":textMode;
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
   let basePrompt = rawPrompt || structPrompt;
+  if(require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)){
+    const styleDirective=require("./shared/image-style-reference").compileStyleReference(structured?.style_reference,referenceRoles);
+    if(styleDirective)basePrompt+="\n"+styleDirective;
+  }
+  const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode:effectiveTextMode,
+    visualExecution:require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),items:structured?.text||[] });
+  if (designBrief&&!composition) basePrompt += "\n\n" + designBrief;
+  if(composition)basePrompt=composition.engine==="overlay"?composition.prompt:composition.designEngine==="product_v2"?
+    "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
+    require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork);
+  if(composition&&composition.engine==="overlay"){image=[composition.sketch];logStage("overlay_sketch_dispatch",{cols:composition.layout.grid.cols,rows:composition.layout.grid.rows});}
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
 
   // 10-26：overlay 模式下底图必须是"无字"的，文案由客户端排版层绘制。
   // 旧实现会把 missingCopy 追加回 prompt，导致底图出现模型画的乱码小字，排版层再叠一遍。
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
-  if (rawPrompt && !overlayMode) {
-    const missingCopy = visibleCopyValues(structured && structured.text)
-      .filter((value) => !rawPrompt.includes(value));
-    if (missingCopy.length) {
-      basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.join("\n");
+  if (rawPrompt && !overlayMode && !(designBrief && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId) && structured?.design_brief?.visual_map)) {
+    const typedCopy = require("./shared/image-design-brief").compileNativeCopy(structured && structured.text, { taskKind, textMode,
+      literalLines:/^doubao-seedream-5-5-/.test(selectedModel)||require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),
+      compact:/^doubao-seedream-5-5-/.test(selectedModel)&&!structured?.design_brief?.visual_map });
+    if (typedCopy) {
+      basePrompt += "\n\n" + typedCopy;
+    } else {
+      const missingCopy = visibleCopyValues(structured && structured.text)
+        .filter((value) => !rawPrompt.includes(value));
+      if (missingCopy.length) basePrompt += "\n\n【需准确呈现的原文】\n" + missingCopy.map(value=>JSON.stringify(value)).join("\n");
     }
   }
 
   // 只应用 Agent 明确提供的输出形态；不得再按“名片/海报”等关键词套模板。
   const intentRule = RENDER_INTENT_RULES[String(renderIntent || "")] || "";
   if (intentRule) basePrompt = basePrompt + "\n\n" + intentRule;
-  const taskPolicy = isPixelEdit
+  const providerInput=workflowPlan?require("./shared/image-workflow").providerInput(workflowPlan,image,referenceRoles,basePrompt):null;
+  if(providerInput){image=providerInput.image;referenceRoles=providerInput.referenceRoles;basePrompt=providerInput.prompt;
+    logStage("protected_reference_dispatch",{originalCount:providerInput.originalCount,providerCount:providerInput.providerCount,serverLogoCount:providerInput.excludedLogos.length});}
+  const scopedReference = !workflowPlan && !composition && taskKind==="reference" && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
+    ? require("./shared/image-design-brief").compileNativeReferenceConstraints(referenceRoles,image):"";
+  const taskPolicy = scopedReference || (composition?.designEngine==="product_v2"?"":workflowPlan ? require("./shared/image-workflow").constraints(workflowPlan,providerInput) : isPixelEdit
     ? EDIT_CONSTRAINTS
-    : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : "");
+    : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : ""));
   // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
   const needsNoText = overlayMode;
-  const finalPrompt = basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy;
+  // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
+  const finalPrompt = reformat?reformat.prompt:multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
+    + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
+      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
 
-  const resolvedSize = resolveSize(size, aspectRatio);
+  // 2026-11-22：客户端没给 aspect_ratio 时，过去只传「2K」，画布由上游自己挑——
+  // 实测同一段烘焙需求出过 1280x3200（0.4）、1664x2496（0.667）、1776x2368（0.75）三种，
+  // 客户端几何校验会直接判「比例不符」并把图丢掉。这里从提示词里把构图意图读出来再定尺寸。
+  function inferAspectFromPrompt(text) {
+    const t = String(text || "");
+    if (/9\s*[:：]\s*16|竖屏|手机壁纸/.test(t)) return "9:16";
+    if (/16\s*[:：]\s*9|横版|横幅|banner/i.test(t)) return "16:9";
+    if (/4\s*[:：]\s*3/.test(t)) return "4:3";
+    if (/1\s*[:：]\s*1|方图/.test(t)) return "1:1";
+    if (/3\s*[:：]\s*4|竖版|海报|易拉宝|展架|门店贴/.test(t)) return "3:4";
+    return "";
+  }
+  const aspectForSize = aspectRatio || inferAspectFromPrompt(finalPrompt);
+  const resolvedSize = layerDecomposition === true ? 'auto' : resolveSize(size, aspectForSize);
   if (!resolvedSize) {
     logStage("image_size_unsupported", { taskKind, aspectRatio: String(aspectRatio || "") });
     return {
@@ -1293,20 +1623,36 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     response_format: "url",
     watermark: false,
   };
+  // The official Pro/Flash/5.5 API supports PNG. Avoid a lossy JPEG stage for dense
+  // lettering; this does not pretend to recover malformed generated glyphs.
+  Object.assign(payload,require('./shared/image-policy').providerOutputOptions(selectedModel,
+    require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)));
+  if(composition&&composition.engine==="overlay"){
+    payload.size=composition.width+"x"+composition.height;
+  }else if(composition&&composition.designEngine!=="product_v2"){
+    const dims=resolvedSize.match(/^(\d+)x(\d+)$/),pixels=dims?Number(dims[1])*Number(dims[2]):4194304;
+    payload.size=resolveImageSize(pixels>2610000?"2K":"1.5K",composition.manifest.artwork?.aspectRatio||"3:1");
+  }
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
-  if (caps.fastPromptMode) {
-    payload.optimize_prompt_options = { mode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE) };
+  if (caps.fastPromptMode && !image) {
+    payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
   }
   if (image) payload.image = image;
   // 10-23 图层拆分（Seedream 5.0 pro 原生能力）：仅支持 1 张图，返回底图 + 最多 16 个透明 PNG 图层
-  if (layerDecomposition === true) payload.layer_decomposition = true;
-  // 组图：只有 Lite 支持（Pro/Flash 明确不支持，前面已拦截）
+  if (layerDecomposition === true) {
+    payload.layer_decomposition = true;
+    // 必须透传，否则上游按默认 30 层拆分，用户按张数付费会多花数倍。
+    payload.layer_decomposition_options = layerOptions && typeof layerOptions === "object" ? {max_images:2,...layerOptions} : {max_images:2};
+  }
+  // 原生组图：Lite / 4.5 / 4.0；Pro/Flash 在前面明确拒绝。
   if (String(taskKind || "") === "series" && caps.series) {
     payload.sequential_image_generation = "auto";
     const n = Number(requestedCount);
-    if (Number.isFinite(n) && n > 1) payload.max_images = Math.min(8, Math.max(2, Math.floor(n)));
+    if (Number.isFinite(n) && n > 1) {
+      payload.sequential_image_generation_options = { max_images: Math.min(8, Math.max(2, Math.floor(n))) };
+    }
   }
 
   const controller = new AbortController();
@@ -1314,22 +1660,51 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   //   上游模型 260s → 云函数内部 280s → 网关 300s → 客户端 315s
   // 之前这里是 280s，与函数预算贴死：上游一慢，函数超时先触发，客户端只看到网关 504，
   // 拿不到"上游超时"这个可判定的错误码。
-  const timer = setTimeout(() => controller.abort(), 260000);
+  const timeout=Math.min(composition?180000:260000,Number.isFinite(deadlineAt)?Math.max(1,deadlineAt-Date.now()):260000);
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
-    const r = await fetch(IMAGE_BASE + "/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    const j = await r.json().catch(() => null);
-    const url = j && j.data && j.data[0] && j.data[0].url;
-    if (!r.ok || !url) {
-      return { ok: false, code: 502, msg: "上游失败", status: r.status, detail: JSON.stringify(j).slice(0, 300) };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await modelLedger.fetch(IMAGE_BASE + "/images/generations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
+        body: JSON.stringify(payload), signal: controller.signal,
+      }, fetch);
+      const j = await r.json().catch(() => null);
+      const url = j && j.data && j.data[0] && j.data[0].url;
+      if (!r.ok || !url) {
+        logStage("image_upstream_rejected", { model: selectedModel, status: r.status,
+          upstreamCode: String(j && j.error && j.error.code || j && j.code || "UNKNOWN").slice(0, 100),
+          missingField: String(j && j.error && j.error.param || ((String(j && j.error && j.error.message || "").match(/missing\s+['"`]?([a-z_]+)/i) || [])[1]) || "").replace(/[^a-z_]/gi, "").slice(0, 40) });
+        if (attempt === 0 && canFallbackToPro({ mode: String(RT.IMAGE_ROUTING_MODE), selected: selectedModel,
+            pro: modelsOf().pro, status: r.status, body: j, policy: RT.IMAGE_AUTO_POLICY })) {
+          const previous = selectedModel;
+          selectedModel = modelsOf().pro; caps = capsOf(selectedModel);
+          // A definite capability rejection permits one upgrade, under the same
+          // idempotency claim and total deadline. Never retry an uncertain result.
+          payload.model = selectedModel;
+          delete payload.optimize_prompt_options;
+          if (caps.fastPromptMode && !image) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
+          route.reason = "auto:capability-rejection-pro";
+          logStage("image_route_upgrade", { from: previous, model: selectedModel, reason: route.reason, status: r.status });
+          continue;
+        }
+        return { ok: false, code: 502, msg: "上游失败", status: r.status,
+          unknownOutcome: r.ok || r.status >= 500, detail: JSON.stringify(j).slice(0, 300) };
+      }
+      if(protection&&workflowPlan.native){
+        try{const artifact=await protectedAssetCompositionOf().finish(protection,url);return {ok:true,...artifact,providerInputCount:providerInput?.providerCount,model:selectedModel,routeReason:route.reason,caps,modelCallId:r.modelCallId,providerUsage:providerUsageOf(j)};}
+        catch(e){logStage("protected_asset_composition_failed",{code:e?.code||"ASSET_COMPOSITION_UNAVAILABLE",modelCallId:r.modelCallId,draftAssetId:e?.draftAsset?.id});return {ok:false,code:503,unknownOutcome:true,msg:"画面已生成，原始素材合成或质量复核尚未完成，请稍后查看，暂时不要重复生成。"};}
+      }
+      if(composition){
+        try{const artifact=await (composition.designEngine==="product_v2"?commercialCompositionOf().finishProduct(composition,url,accountId):commercialCompositionOf().finish(composition,url,accountId));
+          return {ok:true,...artifact,providerInputCount:providerInput?.providerCount,model:selectedModel,routeReason:route.reason,caps,modelCallId:r.modelCallId,providerUsage:providerUsageOf(j)};}
+        catch(e){logStage("image_composition_storage_failed",{reason:e?.code||"COMPOSITION_ARCHIVE_UNAVAILABLE",modelCallId:r.modelCallId});
+          return {ok:false,code:503,unknownOutcome:true,msg:"画面已经生成，成品保存仍在确认中，请稍后查看，暂时不要重复生成。"};}
+      }
+      return { ok: true, url, providerInputCount:providerInput?.providerCount, model: selectedModel, routeReason: route.reason, caps, modelCallId: r.modelCallId, providerUsage: providerUsageOf(j) };
     }
-    return { ok: true, url, model: selectedModel, routeReason: route.reason, caps };
   } catch (e) {
-    return { ok: false, code: 504, msg: String((e && e.message) || e).slice(0, 200) };
+    return { ok: false, code: 504, unknownOutcome: true, msg: String((e && e.message) || e).slice(0, 200) };
   } finally {
     clearTimeout(timer);
   }
@@ -1340,7 +1715,7 @@ const server = http.createServer(async (req, res) => {
   // 10-24：requestId 贯穿 + 错误响应统一规范化
   const inboundRid = String(req.headers["x-request-id"] || "").trim().slice(0, 64);
   const rid = inboundRid || ("req_" + crypto.randomBytes(6).toString("hex"));
-  reqStore.enterWith({ requestId: rid });
+  return reqStore.run({ requestId: rid, endpoint: String(req.url || "").split("?")[0] },async()=>{
   res.setHeader("X-Request-Id", rid);
 
   const send = (code, obj) => {
@@ -1419,6 +1794,7 @@ const server = http.createServer(async (req, res) => {
     return send(200, {
       ok: true,
       routingMode: String(RT.IMAGE_ROUTING_MODE || "auto"),
+      autoPolicy: parseAutoPolicy(RT.IMAGE_AUTO_POLICY),
       promptOptimizationMode: promptOptimizationMode(RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE),
       resolutionTier: String(RT.IMAGE_SIZE || "1.5K"),
       seriesMode: "single_image_orchestration",
@@ -1436,7 +1812,7 @@ const server = http.createServer(async (req, res) => {
           { key: "generate_auto", args: { taskKind: "generate", qualityTier: "auto" } },
           { key: "generate_pro", args: { taskKind: "generate", qualityTier: "pro" } },
           { key: "edit_pro", args: { taskKind: "edit", qualityTier: "pro" } },
-          { key: "series", args: { taskKind: "generate", qualityTier: "auto" } },
+          { key: "series", args: { taskKind: "series", qualityTier: "auto" } },
         ];
         const out = {};
         for (const c of cases) {
@@ -1464,20 +1840,9 @@ const server = http.createServer(async (req, res) => {
     const auth = await requireMember(req);
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
 
-    const q = await quotaExhausted(req);
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      return send(429, {
-        ok: false, code: 429, error: "POOL_EXHAUSTED",
-        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
-      });
-    }
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
 
     const body = (await readBody(req)) || {};
     const prompt = String(body.prompt || "").trim();
@@ -1502,18 +1867,32 @@ const server = http.createServer(async (req, res) => {
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
     const clientRid = normalizeRid(body.requestId);
     const taskId = seriesTaskIdOf(auth.sub, clientRid);
+    let referenceFingerprint;
+    try { referenceFingerprint = referenceRequestFingerprint(body.structured && body.structured.image_references); }
+    catch { return send(422, { ok: false, error: "IMAGE_REFERENCES_INVALID", msg: "参考素材参数尚未完整，请重新选择原图后再试。" }); }
 
     // 幂等：同一 requestId 重复 start 返回同一任务，不新建、不重复预留
     const existing = await readSeriesTask(taskId);
     if (existing) {
+      if (existing.accountId !== auth.sub) return send(403, { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" });
+      if ((existing.referenceFingerprint || "") !== referenceFingerprint) {
+        return send(409, { ok: false, error: "IMAGE_REFERENCE_CONFLICT", msg: "这次任务的素材已经确定，请新建任务来更换素材。" });
+      }
       return send(200, Object.assign(seriesTaskPayload(existing), { idempotent: true, ms: Date.now() - tStart }));
     }
 
-    const models = modelsOf();
-    const unitWorst = Math.max(
-      priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
-      priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
-    );
+    let referenceInput = { referenceManifest: null, referenceFingerprint: "" };
+    try {
+      if (referenceFingerprint) referenceInput = await prepareSeriesReferenceInput({ store: imageReferenceStoreOf(),
+        owner: auth.sub, structured: body.structured, image: body.image });
+      if (body.image && !referenceInput.referenceManifest) throw Error("IMAGE_REFERENCE_NOT_DURABLE");
+    } catch {
+      logStage("series_reference_preflight_failed", {});
+      return send(422, { ok: false, error: "IMAGE_REFERENCE_UNAVAILABLE", msg: "这组图需要的原图尚未同步完整，请先同步素材后再试。这次没有生成图片或扣费。" });
+    }
+
+    const inputImageCount = referenceInput.referenceManifest ? referenceInput.referenceManifest.references.length : 0;
+    const unitWorst = worstSeriesUnitPrice(resolved, inputImageCount);
     const need = Number((unitWorst * n).toFixed(4));
     if (typeof q.remainingCny === "number" && q.remainingCny + 1e-6 < need) {
       logStage("series_start_quota_short", { sub: auth.sub, n, remaining: q.remainingCny, need });
@@ -1540,6 +1919,7 @@ const server = http.createServer(async (req, res) => {
       sizeResolved: resolved,
       renderIntent, aspectRatio, qualityTier,
       hasImage: !!body.image,
+      ...(referenceInput.referenceManifest ? referenceInput : {}),
       reservedCny: need,
       succeeded: 0,
       failedIndices: [],
@@ -1554,11 +1934,20 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       // 并发 start：另一个请求刚建好 → 返回已有的那份
       const again = await readSeriesTask(taskId);
-      if (again) return send(200, Object.assign(seriesTaskPayload(again), { idempotent: true }));
+      if (again && again.accountId !== auth.sub) return send(403, { ok: false, error: "FORBIDDEN", msg: "这个任务不属于当前账号。" });
+      if (again && (again.referenceFingerprint || "") === referenceFingerprint) return send(200, Object.assign(seriesTaskPayload(again), { idempotent: true }));
+      if (again) return send(409, { ok: false, error: "IMAGE_REFERENCE_CONFLICT", msg: "这次任务的素材已经确定，请新建任务来更换素材。" });
       logStage("series_start_create_failed", { sub: auth.sub, err: String((e && e.message) || e).slice(0, 120) });
       return send(500, { ok: false, code: 500, error: "INTERNAL", msg: "任务创建失败，请稍后重试。" });
     }
-    await reserveQuota(taskId, auth.sub, need);
+    const reserved = await reserveQuota(taskId, auth.sub, need,q.capCny);
+    if (!reserved) {
+      await getDb().collection(SERIES_COLL).doc(taskId).update({
+        status: "failed", failedReason: "quota_reservation_unavailable", updatedAt: Date.now(),
+      }).catch(() => {});
+      return send(503, { ok: false, code: 503, error: "QUOTA_RESERVATION_UNAVAILABLE",
+        msg: "暂时无法预留本次额度，没有开始生成图片，请稍后重试。" });
+    }
     logStage("series_started", { sub: auth.sub, taskId: taskId.slice(0, 16), n, need });
     return send(200, Object.assign(seriesTaskPayload(doc), { ms: Date.now() - tStart }));
   }
@@ -1600,6 +1989,10 @@ const server = http.createServer(async (req, res) => {
       return send(200, Object.assign(seriesTaskPayload(task), { step: idx, reused: true, ms: Date.now() - tStep }));
     }
 
+    // A durable task is not a bypass around current membership/quota state.
+    // Cache/idempotent reads above remain available without a new paid call.
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
     try {
       const item = await executeSeriesStep(task, idx, auth.sub);
       await flushJobs(2);
@@ -1672,26 +2065,20 @@ const server = http.createServer(async (req, res) => {
     const auth = await requireMember(req);
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
     await flushJobs();
-    const q = await quotaExhausted(req);
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      return send(429, {
-        ok: false, code: 429, error: "POOL_EXHAUSTED",
-        msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt,
-      });
-    }
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
     const body = (await readBody(req)) || {};
     const parentRid = normalizeRid(body.requestId || body.parentRequestId);
     const rec = await readOne(JOB_COLL, idemKey(parentRid, auth.sub));
     const prev = rec && rec.result;
     const input = rec && rec.input;
     if (!prev || prev.task_kind !== "series" || !input) {
+      const task = await readSeriesTask(seriesTaskIdOf(auth.sub, parentRid));
+      if (task) {
+        const retry = await retryStoredSeriesTask(task, auth.sub, body.indices, q);
+        return send(retry.status, retry.payload);
+      }
       return send(404, {
         ok: false, code: 404, error: "SERIES_NOT_FOUND",
         msg: "没有找到这次组图任务的记录，请重新生成。",
@@ -1771,34 +2158,43 @@ const server = http.createServer(async (req, res) => {
     // 记账补投：上次已完成但未记账的任务在这里补上（最多 3 条）
     await flushJobs();
 
-    const q = await quotaExhausted(req);
-    // 10-24 P1-2：不可用 ≠ 用完。服务故障时告诉用户"续费"是错误引导，
-    // 正确做法是 503 + 可重试文案，并且明确"这次没有生成、不会扣费"。
-    if (q.denied) return sendDenied(q, send);
-    if (q.unavailable) {
-      logStage("quota_check_unavailable", { sub: auth.sub, reason: q.reason });
-      return send(503, {
-        ok: false, code: 503, error: "QUOTA_CHECK_UNAVAILABLE",
-        msg: "暂时无法确认额度，请稍后重试。这次没有生成图片，也不会扣费。",
-      });
-    }
-    if (q.exhausted) {
-      logStage("quota_exhausted", { sub: auth.sub });
-      return send(429, { ok: false, code: 429, error: "POOL_EXHAUSTED", msg: "本月额度已用完，续费后立即恢复。", resetAt: q.resetAt });
-    }
-
     let body = null;
     try { body = await readBody(req); } catch (e) { body = null; }
     if (!body) return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "请求体解析失败" });
+    body=require('./shared/poster-reformat').normalize(body);
+    body.requestId=normalizeRid(body.requestId);
+    const copyEnabled=require('./shared/native-copy-policy').eligible(RT.IMAGE_COMPOSITION_POLICY,auth.sub,body);
+    if(copyEnabled&&reqStore.getStore())reqStore.getStore().excludedReservationId=require('./native-copy-budget').keyOf(auth.sub,body.requestId);
+    const gate = await paidImageGate(req);
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    const q = gate.quota;
 
     const prompt = String(body.prompt || "").trim();
     const hasStructured = !!(body.structured && typeof body.structured === "object" && Object.keys(body.structured).length);
 
-    // 幂等占位：add(_id=rid) 成功才拿到执行权；重复请求复用结果或返回"进行中"。
+    // Resolve actual owned originals before claim/cost, without downloading or
+    // persisting temporary input URLs. New single mixed tasks are opt-in.
+    let mixedInput=null;
+    if(body.structured?.image_references!=null){
+      const {prepareMixedReferenceInput,mixedReferencesEnabled}=require('./shared/image-reference-merge');
+      const kind=String(body.task_kind||body.taskKind||'edit');
+      if(!mixedReferencesEnabled(RT.IMAGE_MIXED_REFERENCES_POLICY,auth.sub)||!['edit','reference','generate'].includes(kind)||body.layer_decomposition===true||body.structured?.preserve_assets?.length||!['append','replace'].includes(body.structured.image_references.mode)){
+        return send(422,{ok:false,error:'TASK_UNSUPPORTED',msg:'这次素材组合需要使用对应的完整原图流程，请重新选择底图与素材。这次没有生成图片或扣费。'});
+      }
+      try{mixedInput=await prepareMixedReferenceInput({store:imageReferenceStoreOf(),owner:auth.sub,structured:body.structured,image:body.image,referenceRoles:body.reference_roles,
+        readAsset:async(owner,id)=>require('./shared/document-store').documentOf(await getDb().collection('bf_assets').doc(id).get())});}
+      catch(e){const f=require('./shared/image-reference-merge').referenceFailure(e);logStage('mixed_reference_unavailable',{diagnosticCode:f.diagnostic});return send(f.status,{ok:false,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:f.msg});}
+      mixedInput.referenceFingerprint=require('./shared/image-reference-merge').bindReferenceRequest(mixedInput.referenceFingerprint,body);
+    }
     // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
     const rid = normalizeRid(body.requestId);
-    const claim = await claimIdem(rid, auth.sub);
+    if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
+    const copyFingerprint=copyEnabled?nativeCopyFingerprint(body,mixedInput?.referenceFingerprint):undefined;
+    const claim = await claimIdem(rid, auth.sub, mixedInput?.referenceFingerprint,copyFingerprint);
+    if(claim.state==='conflict')return send(409,{ok:false,error:'IMAGE_REFERENCE_CONFLICT',msg:'这次任务使用的素材已确定，请新建任务来更换素材。'});
     if (claim.state === "done") {
+      if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
+      await modelLedger.cached(claim.model || "idempotent-cache", "image");
       logStage("idempotent_hit", { sub: auth.sub, rid, kind: claim.kind || "image" });
       // 10-24 P0-3：组图重放必须返回完整 items[]，不能退化成"单图缓存"
       if (claim.result && claim.result.task_kind === "series") {
@@ -1815,14 +2211,26 @@ const server = http.createServer(async (req, res) => {
       logStage("idempotent_busy", { sub: auth.sub, rid });
       return send(409, {
         ok: false, code: 409, error: "IN_PROGRESS",
-        msg: "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
+        msg: claim.confirming ? "上一次生成的结果仍在确认中，请稍后查看，暂时不要重复提交。" : "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
       });
     }
-    if (!prompt && !hasStructured) { await abortIdem(rid, auth.sub, "missing_prompt"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" }); }
+    if(claim.state==='copy_rejected')return send(422,{ok:false,error:'IMAGE_TEXT_REVIEW_REQUIRED',msg:'这次图片的文字与原始资料未能通过复核，请调整需求后重新提交；本次未扣图片额度。'});
+    if (!["new","resume_copy"].includes(claim.state)) return send(503, { ok: false, error: "STORAGE_UNAVAILABLE",
+      msg: "暂时无法确认这次生成的状态，尚未重复生成，请稍后重试。" });
+    if(mixedInput){
+      try{const source=await resolveSeriesReferenceInput({store:imageReferenceStoreOf(),owner:auth.sub,manifest:mixedInput.referenceManifest});body={...body,image:source.image,reference_roles:source.referenceRoles};}
+      catch(e){await abortIdem(rid,auth.sub,'reference_unavailable');const f=require('./shared/image-reference-merge').referenceFailure(e);logStage('mixed_reference_sign_failed',{diagnosticCode:f.diagnostic});return send(f.status,{ok:false,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:f.msg});}
+      const resolved=resolveSize(body.size,body.aspect_ratio||body.aspectRatio);
+      if(!resolved){await abortIdem(rid,auth.sub,'image_size_unsupported');return send(422,{ok:false,error:'IMAGE_SIZE_UNSUPPORTED',msg:'当前画布比例暂不支持，请改用常见比例后重试。这次没有生成图片或扣费。'});}
+      const need=worstSeriesUnitPrice(resolved,body.image.length);
+      if(typeof q.remainingCny==='number'&&q.remainingCny+1e-6<need){await abortIdem(rid,auth.sub,'quota_insufficient');return send(402,{ok:false,error:'QUOTA_INSUFFICIENT',msg:'剩余额度不足以完成这次多素材图片，请续费后再试。这次没有生成图片或扣费。'});}
+      logStage('mixed_references_resolved',{inputImages:body.image.length});
+    }
+    if (!prompt && !hasStructured && body.layer_decomposition!==true) { await abortIdem(rid, auth.sub, "missing_prompt"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "缺少 prompt" }); }
     if (prompt.length > 1500) { await abortIdem(rid, auth.sub, "prompt_too_long"); return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "描述过长，请精简到 1500 字以内" }); }
 
     // 限流：原子自增后判超限；被拒时释放占位，允许用户稍后重试同一个 requestId
-    const rl = await claimRate(auth.sub);
+    const rl = claim.state==='resume_copy'?null:await claimRate(auth.sub);
     if (rl) {
       logStage("rate_limited", { sub: auth.sub });
       await abortIdem(rid, auth.sub, "rate_limited");
@@ -1833,6 +2241,7 @@ const server = http.createServer(async (req, res) => {
     // 10-24 路由契约：App 只传业务意图，模型 ID 由服务端决定。
     const taskKind = String(body.task_kind || body.taskKind || "").trim()
       || (body.layer_decomposition === true ? "decompose" : (body.image ? "edit" : "generate"));
+    if (reqStore.getStore()) reqStore.getStore().taskKind = taskKind;
     const qualityTier = String(body.quality_tier || body.qualityTier || "auto").trim();
     const requestedCount = Number(body.requested_count || body.requestedCount || 1);
     // ── 组图：服务端编排（拆 N 个单图子任务，各自 claim / 记账 / 可部分成功）──
@@ -1846,13 +2255,9 @@ const server = http.createServer(async (req, res) => {
           msg: "当前画布比例无法在安全尺寸范围内准确生成，请改用常见比例后重试。",
         });
       }
-      const models = modelsOf();
       // 10-24 P1-12：先按最贵档估算，余额不足就不启动任何子图 ——
       // 否则 4 张跑完才发现额度不够，用户拿到半套、账也乱。
-      const unitWorst = Math.max(
-        priceForSize(resolved, models.pro || RT.IMAGE_MODEL),
-        priceForSize(resolved, models.fast || RT.IMAGE_MODEL)
-      );
+      const unitWorst = worstSeriesUnitPrice(resolved, Array.isArray(body.image) ? body.image.length : body.image ? 1 : 0);
       const cap = Number(q.capCny);
       const used = Number(q.usedCny);
       if (Number.isFinite(cap) && cap > 0 && Number.isFinite(used)) {
@@ -1870,6 +2275,9 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
+      const budgetId='series_budget_'+idemKey(rid,auth.sub);
+      const budget=await require('./image-cost-budget').reserve({db:getDb(),accountId:auth.sub,key:budgetId,amountCny:unitWorst*n,capCny:q.capCny,kind:'series',enabled:Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1});
+      if(!['reserved','inactive'].includes(budget.state)){await abortIdem(rid,auth.sub,'quota_insufficient');return send(429,{ok:false,error:'POOL_EXHAUSTED'});}
       const items = [];
       const tSeries = Date.now();
       for (let i = 1; i <= n; i++) {
@@ -1885,6 +2293,7 @@ const server = http.createServer(async (req, res) => {
       }
       await flushJobs(n + 2);
       await refreshSeriesCostStates(rid, auth.sub, items);
+      if(budget.state==='reserved')await require('./image-cost-budget').release({db:getDb(),accountId:auth.sub,key:budgetId,reason:'series_settled'});
 
       const okCount = items.filter((x) => x.ok).length;
       const payloadBody = seriesPayload(items, n, {
@@ -1925,12 +2334,65 @@ const server = http.createServer(async (req, res) => {
       return send(200, Object.assign(payloadBody, { parentPersisted: parentSaved }));
     }
 
-    let out = await generate({
+    let copyInput=claim.copyInput,nativeReservationId;
+    if(copyEnabled&&!copyInput){
+      try{
+        const selected=selectImageRoute({taskKind,qualityTier,prompt:body.prompt,image:body.image,structured:body.structured,textMode:body.text_mode}),model=selected.model||RT.IMAGE_MODEL;
+        const prepared=await nativeCopyRuntimeOf().prepare({body,owner:auth.sub,model,rawPolicy:RT.IMAGE_COMPOSITION_POLICY});
+        const prices=Object.fromEntries(['IMAGE_COST_55_INPUT','IMAGE_COST_55_OUT_SMALL','IMAGE_COST_55_OUT_LARGE'].map(k=>[k,Number(RT[k])])),vr=prepared.visionSnapshot.rates;
+        const inputs=Array.isArray(body.image)?body.image.length:body.image?1:0;
+        const worst=prices.IMAGE_COST_55_INPUT*(inputs+1)+prices.IMAGE_COST_55_OUT_LARGE*(1+prepared.settings.maxOutputs)+100000*Math.max(Number(vr.input),Number(vr.cachedInput||0))/1e6+2400*Number(vr.output)/1e6;
+        await ensureCollection(RESERVE_COLL);
+        const reserved=await require('./native-copy-budget').reserve({db:getDb(),owner:auth.sub,rid,fingerprint:copyFingerprint,amountCny:customerPriceOf(worst),quota:q});
+        if(reserved.state!=='reserved'){await abortIdem(rid,auth.sub,'native_budget_unavailable');return send(reserved.state==='insufficient'?429:503,{ok:false,error:reserved.state==='insufficient'?'QUOTA_INSUFFICIENT':'STORAGE_UNAVAILABLE',msg:'暂时无法为完整图片及文字复核预留足够额度，本次尚未生成或扣费。'});}
+        nativeReservationId=reserved.key;copyInput={prepared,rates:prices,nativeReservationId};
+      }catch(e){logStage('native_copy_preflight_failed',{code:e.code||'COPY_NOT_READY'});await abortIdem(rid,auth.sub,'native_preflight_unavailable');const invalid=e.code==='NATIVE_TEXT_CONTRACT';return send(invalid?422:503,{ok:false,error:invalid?'IMAGE_TEXT_REVIEW_REQUIRED':'IMAGE_TEXT_REVIEW_UNAVAILABLE',msg:invalid?'这次文案字段不完整、重复或超过可处理范围，请调整文案后提交；本次尚未生成或扣费。':'图片文字复核的字体或服务暂未准备好，本次尚未开始生成或扣费，请稍后重试。'});}
+    }
+    if(copyInput)nativeReservationId=copyInput.nativeReservationId;
+    let imageBudgetId;
+    if(!copyEnabled&&(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1)){
+      const selected=selectImageRoute({taskKind,qualityTier,prompt:body.prompt,image:body.image,structured:body.structured,textMode:body.text_mode});
+      const worst=upstreamCostOf({size:resolveSize(body.size,aspectRatio),model:selected.model||RT.IMAGE_MODEL,inputImages:Array.isArray(body.image)?body.image.length:body.image?1:0,layerDecomposition:body.layer_decomposition===true})*(body.layer_decomposition===true?17:1);
+      const key='single_budget_'+idemKey(rid,auth.sub);
+      await ensureCollection(RESERVE_COLL);
+      const budget=await require('./image-cost-budget').reserve({db:getDb(),accountId:auth.sub,key,amountCny:customerPriceOf(worst),capCny:q.capCny,enabled:true});
+      if(budget.state!=='reserved'){await abortIdem(rid,auth.sub,'quota_insufficient');return send(budget.state==='insufficient'?429:503,{ok:false,error:budget.state==='insufficient'?'POOL_EXHAUSTED':'BILLING_UNAVAILABLE'});}
+      imageBudgetId=key;
+    }
+    let out = claim.state==='resume_copy'?{ok:true,asset:copyInput.draft,model:copyInput.primaryCall.model,modelCallId:copyInput.primaryCall.modelCallId}:await generate({
       prompt: body.prompt, image: body.image, size: body.size, structured: body.structured,
       renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
+      layerOptions: sanitizeLayerOptions(body.layer_decomposition_options),
       taskKind, qualityTier, requestedCount,
       textMode: String(body.text_mode || ""),
+      referenceRoles: body.reference_roles,
+      accountId: auth.sub,
+      deadlineAt:copyEnabled?t0+170000:undefined,repairNativeCopy:copyEnabled,
     });
+    if(imageBudgetId&&!out.ok&&!out.unknownOutcome)await require('./image-cost-budget').release({db:getDb(),accountId:auth.sub,key:imageBudgetId,reason:'generation_rejected'});
+    if(copyEnabled){
+      if(out.ok){
+        try{
+          const store=require('./shared/asset-store').createAssetStore({db:getDb(),app:__APP});
+          if(!copyInput.draft){
+            let draft=out.asset;
+            if(!draft){const bytes=await require('./shared/asset-store').boundedBytes(out.url,24*1024*1024);if(bytes[0]!==137)throw Object.assign(Error('COPY_ASSET_INVALID'),{code:'COPY_ASSET_INVALID'});draft=await store.archive(auth.sub,bytes,'image/png');}
+            const cost=actualUpstreamCostOf({size:resolveSize(body.size,aspectRatio),model:out.model,inputImages:out.providerInputCount,usage:out.providerUsage});
+            copyInput={...copyInput,draft:{id:draft.id,sha256:draft.sha256,byteCount:draft.byteCount,mime:draft.mime},primaryCall:{modelCallId:out.modelCallId,model:out.model,supplierCostEstimateCny:cost}};
+            await saveNativeCopyInput(rid,auth.sub,copyInput);
+          }
+          const result=await nativeCopyRuntimeOf().run({owner:auth.sub,requestId:rid,...copyInput,deadlineAt:t0+270000});
+          if(result.state==='done'){
+            const signed=await store.sign(auth.sub,[result.asset.id]);if(!signed[0]?.url)throw Error('COPY_ASSET_UNAVAILABLE');
+            out={...out,url:signed[0].url,asset:result.asset,upstreamCostCny:result.costs.supplierCostEstimateCny,modelCalls:result.costs.calls,nativeReservationId};
+          }else if(result.state==='rejected'){
+            await getDb().collection(JOB_COLL).doc(idemKey(rid,auth.sub)).update({state:'copy_rejected',copyDiagnostic:result.diagnostic||'COPY_REVIEW_FAILED',costCommitted:true});
+            await require('./native-copy-budget').release({db:getDb(),owner:auth.sub,key:nativeReservationId,reason:'quality_rejected'});
+            return send(422,{ok:false,error:'IMAGE_TEXT_REVIEW_REQUIRED',msg:'这次图片未通过文字完整性与清晰度复核，本次未扣图片额度。请调整需求后重新提交。'});
+          }else return send(409,{ok:false,error:'IN_PROGRESS',msg:'画面已保存，文字复核仍在进行，请稍后查看；请勿重复新建同一任务。',requestId:rid});
+        }catch(e){logStage('native_copy_checkpoint_pending',{code:e.code||'COPY_RECOVERY_PENDING'});await abortIdem(rid,auth.sub,'native_copy_checkpoint_pending',true);return send(409,{ok:false,error:'IN_PROGRESS',msg:'画面或文字结果仍在确认，请稍后查看，暂时不要重复生成。',requestId:rid});}
+      }else if(!out.unknownOutcome){await require('./native-copy-budget').release({db:getDb(),owner:auth.sub,key:nativeReservationId,reason:'primary_rejected'});}
+    }
     // 能力不支持：任务已在路由阶段被拦下，这里不再重试、不再吞成 502
     if (!out.ok && out.unsupported) {
       await abortIdem(rid, auth.sub, out.reason || "unsupported");
@@ -1956,26 +2418,152 @@ const server = http.createServer(async (req, res) => {
     if (out.ok) {
       // 10-24：台账记录**实际使用的模型**（此前写死 RT.IMAGE_MODEL，混合路由后会导致成本归因错误）
       const usedModel = String(out.model || RT.IMAGE_MODEL || "");
-      const price = priceForSize(resolveSize(body.size, aspectRatio), usedModel);
-      await finishIdem(rid, auth.sub, out.url, price, usedModel);
+      // 成本口径要带上输入图张数与图层拆分：Pro 多图第 2 张起每张 0.02，图层拆分是另一档价
+      const inputImages = Number.isSafeInteger(out.providerInputCount)?out.providerInputCount:(Array.isArray(body.image) ? body.image.length : (body.image ? 1 : 0));
+      const upstream = out.upstreamCostCny??actualUpstreamCostOf({
+        size: resolveSize(body.size, aspectRatio),
+        model: usedModel,
+        inputImages,
+        layerDecomposition: body.layer_decomposition === true,
+        usage: out.providerUsage,
+      });
+      const price = customerPriceOf(upstream);
+      const finished=await finishIdem(rid, auth.sub, out.url, price, usedModel, { upstreamCostCny: upstream, modelCallId: out.modelCallId,asset:out.asset,modelCalls:out.modelCalls,nativeReservationId:out.nativeReservationId,imageBudgetId,
+        ...(mixedInput?{referenceFingerprint:mixedInput.referenceFingerprint,referenceManifest:mixedInput.referenceManifest}:{}) });
+      if(copyEnabled&&!finished)return send(409,{ok:false,error:'IN_PROGRESS',msg:'成品已保存，账务状态仍在确认，请稍后查看；暂时不要重复生成。',requestId:rid});
       await flushJobs();
       logStage("image_route", {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,
         reason: out.routeReason || "", retried,
       });
+      // 2026-11-22「保数字」校验：出图后确认规格/价格/克数真的落在画面上。
+      // 线上问题：契约写「栗子泥 40 克」，模型画成「香甜栗子奶油，绵软细腻」——
+      // 字形对了但硬参数被改写成卖点，客户要的规格等于没上画面。
+      // 这里只做诊断（转录 → 归一化子串比对），失败一律 fail-open，绝不影响出图。
+      // ── 出图后审计（2026-11-22 第 18 轮）───────────────────────────────
+      // 两件事：① 数字/规格有没有真的印上去；② 结构有没有硬伤。
+      // 提示词能把上限推高，但压不住下限——同一段需求，模型有时六卡齐全、电话清楚，
+      // 有时只画三张卡还把电话整个省掉。用户看到的是后者，就会来报错。
+      // 所以结构项一旦命中硬伤（标题/电话/署名/过半产品名缺失），就重跑一次取更好的那张；
+      // 说明被润色这类软问题不重跑，重跑也未必更好，不值得多花一份成本。
+      let numberAudit = null;
+      try {
+        const auditMode = String(RT.NUMBER_AUDIT_MODE || "report").toLowerCase();
+        const structMode = String(RT.STRUCT_AUDIT_MODE || "on").toLowerCase();
+        const sa = require("./shared/number-audit");
+
+        // 文案来源：不同链路的落点不一样（structured.text 数组/字符串、prompt、structured 其它键）
+        const rawText = body.structured && body.structured.text;
+        const sources = [];
+        if (Array.isArray(rawText)) sources.push(...rawText.map(x => (x && x.text) || ""));
+        else if (typeof rawText === "string") sources.push(rawText);
+        sources.push(String(body.prompt || ""));
+        if (body.structured && typeof body.structured === "object") sources.push(JSON.stringify(body.structured));
+
+        const auditTokens = auditMode === "off" ? [] : sa.tokensOf(sources);
+        const structItems = structMode === "off" ? null : sa.structuralOf(sources);
+        if (!auditTokens.length) logStage("poster_number_audit_skipped", { reason: "no_tokens", promptLen: String(body.prompt || "").length });
+
+        if (auditTokens.length || structItems) {
+          // nativeVisionConfig 读 bf_config/runtime（视觉模型只配在 bf-api）；
+          // bf-image 侧补了同名环境变量，这里回退一次，避免校验因配置位置不同而永久跳过。
+          let visionCfg = null;
+          try { visionCfg = await nativeVisionConfig(); }
+          catch (cfgErr) {
+            const envKey = process.env.CHAT_API_KEY;
+            const envBase = process.env.CHAT_PROVIDER_BASE || process.env.CHAT_BASE_URL;
+            const envModel = process.env.CHAT_MODEL_VISION;
+            if (!envKey || !envBase || !envModel) throw cfgErr;
+            visionCfg = { apiKey: envKey, base: envBase, model: envModel };
+            logStage("poster_number_audit_vision_fallback", { reason: String(cfgErr && (cfgErr.code || cfgErr.message)).slice(0, 60), model: envModel });
+          }
+
+          const ocrOnce = async url => sa.transcribe({ cfg: visionCfg, imageUrl: url, timeoutMs: 20000 });
+          let ocr = await ocrOnce(out.url);
+          if (ocr) {
+            if (auditTokens.length) {
+              numberAudit = sa.check(auditTokens, ocr);
+              logStage("poster_number_audit", { checked: numberAudit.checked, missing: numberAudit.missing.slice(0, 8), tokens: auditTokens.slice(0, 6), ocrChars: ocr.length });
+            }
+            if (structItems) {
+              let structAudit = sa.checkStructural(structItems, ocr);
+              // 卡数不能只看产品名：模型会把「隐形矫正」这类词写进右侧服务列表或流程条，
+              // OCR 一样能读到，于是产品名判定「齐全」，实际上卡片少画两张（2026-11-22 实测）。
+              // 价格只出现在卡片里，所以「缺 2 个以上价格」才是卡数不足的可靠信号。
+              const priceLost = (numberAudit && numberAudit.missing ? numberAudit.missing : [])
+                .filter(t => /^[¥￥]/.test(String(t)) || /元$/.test(String(t)));
+              if (priceLost.length >= 2 && !structAudit.missing.some(m => m.kind === "prices")) {
+                structAudit.missing.push({ kind: "prices", value: priceLost.join("、"), lost: priceLost.length });
+              }
+              // 编号重复：六阶段被排成 S1/S2/S3/S3/S4/S5 时，条目实际少了一个。
+              // 这种场景往往没有价格（课程表），价格判据抓不到，只能靠编号自己暴露。
+              try {
+                const codes = sa.numberingOf(sources);
+                const dupCodes = sa.checkNumbering(codes, ocr);
+                if (dupCodes.length && !structAudit.missing.some(m => m.kind === "numbering")) {
+                  structAudit.missing.push({ kind: "numbering", value: dupCodes.join("、"), dup: dupCodes.length });
+                }
+              } catch {}
+              if (structAudit.missing.length) {
+                logStage("poster_struct_audit", { missing: structAudit.missing.map(m => m.kind), detail: structAudit.missing.slice(0, 3) });
+                // 只重跑一次：硬伤命中的比例不高，多跑一次的收益远大于让用户拿到废图。
+                const hint = "【必填项】上一版漏掉了下面这些内容，这一版必须全部出现、不许省略：" +
+                  structAudit.missing.map(m => m.value || m.kind).join("；") + "。\n";
+                let second = null;
+                try {
+                  second = await generate({
+                    prompt: hint + String(body.prompt || ""),
+                    image: body.image, size: body.size, structured: body.structured,
+                    renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
+                    layerOptions: sanitizeLayerOptions(body.layer_decomposition_options),
+                    taskKind, qualityTier, requestedCount,
+                    textMode: String(body.text_mode || ""),
+                    referenceRoles: body.reference_roles,
+                    accountId: auth.sub,
+                  });
+                } catch (e2) {
+                  logStage("poster_struct_retry_failed", { reason: String((e2 && (e2.code || e2.message)) || "").slice(0, 80) });
+                }
+                if (second && second.ok && second.url) {
+                  const ocr2 = await ocrOnce(second.url).catch(() => "");
+                  const audit2 = ocr2 ? sa.checkStructural(structItems, ocr2) : { missing: [] };
+                  if (audit2.missing.length < structAudit.missing.length) {
+                    out = second;
+                    structAudit = audit2;
+                    if (auditTokens.length && ocr2) numberAudit = sa.check(auditTokens, ocr2);
+                    logStage("poster_struct_retry_kept", { before: structAudit.missing.length, after: audit2.missing.length });
+                  } else {
+                    logStage("poster_struct_retry_discarded", { still: audit2.missing.map(m => m.kind) });
+                  }
+                } else {
+                  logStage("poster_struct_retry_no_result", { ok: !!(second && second.ok) });
+                }
+              }
+            }
+          } else {
+            logStage("poster_number_audit_skipped", { reason: "empty_ocr" });
+          }
+        }
+      } catch (e) {
+        logStage("poster_number_audit_skipped", { reason: String((e && (e.code || e.message)) || "").slice(0, 80), name: String((e && e.name) || "").slice(0, 40), detail: String((e && e.detail) || "").slice(0, 160) });
+      }
       return send(200, {
         ok: true, url: out.url, ms: Date.now() - t0, hadImage: !!body.image,
-        cost: price, retried, size: resolveSize(body.size, aspectRatio),
+        cost: price, retried, size: body.layer_decomposition===true ? out.providerUsage?.output_sizes?.[0]||'auto' : resolveSize(body.size, aspectRatio),
         renderIntent: renderIntent || "default",
         model: usedModel, route_reason: out.routeReason || "",
         task_kind: taskKind, quality_tier: qualityTier, requestId: rid,
+        ...(numberAudit ? { numberAudit } : {}),
       });
     }
-    await abortIdem(rid, auth.sub, out.msg);
+    await abortIdem(rid, auth.sub, out.msg, out.unknownOutcome === true);
+    if (out.unknownOutcome) return send(409, { ok: false, error: "IN_PROGRESS",
+      msg: "上一次生成的结果仍在确认中，请稍后查看，暂时不要重复提交。", requestId: rid });
     return send(out.code || 502, Object.assign({ ms: Date.now() - t0, hadImage: !!body.image }, out));
   }
 
   return send(404, { ok: false, msg: "not found" });
+  });
 });
 
 server.listen(PORT, () => console.log("[bf-image] listening on " + PORT));
