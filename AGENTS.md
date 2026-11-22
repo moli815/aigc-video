@@ -32,6 +32,17 @@ node scripts/commit-via-api-20261122.cjs
 
 另外两条：
 - `outputs/` 被 .gitignore 忽略，报告与样张**不进仓库**，只留本地。
+
+### 文档必须当天提交（2026-11-22 血的教训）
+
+此前 `docs/ops/` 下写了 65 个文件，但从 11-10 起**一篇都没提交**，本地有、仓库没有，
+用户问「文档写哪去了」时拿不出来。所以：
+
+- 写完 `docs/ops/*.md` **当天就要提交**，不能攒着；
+- 判断标准很简单：`git status --porcelain docs/` 必须是空的；
+- 提交用 `node scripts/commit-docs-via-api-20261122.cjs`（自动收集 docs/ 下所有未提交文件）；
+- `CHANGELOG.md` 是索引、`docs/ops/*.md` 是正文，**两个都要有**：
+  只写正文不写索引，下次没人找得到；只写索引不写正文，等于没写。
 - `cloudfunctions/*/shared/` 曾整体被忽略，导致 `number-audit.js` 这类源码进不了版本控制，
   已于 2026-11-22 解除（只忽略 `shared/node_modules/`）。新增 shared 源码后记得确认
   `git check-ignore` 没有命中。

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>专家 / Skill 对齐 · 离线测试报告 · 2026-11-10</title>
+<style>
+:root{--bg:#f7f9fc;--card:#fff;--line:#e3e8ef;--t1:#172033;--t2:#5b677c;--t3:#8a95a8;--ok:#0f8a5f;--warn:#b4630a;--bad:#c0392b;--blue:#2563eb}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t1);font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;padding:32px 20px}
+.wrap{max-width:1040px;margin:0 auto}h1{font-size:25px;margin:0 0 8px}h2{font-size:17px;margin:30px 0 10px;padding-left:10px;border-left:4px solid var(--blue)}
+.meta{color:var(--t2);font-size:13px;margin-bottom:22px}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:18px 0 26px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}.kpi b{display:block;font-size:24px;color:var(--blue)}.kpi span{color:var(--t2);font-size:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--t2);font-weight:600;background:#f2f5fa}
+code{background:#eef2f8;padding:1px 5px;border-radius:4px;font-size:12px;color:#25406e}
+.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600}.ok{background:#e3f6ec;color:var(--ok)}.wait{background:#fff2dd;color:var(--warn)}.no{background:#fdeaea;color:var(--bad)}
+.note{background:#eef4ff;border-left:4px solid var(--blue);padding:12px 14px;border-radius:0 8px 8px 0;margin:14px 0}
+.risk{background:#fff6ed;border-left:4px solid var(--warn);padding:12px 14px;border-radius:0 8px 8px 0;margin:14px 0}
+ul{margin:6px 0 6px 18px;padding:0}li{margin:3px 0}.foot{color:var(--t3);font-size:12px;margin-top:26px}
+</style>
+</head>
+<body><div class="wrap">
+<h1>专家 / Skill 对齐 · 离线测试报告</h1>
+<div class="meta">北京时间 2026-11-10 22:3x · Windows / Node 20 · 基线 <code>e73d5e2</code> + 本轮未提交候选 · <strong>本地候选，未部署 / 未出包 / 未调用付费模型</strong></div>
+
+<div class="kpis">
+<div class="kpi"><b>617/617</b><span>后端回归通过，0 失败</span></div>
+<div class="kpi"><b>+10</b><span>本轮新增对账用例</span></div>
+<div class="kpi"><b>3.70s</b><span>全套离线耗时</span></div>
+<div class="kpi"><b>0</b><span>付费模型 / 生图 / IPA / 部署</span></div>
+</div>
+
+<div class="note"><strong>结论：</strong>本轮把「提示词说要调、工具集却没有」这个反复发作的问题变成了可自动检出的门禁。S0-1/2/3/4/6 已实现并通过离线验证；<strong>专家在手机端的刚性模板仍未根治</strong>（需出包，或灰度启用本轮新增的交付仲裁）。离线测试只证明契约与故障注入，不证明线上效果、模型品质或视觉质量。</div>
+
+<h2>① 测试用例清单</h2>
+<div class="card"><table>
+<tr><th>编号</th><th>用例</th><th>类型</th><th>结果</th></tr>
+<tr><td>ALIGN-01</td><td>从 Swift 源码反推工具集，识别 <code>availability:false</code> 与 schema 排除项</td><td>源码契约</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-02</td><td>服务端所有提示词源不得提到任何未下发工具（S0-1 回归门禁）</td><td>防复发对账</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-03</td><td>图像来源提示词与 10-28 已修复的多图 schema 语义一致（禁 <code>both</code>、用 <code>source_indexes</code>）</td><td>语义一致性</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-04</td><td>遍历整个 BossAI 目录锁定客户端幽灵工具引用，禁止扩散到新文件</td><td>全量扫描</td><td><span class="tag ok">通过（如实登记）</span></td></tr>
+<tr><td>ALIGN-05</td><td><code>/me</code> 下发能力开关；白标读侧 / 写侧均有 Ultra 门控</td><td>接口契约</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-06</td><td>交付仲裁默认关闭、已接入 chat 注入链、非法配置 fail-closed</td><td>函数级</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-07 / 07b</td><td>仲裁仅启用时追加到最后 system、幂等、不改入参、无 system 时安全追加</td><td>函数级</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-08</td><td>3 个新增配置键的分区、字段白名单、长度与类型校验</td><td>配置安全</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>ALIGN-09</td><td>仲裁规则不覆盖工具调用与数据真实性铁律</td><td>规则边界</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>既有 607 项</td><td>图片权限/账务/审批、专家目录、Seedream 契约、商业成稿审查、管理端、配置、shared 构建等全套回归</td><td>全量回归</td><td><span class="tag ok">617/617</span></td></tr>
+</table></div>
+
+<h2>② 测试成果物</h2>
+<div class="card"><ul>
+<li>新增 <code>cloudfunctions/bf-api/expert-delivery-arbitration.js</code>：默认关闭的交付仲裁模块（追加式，不删改客户端 system，可一键回退）。</li>
+<li>修改 <code>cloudfunctions/bf-api/index.js</code>：CHAT_RULES / META_RULE 工具错配修正、3 个 RUNTIME 配置键、<code>/me</code> 下发能力开关、白标读写双门控、仲裁接入 chat 注入链。</li>
+<li>修改 <code>cloudfunctions/bf-api/settings-schema.js</code>：3 个键的分区、元数据与字段级校验（能力开关限 30 项、只接受 <code>enabled</code>/<code>limits</code>）。</li>
+<li>新增 <code>tests-backend/tool-prompt-alignment.test.js</code>：提示词 ↔ 工具集离线对账门禁（10 条）。</li>
+<li>新增 <code>docs/ops/expert-skill-audit-20261110.md</code>：全链路审计台账，第 8 节已回填实施结果。</li>
+<li>证据：<code>outputs/align-20261110-full.tap</code>（617/617）、本报告。</li>
+</ul></div>
+
+<h2>③ 测试指标</h2>
+<div class="card"><table>
+<tr><th>指标</th><th>数值</th><th>说明</th></tr>
+<tr><td>用例总数 / 通过 / 失败</td><td>617 / 617 / 0</td><td>较上一轮 607 项净增 10 条对账用例</td></tr>
+<tr><td>耗时</td><td>3.70s</td><td>纯离线，无网络与模型调用</td></tr>
+<tr><td>语法门禁</td><td>3 个核心 JS <code>node --check</code> 通过</td><td>index.js / settings-schema.js / expert-delivery-arbitration.js</td></tr>
+<tr><td>产物门禁</td><td><code>bundle-function-shared.js --check</code> + <code>git diff --check</code> 通过</td><td>shared 副本无漂移、补丁无空白错误</td></tr>
+<tr><td>付费模型 / 生图 / 客户额度变化</td><td>0 / 0 / 0</td><td>用户要求节省积分，本轮不烧额度</td></tr>
+<tr><td>IPA 构建 / 生产部署</td><td>0 / 0</td><td>按用户选定范围「暂不部署」</td></tr>
+</table></div>
+
+<h2>④ 与 ChatGPT 6 对标</h2>
+<div class="card">
+<p><strong>不宣称对齐，也不宣称品质提升。</strong>本轮做的是工程一致性对账，不是模型能力评测；没有产生任何可直接比较的生成结果。</p>
+<ul>
+<li>既有事实：ChatGPT 上一轮提交 <code>e73d5e2</code> 修的是<strong>聊天文风</strong>（取消固定开场、共情、收尾，改 general / short_video 两个专家），并未触及工具集一致性；16 个专家里其余 14 个当时也未验收。</li>
+<li>本轮新增覆盖：服务端提示词 ↔ 实际下发工具的自动对账、<code>/me</code> 能力开关下发、白标档位门控、旧包刚性模板的云端仲裁开关——这些是上一轮未覆盖的工程缺口。</li>
+<li>真实评测里模型曾补写「展会三天」，自动关键词检查却标 <code>noInventedScene:true</code>。因此 <strong>617 项通过只证明系统没坏，不能证明文案质量或对标 ChatGPT 6</strong>。</li>
+<li>要做品质对标，必须另做合成场景真实模型 A/B + 人工逐条事实审查，需单独批准额度。</li>
+</ul></div>
+
+<h2>⑤ 复杂场景（贴近真实用户使用）</h2>
+<div class="card"><table>
+<tr><th>场景</th><th>覆盖方式</th><th>状态</th></tr>
+<tr><td>新装 App + 断网 + 无缓存，短视频专家收到「写段纯口播」</td><td>离线回退旧内置目录 → 刚性包装复活；本轮用仲裁开关提供免出包缓解路径</td><td><span class="tag wait">已实现开关，待灰度 A/B</span></td></tr>
+<tr><td>16 专家 × 托管/非托管 × 原生搜索开启/关闭</td><td>三套过滤器集合一致性（ALIGN-01/04 静态对账）</td><td><span class="tag wait">客户端统一属 S1 待出包</span></td></tr>
+<tr><td>两张附件做双图融合、参考图重设计、局部换背景</td><td>ALIGN-03 校验提示词与 10-28 已修 schema 语义一致</td><td><span class="tag ok">静态契约通过</span></td></tr>
+<tr><td>用户要导出 Word/PPT/图表，工具却因档位不可用</td><td>CHAT_RULES 不再点名不可用工具；<code>capabilityOverrides</code> 现可云端下发</td><td><span class="tag ok">契约通过</span></td></tr>
+<tr><td>非 Ultra 账号带 brandName；Plus 账号被宣称「导出全部可用」</td><td>白标读写双门控；硬编码宣称登记 S1</td><td><span class="tag wait">服务端已修 / 客户端待出包</span></td></tr>
+<tr><td>仲裁配置写成非法 JSON、越权字段、超长 accountIds</td><td>ALIGN-06/08 fail-closed 与字段白名单</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>并发保存专家目录、审批重试、组图续步绕过额度</td><td>沿用既有 607 项故障注入回归</td><td><span class="tag ok">通过</span></td></tr>
+<tr><td>纯 JSON / 工具任务 / 普通问答不被仲裁或事实审查拦截</td><td>仲裁仅在启用时追加 system 规则，不改工具调用与路由</td><td><span class="tag ok">通过</span></td></tr>
+</table></div>
+
+<h2>⑥ 作图方面专项（用户特别强调）</h2>
+<div class="card">
+<ul>
+<li><strong>本轮 0 次生图、0 次视觉验收</strong>。作图专项只覆盖接入契约，不覆盖出图观感，不能声称画质或「豆包味」改善。</li>
+<li>修正 <code>CHAT_RULES</code>：不再命令模型调用 <code>image_decompose</code>（<code>availability:false</code>，从未下发）；不再教「概念示意 → image_edit」（需要 source，属错误引导）。</li>
+<li>修正 <code>META_RULE_BUILTIN</code>：海报/配图/概念示意 → <code>image_generate</code>；修改已有图 → <code>image_edit</code>。</li>
+<li>修正多图语义：两张上传附件互合成统一用 <code>source=attached</code> + <code>source_indexes</code> + <code>reference_roles</code>，明确禁用旧 <code>both</code>；与 10-28 已修复的 schema 对齐。</li>
+<li>上一轮已核对的 Seedream 官方参数（参考图提示词优化、原生组图 <code>max_images</code>、261 万像素成本分界、4.0/4.5 能力表）沿用，本轮未切换主模型、未提前上 5.5 / Lite。</li>
+<li>幽灵工具 <code>generate_image</code> 仍残留在 iOS 侧 12 个文件（含本轮 ALIGN-04 新发现的 <code>ImageService.swift</code> 注释残留），已如实登记 S1 待出包清单，未在报告中当作已修。</li>
+</ul></div>
+
+<h2>未解决 / 风险</h2>
+<div class="risk"><ul>
+<li><strong>专家未根治</strong>：<code>Expert.swift:85/372</code>、<code>ExpertCapabilities.swift</code>、<code>ExpertSkills.json</code> 在已发布 IPA 内，云端改不到；仲裁开关默认关闭且未经真实模型 A/B，不得直接全量启用。</li>
+<li>未做：真实 CloudBase 并发、真实 HTTP/SSE、浏览器端到端、固定素材视觉回归、Xcode/真机、生产发布与回滚演练。</li>
+<li>本轮代码<strong>只在本地</strong>，未部署、未提交远端分支；上线前须备份并按既有发布脚本做上传/下载哈希校验。</li>
+<li>历史会话检索接口三次返回空，本次「看全部对话」以工作区日志替代，非逐字聊天记录。</li>
+</ul></div>
+
+<div class="foot">报告生成：2026-11-10 · 证据 <code>outputs/align-20261110-full.tap</code> · 台账 <code>docs/ops/expert-skill-audit-20261110.md</code> · 本轮无任何生产变更。</div>
+</div></body></html>
