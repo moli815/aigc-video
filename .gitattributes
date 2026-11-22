@@ -1,0 +1,10 @@
+# 统一用 LF：仓库里出现过 CRLF 覆盖 LF 导致整文件 907 行红绿 diff，
+# 内容没变但 review 全废。文本文件一律 LF，二进制不动。
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ipa binary
+*.zip binary
+*.wasm binary
+*.otf binary
+*.ttf binary
