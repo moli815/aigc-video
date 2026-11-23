@@ -1598,8 +1598,9 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
       "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
 
-  // Preserve the previous fallback for routes outside the new poster compiler.
-  if (!nativePoster) {
+  // The old fallback may write onto the output only when the supplier is
+  // drawing the finished image. A background or edit has its own copy rules.
+  if (!nativePoster && !composition && !reformat && !overlayMode && !layerDecomposition && !isPixelEdit) {
     try {
       // 模型给的 structured 有四种形态：text 数组、text 字符串、对象（title/labels/bodies）、
       // 顶层 products。只判断 structured.text 会漏掉后两种——实测就是这样漏的，
