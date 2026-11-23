@@ -16,6 +16,16 @@ struct CloudAssetRef: Codable, Equatable, Sendable {
 /// The database stores references; bytes live once in private object storage.
 /// Signed URLs are deliberately never persisted.
 enum CloudAssetStore {
+    static let maxAssetBytes = 24 * 1024 * 1024
+
+    struct SizeLimitError: LocalizedError {
+        let byteCount: Int
+        var errorDescription: String? {
+            let mib = Int(ceil(Double(byteCount) / Double(1024 * 1024)))
+            return "此文件约 \(mib) MB，超过云端 24 MB 上限。请压缩副本后重新添加，原文件仍保留。"
+        }
+    }
+
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -36,6 +46,7 @@ enum CloudAssetStore {
         try JSONDecoder().decode(CloudAssetRef.self, from: JSONSerialization.data(withJSONObject: json))
     }
     static func upload(_ data: Data, mime: String, session: CloudSession) async throws -> CloudAssetRef {
+        guard data.count <= maxAssetBytes else { throw SizeLimitError(byteCount: data.count) }
         let spec: [String: Any] = ["sha256": sha256(data), "byteCount": data.count, "mime": mime]
         let prepared = try await session.request("/assets/prepare", method: "POST", body: spec)
         if let raw = prepared["asset"] as? [String: Any] { return try decode(raw) }
@@ -71,7 +82,7 @@ enum CloudAssetStore {
             throw HostedError.network("暂时无法读取这份文件，请稍后重试。")
         }
         let (data, response) = try await BoundedHTTPClient.data(for: URLRequest(url: url),
-            session: BoundedHTTPClient.imageSession, limit: 24 * 1024 * 1024)
+            session: BoundedHTTPClient.imageSession, limit: maxAssetBytes)
         try await session.validate()
         guard response.statusCode == 200, data.count == asset.byteCount, sha256(data) == asset.sha256 else {
             throw HostedError.network("文件下载尚未完整，将保留记录供稍后重试。")

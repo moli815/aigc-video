@@ -31,6 +31,11 @@ extension ChatViewModel {
                     break
                 }
                 let name = url.lastPathComponent
+                if HostedAccount.isHostedActive && data.count > CloudAssetStore.maxAssetBytes {
+                    errorMessage = FriendlyError.fileProblem(name,
+                        reason: CloudAssetStore.SizeLimitError(byteCount: data.count).localizedDescription)
+                    continue
+                }
                 do {
                     let record = try await FileStore.storeAsync(data: data,
                                                          filename: name,
