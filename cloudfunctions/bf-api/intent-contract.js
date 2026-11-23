@@ -220,7 +220,8 @@ function apply(calls, intent, observe) {
 
     const referenceRedesign=args.source==='attached'&&intent.currentImageCount===1
       &&require('./reference-text').restylesReference(intent.userText);
-    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceRedesign});
+    const referenceDesign=referenceRedesign&&(refLines?.length>=2||posterDelivery.copyOf(args.structured).length>=2);
+    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceDesign});
     const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
     let blocks = nativePoster ? posterDelivery.copyOf(args.structured) : blocksOf(args);
     if(nativePoster && referenceRedesign && refLines?.length){
@@ -297,11 +298,20 @@ function apply(calls, intent, observe) {
       changed.aspect_ratio = { from: current ? current.label : "(未给)", to, why: wrongDirection ? "方向与要求相反" : "未给比例" };
     }
 
+    const originalCanvas=intent.roles?.poster?.size;
+    if(referenceRedesign && originalCanvas
+        && !ratioValue(intent.userText)
+        && !ORIENT.portrait.test(normalizeDirection(intent.userText))
+        && !ORIENT.landscape.test(normalizeDirection(intent.userText))){
+      args.aspect_ratio=originalCanvas.w+":"+originalCanvas.h;
+      changed={...changed,canvas:{to:args.aspect_ratio,why:"仅改整图风格，保留原画布比例"}};
+    }
+
     // ①.8 海报画布规范化（2026-11-22）
     // 模型会自己挑比例：同一段烘焙需求出过 2:3、4:5、3:4 三种。客户端按请求比例做几何校验，
     // 一不一致就判「画布比例与要求不同」并把整张图丢掉——用户白等 40 秒还看不到图。
     // 用户没明确要求比例时，海报统一锁 3:4（门店海报通行比例），减少这类误杀。
-    if (!nativePoster && !explicit && !intent.orientation && wantsPosterLayout(args, blocks, intent)) {
+    if (!nativePoster && !referenceRedesign && !explicit && !intent.orientation && wantsPosterLayout(args, blocks, intent)) {
       const cur = ratioValue(String(args.aspect_ratio || ""));
       if (!cur || Math.abs(cur.value - 0.75) / 0.75 > 0.02) {
         args.aspect_ratio = "3:4";
@@ -343,7 +353,7 @@ function apply(calls, intent, observe) {
     // 旧实现在有任何 prompt 时都追加，会把「画一只猫」改成商业海报并塞进一堆
     // 版式与文字要求，严重破坏普通配图——上线前必须按意图分流。
     if (observe && args.prompt) observe({ tag: "intent_apply_decision", tool: fn.name, want: wantsPosterLayout(args, blocks, intent) });
-    if (!nativePoster && args.prompt && wantsPosterLayout(args, blocks, intent)) {
+    if (!nativePoster && !referenceRedesign && args.prompt && wantsPosterLayout(args, blocks, intent)) {
       // fail-open：排版契约只是锦上添花，任何异常都不能让整条回复流中断
       //（历史事故：一个未定义的函数就让客户端看到「输出尚未完成」）。
       try {

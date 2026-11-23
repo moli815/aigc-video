@@ -44,14 +44,9 @@ function imageSize(dataUrl) {
 /** 收集本轮用户消息里的内联图（按出现顺序） */
 function collectImages(messages) {
   const out = [];
-  for (const m of Array.isArray(messages) ? messages : []) {
-    if (!m || m.role !== "user" || !Array.isArray(m.content)) continue;
-    for (const p of m.content) {
-      if (p && p.type === "image_url" && p.image_url && /^data:image\//i.test(String(p.image_url.url || ""))) {
-        const size = imageSize(p.image_url.url);
-        out.push({ index: out.length + 1, size });
-      }
-    }
+  for(const part of require("./reference-text").currentImageParts(messages)){
+    if(!/^data:image\//i.test(part.image_url.url))continue;
+    out.push({index:out.length+1,size:imageSize(part.image_url.url)});
   }
   return out;
 }

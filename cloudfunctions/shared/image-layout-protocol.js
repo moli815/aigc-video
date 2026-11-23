@@ -1,5 +1,5 @@
 "use strict";
-const VERSION="layout-protocol-v6";
+const VERSION="layout-protocol-v7";
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 function requestOf(raw){
  if(!raw||typeof raw!=="object"||Object.keys(raw).some(k=>!["image","references","expected_text","placement_only"].includes(k)))fail("IMAGE_LAYOUT_INVALID");
@@ -19,14 +19,18 @@ function responseOf(raw,input){
  if(input.placement_only===true){
   // Vision models express boxes as two corners. Convert once; the API
   // response is a validated layout already normalized to x/y/width/height.
-  const candidate=Array.isArray(raw?.boxes_xyxy)?raw.boxes_xyxy.map(b=>{
+  const qwenBoxes=Array.isArray(raw?.objects)?raw.objects.map(o=>o?.bbox_2d):null;
+  const scale=qwenBoxes?1000:1;
+  const boxes=qwenBoxes||raw?.boxes_xyxy;
+  const candidate=Array.isArray(boxes)?boxes.map(b=>{
     if(!Array.isArray(b)||b.length!==4||!b.every(Number.isFinite))return null;
-    const [x1,y1,x2,y2]=b;
+    const [x1,y1,x2,y2]=b.map(v=>v/scale);
     return [x1,y1,x2-x1,y2-y1];
   }):(Array.isArray(raw?.regions)&&!raw.regions.length?raw.occupied:null);
-  if(!raw||!Number.isFinite(raw.confidence)||raw.confidence<.75||raw.confidence>1||!Array.isArray(candidate)
-     ||candidate.length<1||candidate.length>80||candidate.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
-  return {confidence:raw.confidence,regions:[],occupied:candidate,issues:[],recognized_text:[]};
+  const confidence=raw?.confidence;
+  if(confidence!=null&&(!Number.isFinite(confidence)||confidence<.75||confidence>1))fail("IMAGE_LAYOUT_UNCERTAIN");
+  if(!Array.isArray(candidate)||candidate.length<1||candidate.length>80||candidate.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
+  return {...(confidence!=null?{confidence}:{}),regions:[],occupied:candidate,issues:[],recognized_text:[]};
  }
  if(!raw||!Number.isFinite(raw.confidence)||raw.confidence<.75||raw.confidence>1||!Array.isArray(raw.regions)||raw.regions.length>4||!Array.isArray(raw.occupied)||raw.occupied.length>80||raw.occupied.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
  const allowed=new Set(input.references.filter(r=>r.role!=="logo").map(r=>r.index)),seen=new Set();
@@ -40,8 +44,8 @@ function responseOf(raw,input){
 function messagesOf(input){
  if(input.placement_only===true)return [
   {role:"system",content:[
-   '标注海报上已有内容的位置，给真实Logo避让。只输出JSON：{"confidence":0.9,"boxes_xyxy":[[0.12,0.08,0.84,0.21]]}。示例坐标不可照抄。',
-   'boxes_xyxy逐项标注实际标题、正文、产品、人脸、二维码和已有品牌图形。背景纹理不占位置。每项是左上、右下两点[x1,y1,x2,y2]，坐标归一化为0到1。不要转录文字或输出透视框。confidence表示位置标注把握。'
+   '标注海报上已有内容的位置，给真实Logo避让。只输出JSON：{"objects":[{"label":"标题","bbox_2d":[120,80,840,210]}]}。示例坐标不可照抄。',
+   'objects逐项标注实际标题、正文、产品、人脸、二维码和已有品牌图形。背景纹理不占位置。bbox_2d使用左上、右下两点[x1,y1,x2,y2]，坐标归一化为0到1000。不要转录文字或输出透视框。'
   ].join("\n")},
   {role:"user",content:[{type:"text",text:"找出所有原有内容的位置"},{type:"image_url",image_url:{url:input.image}}]}
  ];

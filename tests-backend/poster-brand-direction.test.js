@@ -12,14 +12,22 @@ test('restyling uses the current whole diagram and keeps source terminology',()=
   const a=[{role:'user',content:[part('old')]},{role:'user',content:[{type:'text',text:user},part('new')]}];
   assert.equal(ref.firstUserImage(a), 'data:image/png;base64,new');
   assert.ok(ref.shouldTranscribe(a));
-  assert.ok(!poster.nativePoster({source:'attached',prompt:'产品结构海报'},user));
-  assert.ok(poster.nativePoster({source:'attached',prompt:'产品结构海报'},user,{referenceRedesign:true}));
+  assert.ok(poster.nativePoster({source:'attached',prompt:'产品结构海报'},user));
+  assert.ok(poster.nativePoster({source:'attached',prompt:'重新绘制这张产品系统架构图'},user,{referenceDesign:true}));
+  assert.ok(!poster.nativePoster({source:'attached',prompt:'把肖像重画成插画'},user));
+  assert.ok(poster.nativePoster({source:'attached',prompt:'产品结构海报'},'只换一种风格，保留原图比例'));
+  assert.ok(!poster.nativePoster({source:'attached',prompt:'产品结构海报'},'只换这个Logo，其余内容不变'));
   assert.equal(guard.classify([{index:1,size:{w:2709,h:3200}}],user).poster.index,1);
   assert.ok(!ref.restylesReference('换个风格，删掉原来的栏目'));
   const terms=ref.linesOf('400-7758-119\n- 无线门磁\n红外探测器\n？烟雾\nPGM接口');
   const blocks=ref.keepSourceLines([{key:'first',text:'现有 PGM 接口',role:'body'}],terms);
   assert.deepEqual(blocks.map(b=>b.text),['现有 PGM 接口','400-7758-119','无线门磁','红外探测器']);
   assert.equal(ref.keepSourceLines(blocks,terms).length,blocks.length);
+  const structured=poster.mark({text:blocks},user,{referenceRedesign:true});
+  const final=poster.compile({visual:'浅灰白背景、四列卡片、不用照片',structured,density:'dense'});
+  assert.doesNotMatch(final,/浅灰白背景|四列卡片|不用照片/);
+  assert.match(final,/原图主标题/);
+  assert.match(final,/"无线门磁"/);
 });
 
 test('explicit style is passed to the request ahead of default artistic guidance',()=>{
@@ -60,10 +68,14 @@ const layout=require('../cloudfunctions/shared/image-layout-protocol');
 test('only the explicit single Logo path can ask for placement without copy analysis',()=>{
  const input={image:'data:image/png;base64,AA==',references:[{index:1,role:'logo',aspect:4}],placement_only:true};
  const got=layout.requestOf(input);
- assert.match(layout.messagesOf(got)[0].content,/boxes_xyxy/);
+ assert.match(layout.messagesOf(got)[0].content,/bbox_2d/);
  const placed=layout.responseOf({confidence:0.9,boxes_xyxy:[[0.25,0.25,0.75,0.5]]},got);
  assert.deepEqual(placed.occupied,[[0.25,0.25,0.5,0.25]]);
  assert.deepEqual(layout.responseOf(placed,got),placed);
+ const official=layout.responseOf({objects:[{label:'标题',bbox_2d:[250,250,750,500]}]},got);
+ assert.deepEqual(official.occupied,placed.occupied);
+ assert.deepEqual(layout.responseOf(official,got),official);
+ assert.throws(()=>layout.responseOf({objects:[{bbox_2d:[250,250,1200,500]}]},got),/IMAGE_LAYOUT_UNCERTAIN/);
  assert.throws(()=>layout.requestOf({...input,references:[{index:1,role:'ui',aspect:4}]}),/IMAGE_LAYOUT_INVALID/);
  assert.throws(()=>layout.responseOf({confidence:0.9,boxes_xyxy:[[0.99,0.99,0.1,0.1]]},got),/IMAGE_LAYOUT_UNCERTAIN/);
  assert.throws(()=>layout.responseOf({confidence:0.9,occupied:[[0.2,0.2,0.2,0.2]]},layout.requestOf({...input,placement_only:undefined})),/IMAGE_LAYOUT_UNCERTAIN/);

@@ -1,7 +1,7 @@
 "use strict";
 
 const POSTER = /海报|宣传图|活动展架|易拉宝|宣传单|价目表|\b(?:poster|flyer)\b/i;
-const LOCAL_CHANGE = /只(?:需|要)?(?:改|加|换|删除)|(?:原图|底图|版式|比例).{0,6}(?:不变|保持|别动)|保留.{0,8}(?:原图|原版式)|换(?:个|一种)?风格|旧稿改版/;
+const LOCAL_CHANGE = /只(?:需|要)?(?:改|加|换|删)(?:动|修|除)?(?:其中|局部|一下|这个|那块)?(?:logo|标识|二维码|错字|电话|标题|背景|底色|文案|价格|水印|一处)|只改局部|其余.{0,6}(?:不变|别动)/i;
 const SPARSE = /极简|少字|只(?:写|印|放)(?:一个)?(?:主)?标题|大面积留白|纯(?:白|黑|色)(?:底|背景)/;
 const NO_COPY = /不要(?:任何)?(?:文字|文案)|无字(?:底图|海报)?|不(?:写|印|要)(?:任何)?字/;
 const ROLES = new Set(['title', 'subtitle', 'label', 'body', 'contact', 'footer']);
@@ -19,13 +19,13 @@ function excluded(structured, textMode, layerDecomposition) {
     || ['redesign','local_edit'].includes(plan?.intent) || plan?.protected_references?.length;
 }
 
-function nativePoster(args, userText, { referenceRedesign = false } = {}) {
+function nativePoster(args, userText, { referenceDesign = false } = {}) {
   if (args.render_intent === 'mockup' || ['edit', 'series'].includes(args.task_kind)) return false;
   return !excluded(args.structured, args.text_mode, args.layer_decomposition)
     && !['last', 'both'].includes(args.source)
-    && (referenceRedesign || !LOCAL_CHANGE.test(String(userText || '')))
+    && !LOCAL_CHANGE.test(String(userText || ''))
     && !NO_COPY.test(String(userText || ''))
-    && posterRequested(args.render_intent, args.prompt, userText);
+    && (referenceDesign || posterRequested(args.render_intent, args.prompt, userText));
 }
 
 function normalizeRows(value) {
@@ -102,7 +102,7 @@ function compile({ visual, structured, density }) {
   const roles = {title:'主标题',subtitle:'副标题',label:'分区标题',body:'说明',contact:'联系方式',footer:'署名'};
   const rows = copyOf(structured).filter(row => typeof row?.text === 'string' && row.text.trim());
   const design = density === 'dense' ?
-    '根据本次主题、产品、文案关系和品牌资料决定视觉语言与配图。用有用的信息、相关场景与图形建立阅读层级，版式、配色、装饰随内容变化。' :
+    '根据主题、产品、文案关系和品牌资料决定视觉语言。完整表达内容；用主题相关的空间、实物、光影、材质或图解做背景和点缀，让标题与内容层级清楚。配色、装饰、构图随题材变化。' :
     '遵循用户指定的留白与简洁程度，保持文字清晰。';
   const brief = typeof structured.design_brief?.visual_approach === 'string' ? structured.design_brief.visual_approach.trim() : '';
   const copy = rows.map(row => `${roles[row.role] || roles.body}：${row.text.split(/\r?\n/).map(line => JSON.stringify(line)).join('\n')}`);
@@ -112,10 +112,12 @@ function compile({ visual, structured, density }) {
     : '当前明确要求优先，其次使用本轮选定的参考；同品牌已确认偏好才用于补默认。布局与美术由你决定。';
   const polished=visual.replace(/(?:不要|不)(?:出现|绘制|添加)(?:任何)?(?:文字|文案)[。.!！]?(?=$|\s)/g,'').trim();
   const reference=structured?.poster_delivery?.reference_redesign
-    ? '图1是整张需要换风格的原稿。保留原有设备、连接关系、功能、标签和终端，用新的视觉语言和构图呈现，只保留原稿与本轮确认的内容。无明确授权时不要新增任何电话、地址、网址、二维码、价格、联系栏、品牌或宣传承诺。' : '';
-  const rawVisual=reference?polished.replace(/不照抄它的文字[。.]?/g,''):polished;
-  return [priority, design, reference, rawVisual, brief && !visual.includes(brief) && brief,
-    '以下为全部印刷文字。逐行照写，保持所属分区。不加清单以外的标题、数字、价格、标号、界面文字或占位文字。', ...copy]
+    ? '图1是整张需要换风格的原稿。保留原图主标题、主体、关系和全部栏目，设计一个清楚的主视觉。背景和点缀从主题、真实使用场景及产品特征取材，维持原图信息量。只保留原稿与本轮确认的内容。无明确授权时不要新增任何电话、地址、网址、二维码、价格、联系栏、品牌或宣传承诺。' : '';
+  // For whole-artwork restyling, artwork is the authoritative visual input.
+  // The planner's invented aesthetic restrictions must not overrule it.
+  const direction=reference?reference:[polished,brief&&!visual.includes(brief)&&brief].filter(Boolean).join('\n');
+  return [priority, design, direction,
+    '以下为全部印刷文字。原样印刷，每项只出现一次，保持与所属图解或分区对应。原稿主标题只放一个主标题位。不得另加清单外的词、数字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
 }
 

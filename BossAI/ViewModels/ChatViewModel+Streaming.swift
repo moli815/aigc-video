@@ -579,6 +579,7 @@ extension ChatViewModel {
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
                             let serverExecution = HostedAccount.isHostedActive && HostedAccount.cachedImageServerExecution &&
                                 toolName == "image_generate" && !PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs)
+                            let serverPlansImage = serverExecution && HostedAccount.behaviorBool("posterDesignByServer", default: false)
                             let qualityDecision = serverExecution ? nil : ImageQualityPolicy.decide(userText:userText,tool:toolName,
                                 referenceCount:refs.count,modelTier:qualityTier,
                                 modelReason:args?["quality_reason"] as? String,structured:structuredArgs)
@@ -590,7 +591,7 @@ extension ChatViewModel {
                             // 旧实现完全不看原图，编辑任务没指定比例时落到默认 1:1，
                             // 横版照片只能被中心裁切——这才是"P 图被切边"的根因。
                             let sourceSize = refs.first.flatMap { ImageGeometry.pixelSize(of: $0) }
-                            let plan = ImageTaskPlanner.plan(
+                            let plan = serverPlansImage ? nil : ImageTaskPlanner.plan(
                                 userText: prompt,
                                 referenceCount: refs.count,
                                 requestedCount: requestedCount > 0 ? requestedCount : nil,
@@ -600,7 +601,7 @@ extension ChatViewModel {
                                 userSaid: userText,
                                 preferReferenceRedesign: toolName == "image_generate" && !refs.isEmpty)
                             // 服务端区分“参考图创作”与“局部编辑”：两者都传图，只有后者才要求像素级保留。
-                            if plan.taskType == .series && toolName != "image_series" {
+                            if plan?.taskType == .series && toolName != "image_series" {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                     "content": ToolPipeline.failureNote(pluginID: toolName,
                                         reason: "这是多图任务，请改用 image_series 编排工具；不要通过单图工具传多张数量。尚未生成或计费。")])
@@ -612,24 +613,25 @@ extension ChatViewModel {
                                 case "image_series": return "series"
                                 default:
                                     guard !refs.isEmpty else { return "generate" }
+                                    guard let plan else { return "reference" }
                                     return ImageService.taskKind(for: plan.taskType)
                                 }
                             }()
                             // 说"改图"却一张图都没有：先问一句，别硬生成一张全新图
-                            if plan.needsClarification, let ask = plan.clarification {
+                            if let plan, plan.needsClarification, let ask = plan.clarification {
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
                                                     "content": "【需要先确认】" + ask])
                                 continue
                             }
-                            let planPrompt = [serverExecution ? prompt : plan.prompt, catalogContext].compactMap { $0 }.joined(separator: "\n")
-                            let planAspect = serverExecution ? aspectRatio : plan.aspectRatio
-                            let planTier = serverExecution ? "" : plan.qualityTier
-                            let planCount = plan.outputCount
+                            let planPrompt = [serverExecution ? prompt : (plan?.prompt ?? prompt), catalogContext].compactMap { $0 }.joined(separator: "\n")
+                            let planAspect = serverExecution ? aspectRatio : (plan?.aspectRatio ?? aspectRatio)
+                            let planTier = serverExecution ? "" : (plan?.qualityTier ?? qualityTier)
+                            let planCount = plan?.outputCount ?? 1
                             // 等待文案按**真实任务类型**分流（plan 已就绪；不用定时器伪造阶段）
                             imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
                             // ── 10-25 fail-closed：编辑任务读不到原图真实像素 → 直接失败，不调模型 ──
                             // "不知道原图画布"就无法承诺不裁切，硬生成等于赌运气。
-                            if (plan.taskType == .edit || plan.taskType == .reference),
+                            if let plan, (plan.taskType == .edit || plan.taskType == .reference),
                                plan.referenceCount > 0, plan.sourceWidth == nil {
                                 imageTurnNote = ImageTaskStatus.Failure.aspectMismatch.message
                                 apiMessages.append(["role": "tool", "tool_call_id": call.id,
@@ -648,7 +650,7 @@ extension ChatViewModel {
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
-                                targetSize: plan.targetSize,
+                                targetSize: plan?.targetSize,
                                 referenceRoles: requestedRoles.count == refs.count ? requestedRoles : [])
                             DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision?.reason ?? "SERVER_EXECUTION",
                                 requestId:imageCtx.requestId,fields:["sourceCount":String(refs.count),"ratio":planAspect])
@@ -818,7 +820,7 @@ extension ChatViewModel {
                             // ── 10-25 几何校验：承诺保比例却没保住 → 不展示、不落库、明确失败 ──
                             // 这是"不许裁切"的最后一道闸：参数层面已经锁了 targetSize，
                             // 万一上游还是把画面重构成别的比例，就在这里拦住。
-                            if !serverExecution, plan.preserveSourceAspect, !plan.allowCrop,
+                            if !serverExecution, let plan, plan.preserveSourceAspect, !plan.allowCrop,
                                let srcW = plan.sourceWidth, let srcH = plan.sourceHeight {
                                 let expected = Double(srcW) / Double(srcH)
                                 let out = ImageGeometry.pixelSize(of: imageData)
@@ -848,7 +850,7 @@ extension ChatViewModel {
                                                         "content": ToolPipeline.successNote(pluginID: "image_edit",
                                                                                            detail: "结果已生成，但比例与原图不一致；已按结果返回，请如实告知用户，必要时可重新生成严格保比例的版本。")])
                                 }
-                            } else if let srcW = plan.sourceWidth, let srcH = plan.sourceHeight,
+                            } else if let plan, let srcW = plan.sourceWidth, let srcH = plan.sourceHeight,
                                       let out = ImageGeometry.pixelSize(of: imageData) {
                                 PerformanceTrace.event("image_geometry", fields: [
                                     "src": "\(srcW)x\(srcH)",
