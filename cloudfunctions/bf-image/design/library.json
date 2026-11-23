@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "reference": {
+    "repository": "https://github.com/howardz27/poster-generator-skill",
+    "commit": "fa2a40bf0943c14dbcf2dfd86a2efe66fa8b4cbc",
+    "license": "MIT",
+    "adaptation": "Content-aware composition and separate style selection; no source instructions are executed. Keep mandatory Chinese copy intact."
+  },
+  "styles": {
+    "data-editorial": {
+      "paper": "#0D2849",
+      "ink": "#F0F5FC",
+      "accent": "#FFB34D",
+      "hero": "#082244",
+      "heroInk": "#FFFFFF",
+      "radius": 20,
+      "imageTreatment": "bleed",
+      "rule": 4
+    },
+    "organic-craft": {
+      "paper": "#F6EFE2",
+      "ink": "#173D34",
+      "accent": "#BC4727",
+      "hero": "#173D34",
+      "heroInk": "#FFF8EA",
+      "radius": 12,
+      "imageTreatment": "split",
+      "rule": 3
+    },
+    "hyperreal-product": {
+      "paper": "#F1F4F5",
+      "ink": "#122F34",
+      "accent": "#006C64",
+      "hero": "#0B242B",
+      "heroInk": "#FFFFFF",
+      "radius": 18,
+      "imageTreatment": "split",
+      "rule": 3
+    }
+  },
+  "layouts": {
+    "timeline-sequence": {
+      "source": "references/layouts/timeline-sequence.md",
+      "artworkAspect": "5:2",
+      "hero": "bleed"
+    },
+    "split-vertical": {
+      "source": "references/layouts/split-vertical.md",
+      "artworkAspect": "4:3",
+      "hero": "split"
+    },
+    "modular-grid": {
+      "source": "references/layouts/modular-grid.md",
+      "artworkAspect": "4:3",
+      "hero": "split"
+    },
+    "editorial-column": {
+      "source": "references/layouts/editorial-column.md",
+      "artworkAspect": "5:2",
+      "hero": "bleed"
+    },
+    "product-shelf": {
+      "source": "references/layouts/product-shelf.md",
+      "artworkAspect": "4:3",
+      "hero": "none"
+    },
+    "triptych": {
+      "source": "adaptation for wide enterprise boards",
+      "artworkAspect": "4:3",
+      "hero": "split"
+    }
+  }
+}

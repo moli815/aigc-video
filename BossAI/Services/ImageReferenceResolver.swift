@@ -119,7 +119,10 @@ enum ImageReferenceResolver {
     static let maxAttachments = 16
 
     static func usesEntireCatalog(_ text: String) -> Bool {
-        ["都用上", "全部使用", "全部用上", "每张都", "所有产品图", "所有附件", "全部产品图"].contains {
+        guard !["不要全", "别用全部", "只用", "仅用", "不使用"].contains(where: { text.contains($0) }) else {
+            return false
+        }
+        return ["都用上", "全部使用", "全部用上", "每张都", "所有产品图", "所有附件", "全部产品图"].contains {
             text.contains($0)
         }
     }

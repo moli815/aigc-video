@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
 
-const audit = require(path.join(__dirname, "..", "worktree/bf-image-stage/shared/number-audit.js"));
+const audit = require(path.join(__dirname, "..", "cloudfunctions/shared/number-audit.js"));
 
 test("抽出价格、克数、层数、时长", () => {
   const tokens = audit.tokensOf([

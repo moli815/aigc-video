@@ -31,7 +31,9 @@ test('matching aspect alone cannot qualify blank, shifted, or distorted auto-tie
  const distorted=await scaled(original,[.8,0,0,0,.96875,0,0,0,1],480,872);
  await assert.rejects(mod.align({original,cleanBase:distorted,layers:[]}),/CANVAS_CHANGED/);
 });
-test('real text-cleared auto canvas uses all-nine-cell and independent-scale evidence rather than an arbitrary 65 percent feature span',async()=>{
+const historicalCanvas = path.resolve(__dirname,'../outputs/native-copy-rollout-20261117/live-4/assets/9b87cb8a57561aea077ce7c34f5b9947d3db87e9.png');
+test('real text-cleared auto canvas uses all-nine-cell and independent-scale evidence rather than an arbitrary 65 percent feature span',
+ {skip:fs.existsSync(historicalCanvas)?false:'historical capture stays in the local outputs directory'},async()=>{
  const dir=path.resolve(__dirname,'../outputs/native-copy-rollout-20261117/live-4/assets'),source=geo.decode(fs.readFileSync(path.join(dir,'9b87cb8a57561aea077ce7c34f5b9947d3db87e9.png'))),target=geo.decode(fs.readFileSync(path.join(dir,'66991039e95a1c6d94c70ca09bf4839f5ffe5a15.png')));
  const r=await mod.estimate(source,target);assert.equal(r.metrics.occupiedCells,9);assert.ok(r.metrics.inliers>=300);assert.ok(r.metrics.spanY<.65);assert.ok(r.metrics.fixedCanvasP95<=r.metrics.analysisPixelSize);assert.equal(r.metrics.coverageMode,'quantised_canvas_with_independent_scale_proof');
 });
