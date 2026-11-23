@@ -53,3 +53,12 @@ APP_IMAGE_SERVER_EXECUTION（默认开）与 APP_IMAGE_ATTACHMENT_LIMIT（1–16
 
 上次 iPad 包闸门的三条未通过项都在流式回放中把诊断当展示文字。保留抛错、正文保留和重试断言，将诊断与用户可读提示分别验证。当前发布候选的构建记录以 GitHub 最新已提交的精确版本为准。
 
+
+## 正式发布结果
+
+北京时间 19:40 确认。图片服务 19:33:51，API 19:34:05。更新前已核对两线上旧包，更新后重下载并逐文件比对，Active、InstallDependency FALSE。public /api/health 与 /img/ping 200，未登录 /api/me 和 /api/admin/finance 401。管理台最终静态脚本回读 200 且哈希一致。已保存管理旧版和上传之前的函数 ZIP。没有改财务数值或员工托管页面。
+
+应用提交 2c35b867879c9d728443bc781ec1fe01cc124666，服务源码提交 a8cfcf581648b1d6b943d617bffe2be631fd95a1。后端、Swift Core、iPad 模拟器测试（含 4 项聊天 UI）、iOS 编译和发布成功。归档 IPA BossAI-20261123-1916.ipa，版本 1.0，构建号 2026112301，SHA256 0fcdfa10f0e8e5f4e80c35b828ac6825f19d5899f0407def84e0d9cde12b1ecb。现有 SideStore 签名流程适用。客户设备本机的网络和签名需等实际设备使用才有证据。[GitHub 构建](https://github.com/moli815/aigc-video/actions/runs/45163495051)
+
+新包常规会员生图优先服务端执行，管理员可在 AI 与出图关闭 APP_IMAGE_SERVER_EXECUTION 来恢复兼容策略。APP_IMAGE_ATTACHMENT_LIMIT 管理允许附件的数量，客户端对超过私有存储上限的文件提前提示。强制保留原件的贴图、直连、组图续跑和本机资料读写仍由新包提供兼容逻辑。发生生产回归时使用 before.json 和 before-*.zip，仅在当前线上版本仍是本次发布时恢复对应函数；管理台恢复 before-admin-console.js，预算和余额继续由既有账务流程管理。
+
