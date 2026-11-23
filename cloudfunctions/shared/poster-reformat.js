@@ -55,7 +55,10 @@ function plan(input){
  if(!images.length)throw Object.assign(Error('REFORMAT_REFERENCE_REQUIRED'),{code:'REFORMAT_REFERENCE_REQUIRED'});
  const rich=/工业质感|产品细节|相关元素|有层次|商业质感|现场实景|丰富/.test(intent.user_request);
  const art=rich?"\n用用户要求的实景材质和光影建立连续背景。用相关局部特写、结构线或简洁图标解释不同栏目，接近可发布的商业海报。沿原图色系，主体与文案清晰分层，栏目随内容调整尺寸、错落组织，避免三个同样的矩形加一块纯色底。装饰全用无字图形。名称和说明逐字沿用原图，禁止新增标题、流程说明、小字标注、编号和图标配字。":"";
+ const strict=/不加新内容|别加新内容|不新增|不得改字|原文保留/.test(intent.user_request);
+ const required=Array.isArray(input.structured?.text)?input.structured.text.map(row=>row?.text).filter(row=>typeof row==="string"&&row.trim()):[];
+ const copy=strict?"\n必须印出这些原版文案："+required.map(text=>JSON.stringify(text)).join("、")+"。其余只允许原图产品自身标签原样出现。背景不出现显示器、带字仪表、数字看板、流程文字、装饰字符或标牌。用纯实物、材质、光影和无字图案丰富。":"";
  const roles=images.length>1?'\n'+images.map((_,i)=>`图${i+1}：${String(input.referenceRoles?.[i]||(i===0?'待改版的原海报':'用户补充素材')).slice(0,120)}`).join('\n'):'';
- return{intent,prompt:`将输入原图完整重排为${intent.target_aspect_ratio}的平面宣传海报，设计填满目标画布。用户本轮要求：${JSON.stringify(intent.user_request)}。${roles}\n按用户要求重新安排各栏目位置、大小与阅读顺序，保留原图的全部业务内容、名称解释、流程、品牌Logo、联系方式和真实产品/大屏素材；用户明确更新的信息以本轮要求为准。未要求换风格时延续原图美术，要求换风格时遵循用户指定风格。不要整体缩小贴在空白画布，不裁掉栏目，不换成无关场景配图再套正文模板，不生成纸张或拍摄样机。原文准确清晰，不添加原图或用户未提供的口号、数据和承诺。${art}`};
+ return{intent,prompt:`将输入原图完整重排为${intent.target_aspect_ratio}的平面宣传海报，设计填满目标画布。用户本轮要求：${JSON.stringify(intent.user_request)}。${roles}\n按用户要求重新安排各栏目位置、大小与阅读顺序，保留原图的全部业务内容、名称解释、流程、品牌Logo、联系方式和真实产品/大屏素材；用户明确更新的信息以本轮要求为准。未要求换风格时延续原图美术，要求换风格时遵循用户指定风格。不要整体缩小贴在空白画布，不裁掉栏目，不换成无关场景配图再套正文模板，不生成纸张或拍摄样机。原文准确清晰，不添加原图或用户未提供的口号、数据和承诺。${art}${copy}`};
 }
 module.exports={VERSION,derive,ratioOf,mark,normalize,metadata,plan};
