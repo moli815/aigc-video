@@ -199,11 +199,23 @@ function apply(calls, intent, observe) {
   const touched = [];
   const out = calls.map(call => {
     const fn = call && call.function;
-    if (!fn || (fn.name !== "image_generate" && fn.name !== "image_edit")) return call;
+    // image_series 也要走契约：实测模型会用组图接口出单张海报，
+    // 只放行 generate/edit 时它的提示词完全不被改写（2026-11-23 真实客户复现）。
+    if (!fn || !["image_generate", "image_edit", "image_series"].includes(fn.name)) {
+      // 诊断（2026-11-23）：真实客户复现时契约没生效，需要知道是「工具名不匹配」
+      // 还是「判定不通过」还是「JSON 解析失败」。日志只记状态，不含用户文案。
+      if (observe) observe({ tag: "intent_apply_skip", reason: "tool_name", tool: (fn && fn.name) || "?", tools: calls.map(c => c && c.function && c.function.name).join(",") });
+      return call;
+    }
     let args;
-    try { args = JSON.parse(fn.arguments); } catch { return call; }
+    try { args = JSON.parse(fn.arguments); }
+    catch (e) {
+      if (observe) observe({ tag: "intent_apply_skip", reason: "json_parse", tool: fn.name, argType: typeof fn.arguments });
+      return call;
+    }
 
     let blocks = blocksOf(args);
+    if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     let changed = null;
     // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组
     if (blocks && blocks.length && typeof (args.structured && args.structured.text) === "string") {
@@ -301,6 +313,7 @@ function apply(calls, intent, observe) {
     // 只对「海报/宣传物料」类请求追加排版契约。
     // 旧实现在有任何 prompt 时都追加，会把「画一只猫」改成商业海报并塞进一堆
     // 版式与文字要求，严重破坏普通配图——上线前必须按意图分流。
+    if (observe && args.prompt) observe({ tag: "intent_apply_decision", tool: fn.name, want: wantsPosterLayout(args, blocks, intent) });
     if (args.prompt && wantsPosterLayout(args, blocks, intent)) {
       // fail-open：排版契约只是锦上添花，任何异常都不能让整条回复流中断
       //（历史事故：一个未定义的函数就让客户端看到「输出尚未完成」）。

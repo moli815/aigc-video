@@ -2913,12 +2913,51 @@ async function handleChat(req, res) {
   if (intentNote) messages = messages.concat([{ role: "system", content: intentNote }]);
   if (intent.hasAny) logSafe({ tag: "intent_resolved", requestId: currentRequestId(),
     orientation: intent.orientation || "", ratio: intent.ratio ? intent.ratio.label : "", contact: intent.contact || "" });
-  const finalizeImageCallsBase = calls => seriesReferences.finalize(singleReferences.finalize(
+  const finalizeImageCallsRaw = calls => seriesReferences.finalize(singleReferences.finalize(
     require("./image-task-readiness").deferDependentImageCalls(
       legacyBrandActive ? guardBrandCalls(calls, observeBrand, imageUserText) : calls,
       {enabled:nativeCommercialActive,canvasEnabled:nativeCommercialActive,userText:imageUserText,messages,observe:fields=>logSafe({tag:"image_readiness",requestId:currentRequestId(),...fields})})));
-  const finalizeImageCalls = calls => intentContract.apply(finalizeImageCallsBase(calls), intent,
-    f => logSafe({ ...f, requestId: currentRequestId() }));
+  // 2026-11-22：参考契约冲突不再允许中断整条回复。
+  // 线上实例：finalize 抛 IMAGE_REFERENCE_CONFLICT → 冒到最外层 catch → SSE 结束，
+  // 用户看到「输出尚未完成」，一张图都没有。契约只该约束素材编排，不该决定这轮回复的生死。
+  // 收敛：冲突时剥掉参考字段（保留本轮附件）重跑一次；仍失败就原样放行，让工具层报错、
+  // 让模型在同一轮里自己重试，用户至少能拿到回复。
+  const REFERENCE_CONTRACT_CODES = new Set(["IMAGE_REFERENCE_CONFLICT","IMAGE_REFERENCE_NOT_ISSUED","TOOL_CONTRACT_INVALID"]);
+  const stripReferenceContract = calls => (Array.isArray(calls) ? calls : []).map(call => {
+    const name = call && call.function && call.function.name;
+    if (!["image_generate","image_edit","image_series"].includes(name)) return call;
+    let args; try { args = JSON.parse(call.function.arguments); } catch { return call; }
+    if (!args || typeof args !== "object") return call;
+    delete args.library_refs; delete args.reference_roles; delete args.source_indexes; delete args.source_index;
+    if (args.structured && typeof args.structured === "object") {
+      const structured = { ...args.structured }; delete structured.image_references;
+      args.structured = structured;
+    }
+    return { ...call, function: { ...call.function, arguments: JSON.stringify(args) } };
+  });
+  const recoverReferenceContract = (calls, error, stage) => {
+    const code = String((error && (error.code || error.message)) || "");
+    if (!REFERENCE_CONTRACT_CODES.has(code)) throw error;
+    logSafe({ tag: "image_contract_recovered", requestId: currentRequestId(), code, stage: stage || "finalize" });
+    const safe = stripReferenceContract(calls);
+    try { return finalizeImageCallsRaw(safe); } catch { return safe; }
+  };
+  const finalizeImageCallsBase = calls => {
+    try { return finalizeImageCallsRaw(calls); }
+    catch (error) { return recoverReferenceContract(calls, error, "finalize"); }
+  };
+  const finalizeImageCalls = calls => {
+    // 诊断（2026-11-23）：真实客户三次复现里契约一次都没生效，而本地同样的 apply
+    // 能正常追加。先确认这个函数到底有没有被流式路径调用——只有它被调用，
+    // 里面的 intent_apply_entry 才会出现。两条日志对照就能定位是「没调用」还是「调用了但判定不过」。
+    logSafe({ tag: "finalize_calls_called", requestId: currentRequestId(),
+      count: Array.isArray(calls) ? calls.length : -1,
+      names: (Array.isArray(calls) ? calls : []).map(c => c && c.function && c.function.name).join(",") });
+    try {
+      return intentContract.apply(finalizeImageCallsBase(calls), intent,
+        f => logSafe({ ...f, requestId: currentRequestId() }));
+    } catch (error) { return recoverReferenceContract(calls, error, "prompt"); }
+  };
   if (legacyBrandActive) observeBrand({ event: "planning_enabled" });
   const observeImageBoundary = fields => logSafe({ tag: "image_tool_copy_cleaned", requestId: currentRequestId(), ...fields });
   if (RUNTIME.CHAT_RULES && !messages.some((m) => m && typeof m.content === "string" && m.content.includes("能力表达铁律"))) {

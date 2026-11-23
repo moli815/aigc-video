@@ -474,10 +474,21 @@ function structureToBlocks(s) {
 }
 
 /** 统一入口：数组 → 字符串 → 自创结构 → 从 prompt 抽 */
+/** 模型给文案的字段名不统一：text / content / value 都见过（2026-11-23 真实客户复现） */
+function textOf(item) {
+  if (item == null) return "";
+  if (typeof item === "string") return item.trim();
+  if (typeof item !== "object") return String(item).trim();
+  const v = item.text != null ? item.text : (item.content != null ? item.content : (item.value != null ? item.value : ""));
+  return String(v == null ? "" : v).trim();
+}
+
 function normalizeCopy(blocks, prompt, structured) {
   if (Array.isArray(blocks) && blocks.length) {
-    return blocks.filter(b => b && typeof b.text === "string" && b.text.trim())
-      .map(b => ({ role: String(b.role || "body"), text: b.text.trim() }));
+    return blocks.filter(b => b && textOf(b))
+      // 模型有时用 type 而不是 role（2026-11-23 真实客户复现实测），
+      // 只认 role 会把标题、电话全部降级成普通说明，层级和底部信息带全乱。
+      .map(b => ({ role: String(b.role || b.type || "body"), text: textOf(b) }));
   }
   if (typeof blocks === "string" && blocks.trim()) {
     const parsed = parseTextString(blocks);
@@ -487,8 +498,8 @@ function normalizeCopy(blocks, prompt, structured) {
   if (s) {
     // structured.text 也可能是数组（真实链路通常已在 blocks 里传进来，这里兜底）
     if (Array.isArray(s.text) && s.text.length) {
-      const arr = s.text.filter(b => b && typeof b.text === "string" && b.text.trim());
-      if (arr.length) return arr.map(b => ({ role: String(b.role || "body"), text: b.text.trim() }));
+      const arr = s.text.filter(b => b && textOf(b));
+      if (arr.length) return arr.map(b => ({ role: String(b.role || b.type || "body"), text: textOf(b) }));
     }
     if (typeof s.text === "string" && s.text.trim()) {
       const parsed = parseTextString(s.text);
@@ -596,5 +607,5 @@ function augment(prompt, opts = {}) {
 
 module.exports = {
   augment, roleParts, PURPOSE, STYLE, MAX_LEN, COPY_BUDGET,
-  groupCopy, copyLines, clip, expand, trimVisual, extractCopy, parseTextString, structureToBlocks, normalizeCopy,
+  groupCopy, copyLines, clip, expand, trimVisual, extractCopy, parseTextString, structureToBlocks, normalizeCopy, textOf,
 };
