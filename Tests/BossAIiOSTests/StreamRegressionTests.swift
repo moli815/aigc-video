@@ -34,13 +34,19 @@ final class StreamRegressionTests: XCTestCase {
         do {
             for try await event in chat.stream(messages: [], enableTools: false) { if case .textDelta(let part) = event { text += part } }
             XCTFail("Disconnect must not succeed")
-        } catch { XCTAssertTrue(error.localizedDescription.contains("缺少完成标记")) }
+        } catch let error as ChatService.ChatError {
+            XCTAssertTrue(error.diagnostic.contains("缺少完成标记"))
+            XCTAssertEqual(error.localizedDescription, "这次回复没有接收完整，请重试一次。")
+        }
         XCTAssertEqual(text, "最新手机😀")
     }
     func testHTTP200HTMLIsNotAcceptedAsAIStream() async throws {
         let chat = service("<html>proxy page</html>", type: "text/html")
         do { for try await _ in chat.stream(messages: [], enableTools: false) {}; XCTFail("HTML must fail") }
-        catch { XCTAssertTrue(error.localizedDescription.contains("未返回事件流")) }
+        catch let error as ChatService.ChatError {
+            XCTAssertTrue(error.diagnostic.contains("未返回事件流"))
+            XCTAssertEqual(error.localizedDescription, "这次回复没有接收完整，请重试一次。")
+        }
     }
     func testToolCallsWithoutFinalBlankLine() async throws {
         let chunk = #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_fixture","function":{"name":"web_search","arguments":"{\"query\":\"fixture\"}"}}]},"finish_reason":"tool_calls"}]}"#
@@ -53,7 +59,10 @@ final class StreamRegressionTests: XCTestCase {
     func testDONEWithNoContentIsReportedAsEmptyReply() async throws {
         let chat = service("data: [DONE]\n\n")
         do { for try await _ in chat.stream(messages: [], enableTools: false) {}; XCTFail("Empty reply must fail") }
-        catch { XCTAssertTrue(error.localizedDescription.contains("空回复")) }
+        catch let error as ChatService.ChatError {
+            XCTAssertTrue(error.diagnostic.contains("空回复"))
+            XCTAssertEqual(error.localizedDescription, "这次回复没有接收完整，请重试一次。")
+        }
     }
     @MainActor
     func testRetryUsesOneUserMessageAndReplacesFailedAssistant() async throws {

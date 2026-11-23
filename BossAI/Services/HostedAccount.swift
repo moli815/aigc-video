@@ -346,6 +346,13 @@ final class HostedAccount: ObservableObject {
     nonisolated static var cachedChatFirstTokenTimeout: TimeInterval { behaviorDouble("chatFirstTokenTimeout", default: 45) }
     /// 流式中断自动重试次数（0=关闭）；云端可调，默认 1
     nonisolated static var cachedStreamRetry: Int { behaviorInt("streamRetry", default: 1) }
+    nonisolated static var cachedImageServerExecution: Bool {
+        behaviorBool("imageServerExecution", default: false)
+    }
+    nonisolated static var cachedImageAttachmentLimit: Int {
+        min(ImageReferenceResolver.maxAttachments, max(1, behaviorInt("imageAttachmentLimit", default: ImageReferenceResolver.maxAttachments)))
+    }
+
     /// 生图失败重试次数（0=关闭）；云端可调，默认 1
     nonisolated static var cachedImageRetry: Int { behaviorInt("imageRetry", default: 1) }
 

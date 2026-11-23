@@ -196,6 +196,8 @@ const RUNTIME_SPECS = {
   IMGPROG_STAGE2:     { type: "str", label: "生图动效·阶段2文案（15~45秒）", def: () => process.env.IMGPROG_STAGE2 || "正在绘制中..." },
   IMGPROG_STAGE3:     { type: "str", label: "生图动效·阶段3文案（45秒后）", def: () => process.env.IMGPROG_STAGE3 || "正在绘制中..." },
   IMGPROG_ETA:        { type: "str", label: "生图动效·预计时长提示", def: () => process.env.IMGPROG_ETA || "AI 生成约需 1 分钟" },
+  APP_IMAGE_SERVER_EXECUTION: { type: "str", label: "会员单图由服务器执行", def: () => process.env.APP_IMAGE_SERVER_EXECUTION || "1" },
+  APP_IMAGE_ATTACHMENT_LIMIT: { type: "num", label: "App·单轮图片数量", def: () => Number(process.env.APP_IMAGE_ATTACHMENT_LIMIT || 16) },
   APP_IMAGE_VERIFY:   { type: "str", label: "App·生图后视觉验证（1=开 / 0=关）：不符自动重试一次", def: () => process.env.APP_IMAGE_VERIFY || "1" },
   // 10-24 安全整改（审计 P1-10）：发放存档默认仍回显初始密码（当前管理流程依赖它），
   // 置 0 后列表不再解密密码，只回 masked 标记 —— 不改代码即可收紧，属可回滚的止损开关。

@@ -34,8 +34,9 @@ extension ChatViewModel {
             return
         }
         let currentImages = attachments.filter(\.isImage)
-        guard currentImages.count <= ImageReferenceResolver.maxAttachments else {
-            assistantMessage.text = "一轮最多处理 \(ImageReferenceResolver.maxAttachments) 张图片。请分批上传后再试。"
+        let attachmentLimit = HostedAccount.isHostedActive ? HostedAccount.cachedImageAttachmentLimit : ImageReferenceResolver.maxAttachments
+        guard currentImages.count <= attachmentLimit else {
+            assistantMessage.text = "一轮最多处理 \(attachmentLimit) 张图片。请分批上传后再试。"
             saveOrWarn()
             return
         }
@@ -576,7 +577,9 @@ extension ChatViewModel {
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
-                            let qualityDecision = ImageQualityPolicy.decide(userText:userText,tool:toolName,
+                            let serverExecution = HostedAccount.isHostedActive && HostedAccount.cachedImageServerExecution &&
+                                toolName == "image_generate" && !PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs)
+                            let qualityDecision = serverExecution ? nil : ImageQualityPolicy.decide(userText:userText,tool:toolName,
                                 referenceCount:refs.count,modelTier:qualityTier,
                                 modelReason:args?["quality_reason"] as? String,structured:structuredArgs)
                             let requestedCount = (args?["count"] as? Int) ?? Int((args?["count"] as? NSNumber)?.intValue ?? 0)
@@ -592,7 +595,7 @@ extension ChatViewModel {
                                 referenceCount: refs.count,
                                 requestedCount: requestedCount > 0 ? requestedCount : nil,
                                 aspectRatio: aspectRatio.isEmpty ? nil : aspectRatio,
-                                qualityTier: qualityDecision.tier,
+                                qualityTier: qualityDecision?.tier,
                                 sourceSize: sourceSize,
                                 userSaid: userText,
                                 preferReferenceRedesign: toolName == "image_generate" && !refs.isEmpty)
@@ -618,9 +621,9 @@ extension ChatViewModel {
                                                     "content": "【需要先确认】" + ask])
                                 continue
                             }
-                            let planPrompt = [plan.prompt, catalogContext].compactMap { $0 }.joined(separator: "\n")
-                            let planAspect = plan.aspectRatio
-                            let planTier = plan.qualityTier
+                            let planPrompt = [serverExecution ? prompt : plan.prompt, catalogContext].compactMap { $0 }.joined(separator: "\n")
+                            let planAspect = serverExecution ? aspectRatio : plan.aspectRatio
+                            let planTier = serverExecution ? "" : plan.qualityTier
                             let planCount = plan.outputCount
                             // 等待文案按**真实任务类型**分流（plan 已就绪；不用定时器伪造阶段）
                             imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
@@ -645,9 +648,9 @@ extension ChatViewModel {
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
-                                targetSize: plan.targetSize,
+                                targetSize: serverExecution ? nil : plan.targetSize,
                                 referenceRoles: requestedRoles.count == refs.count ? requestedRoles : [])
-                            DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision.reason,
+                            DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision?.reason ?? "SERVER_EXECUTION",
                                 requestId:imageCtx.requestId,fields:["sourceCount":String(refs.count),"ratio":planAspect])
                             // ── 组图（10-24 P1-5）：服务端任务 + 客户端逐张驱动 ──
                             // 每张一次 step（并发 2），每批完成即落库；支持取消与续跑。
@@ -703,7 +706,7 @@ extension ChatViewModel {
                             // 命中则：Pro 出无字底图 → TextOverlayRenderer 程序叠字（只叠一次）。
                             // 仅 structured.text 是可见文案，且必须按语义分项；视觉 prompt 不参与绘制。
                             let overlayItems: [TextItem]
-                            if PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs) {
+                            if serverExecution || PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs) {
                                 // “只换Logo，文字不变” retains the original pixels. OCR and
                                 // full-page retypesetting would duplicate already present copy.
                                 overlayItems = []
@@ -815,7 +818,7 @@ extension ChatViewModel {
                             // ── 10-25 几何校验：承诺保比例却没保住 → 不展示、不落库、明确失败 ──
                             // 这是"不许裁切"的最后一道闸：参数层面已经锁了 targetSize，
                             // 万一上游还是把画面重构成别的比例，就在这里拦住。
-                            if plan.preserveSourceAspect, !plan.allowCrop,
+                            if !serverExecution, plan.preserveSourceAspect, !plan.allowCrop,
                                let srcW = plan.sourceWidth, let srcH = plan.sourceHeight {
                                 let expected = Double(srcW) / Double(srcH)
                                 let out = ImageGeometry.pixelSize(of: imageData)

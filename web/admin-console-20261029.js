@@ -4,7 +4,7 @@ var ADMIN_CONFIG_VIEWS=[
   ['common','常用设置'],['models','模型与分流'],['experience','出图与记忆'],
   ['billing','额度与限流'],['advanced','技术与密钥'],['all','全部配置']
 ];
-var ADMIN_COMMON_KEYS=['IMAGE_ROUTING_MODE','IMAGE_SIZE','CAP_CHAT_ENABLED','CAP_IMAGE_ENABLED','USAGE_COST_MULTIPLIER','APP_IMAGE_TIMEOUT'];
+var ADMIN_COMMON_KEYS=['IMAGE_ROUTING_MODE','IMAGE_SIZE','CAP_CHAT_ENABLED','CAP_IMAGE_ENABLED','USAGE_COST_MULTIPLIER','APP_IMAGE_TIMEOUT','APP_IMAGE_SERVER_EXECUTION','APP_IMAGE_ATTACHMENT_LIMIT'];
 function adminEnumLabel(key,value){
   var labels=key==='IMAGE_ROUTING_MODE'?{auto:'自动分流 · 按任务选择',flash_only:'全部快速档 · Flash',pro_only:'全部高质量 · Pro'}:
     key==='USAGE_BILLING_MODE'?{supplier_cost:'成本 × 倍数',legacy:'旧计费 · 仅回滚'}:{};
@@ -16,6 +16,8 @@ function adminFieldDescription(s){
     IMAGE_SIZE:'默认图片清晰度。更大的图片通常需要更久，费用也可能更高。',
     USAGE_COST_MULTIPLIER:'聊天调用成本乘以这个倍数，扣减用户额度。图片倍数由图片服务配置单独管理。',
     APP_IMAGE_TIMEOUT:'用户最多等待图片生成的秒数。它要与服务器超时配合，通常无需调整。',
+    APP_IMAGE_SERVER_EXECUTION:'会员常规单图的画布、模型和排字由服务器处理。关闭可恢复客户端原流程。',
+    APP_IMAGE_ATTACHMENT_LIMIT:'控制新版客户端每轮接受的图片数。较多图片使用编号图册，原文件保留。',
     CAP_CHAT_ENABLED:'允许用户使用对话。关闭后会暂停对话能力。',
     CAP_IMAGE_ENABLED:'允许用户生成和编辑图片。关闭后会暂停作图能力。'
   };return CFG_VIEW==='common'&&copy[s.key]?copy[s.key]:s.description;

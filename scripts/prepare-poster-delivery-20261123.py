@@ -21,6 +21,11 @@ def reviewed_slice(source, start, end):
 
 
 def api_index(online, local):
+    option = '  APP_IMAGE_VERIFY:   {'
+    additions = local.split('  APP_IMAGE_SERVER_EXECUTION: ', 1)[1].split(option, 1)[0]
+    if online.count(option) != 1:
+        raise ValueError('Unexpected application settings format')
+    online = online.replace(option, '  APP_IMAGE_SERVER_EXECUTION: ' + additions + option, 1)
     for start, end in [
         ('    if (!REFERENCE_CONTRACT_CODES.has(code))', '    logSafe({ tag: "image_contract_recovered"'),
         ('      // 缓冲里是工具调用标签', '      streamCompleted = true;'),
@@ -64,6 +69,7 @@ for function in ('bf-api', 'bf-image'):
             files['tool-tag-parser.js'] = local('tool-tag-parser.js')
             files['index.js'] = api_index(archived('index.js'), local('index.js'))
             files['domains/foundation.js'] = local('domains/foundation.js')
+            files['settings-schema.js'] = local('settings-schema.js')
             files['image-series-reference-guidance.js'] = local('image-series-reference-guidance.js')
             source = archived('shared/image-delivery.js')
             normalizer = local('shared/image-delivery.js')

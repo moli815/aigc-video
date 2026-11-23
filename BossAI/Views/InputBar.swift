@@ -173,7 +173,8 @@ struct InputBar: View {
         }
         // 相册多选：限 10 张、仅图片；单张解析失败跳过，不中断整批。
         .photosPicker(isPresented: $showPhotos, selection: $photoItems,
-                      maxSelectionCount: ImageReferenceResolver.maxAttachments, matching: .images)
+                      maxSelectionCount: HostedAccount.isHostedActive ? HostedAccount.cachedImageAttachmentLimit : ImageReferenceResolver.maxAttachments,
+                      matching: .images)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             Task {
