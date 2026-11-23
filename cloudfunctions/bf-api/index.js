@@ -3499,7 +3499,7 @@ async function handleChat(req, res) {
           if (!plain) throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), {
             code: "TOOL_ARGUMENTS_INVALID", reason: "JSON_SYNTAX", field: "arguments",
           });
-          if (plain) res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { content: plain } }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
+          res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { content: plain } }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
           logSafe({ tag: "tool_tag_unparsed", requestId: currentRequestId(), len: heldTag.length });
         }
         res.write("data: [DONE]\n\n");

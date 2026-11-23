@@ -153,6 +153,7 @@ function stripToolTags(text) {
   return String(text || "")
     .replace(/<\|?DSML\|?[^>]*>/g, "")
     .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+    .replace(/<tool_calls?>[\s\S]*$/i, "")
     .replace(/<\/?tool_calls?>/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
