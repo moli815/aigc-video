@@ -36,3 +36,16 @@ test("logo position avoids actual occupied words and never accepts no-safe-space
  const canvas={width:1600,height:900};const b=m.logoBox({canvas,aspect:2,occupied:[[0,0,.6,.2]],anchor:"top_left"});assert.ok(b[0]>.6);
  assert.throws(()=>m.logoBox({canvas,aspect:2,occupied:[[0,0,1,1]]}),/NO_SAFE_LOGO_SLOT/);
 });
+
+test("opted-in logo backing appears on a low contrast region without recoloring the asset",async()=>{
+ const source=raster(66,18,[20,27,48]),bytes=png(source),placement={role:"logo",bytes,sha256:sha(bytes),preparedRaster:source,ensureContrast:true};
+ const dark=await m.compose({canvas:png(raster(480,320,[12,20,35])),placements:[placement]});
+ const light=await m.compose({canvas:png(raster(480,320,[238,242,244])),placements:[placement]});
+ const result=PNG.sync.read(dark.png),q=dark.manifest.placements[0].quad;
+ assert.equal(dark.manifest.placements[0].backing,true);
+ assert.equal(light.manifest.placements[0].backing,undefined);
+ const i=(Math.floor((q[0][1]+q[2][1])/2*result.height)*result.width+Math.floor((q[0][0]+q[2][0])/2*result.width))*4;
+ assert.deepEqual([...result.data.subarray(i,i+4)],[20,27,48,255]);
+ assert.deepEqual([...result.data.subarray(0,4)],[12,20,35,255]);
+});
+

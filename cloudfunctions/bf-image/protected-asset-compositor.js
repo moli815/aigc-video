@@ -112,6 +112,41 @@ function logoBox({canvas,aspect,occupied=[],anchor="auto"}){
  }
  fail("ASSET_NO_SAFE_LOGO_SLOT");
 }
+function luminance(data,index){
+ const linear=v=>{const x=v/255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4;};
+ return .2126*linear(data[index])+.7152*linear(data[index+1])+.0722*linear(data[index+2]);
+}
+function contrastRatio(a,b){return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);}
+function placeLogoBacking(canvas,source,box){
+ let sum=0,count=0;
+ const step=Math.max(1,Math.floor(source.width*source.height/4096));
+ for(let pixel=0;pixel<source.width*source.height;pixel+=step){
+  const i=pixel*4;
+  if(source.data[i+3]>=220){sum+=luminance(source.data,i);count++;}
+ }
+ if(!count)return false;
+ const foreground=sum/count;
+ const [x,y,w,h]=box;
+ let need=0;
+ for(let row=0;row<5;row++)for(let col=0;col<9;col++){
+  const px=Math.floor((x+w*(col+.5)/9)*canvas.width);
+  const py=Math.floor((y+h*(row+.5)/5)*canvas.height);
+  if(contrastRatio(foreground,luminance(canvas.data,(py*canvas.width+px)*4))<3)need++;
+ }
+ if(need<13)return false;
+ const fill=contrastRatio(foreground,1)>contrastRatio(foreground,0)?250:15;
+ const left=Math.max(0,Math.ceil((x-.006)*canvas.width)),right=Math.min(canvas.width,Math.floor((x+w+.006)*canvas.width));
+ const top=Math.max(0,Math.ceil((y-.006)*canvas.height)),bottom=Math.min(canvas.height,Math.floor((y+h+.006)*canvas.height));
+ const radius=Math.max(1,Math.floor((bottom-top)*.13));
+ for(let py=top;py<bottom;py++)for(let px=left;px<right;px++){
+  const dx=Math.max(left+radius-px,px-(right-radius-1),0);
+  const dy=Math.max(top+radius-py,py-(bottom-radius-1),0);
+  if(dx*dx+dy*dy>radius*radius)continue;
+  const i=(py*canvas.width+px)*4;
+  canvas.data[i]=fill;canvas.data[i+1]=fill;canvas.data[i+2]=fill;canvas.data[i+3]=255;
+ }
+ return true;
+}
 async function compose({canvas:bytes,placements}){
  const start=Date.now(),canvas=decode(bytes),{cv}=await engine(),manifest=[],placedLogos=[];
  if(!Array.isArray(placements)||placements.length<1||placements.length>4)fail("ASSET_PLACEMENT_INVALID");
@@ -122,7 +157,12 @@ async function compose({canvas:bytes,placements}){
   let source=item.preparedRaster||cropRaster(decode(item.bytes),item.crop),method=item.method||"original-pixels";
   if(!Buffer.isBuffer(source.data)||source.width*source.height>5e6||source.data.length!==source.width*source.height*4)fail("ASSET_PIXEL_LIMIT");
   if(item.role==="logo"&&!item.preparedRaster){const c=await cutout(source);source=c.raster;method=c.method;}
-  let quad=item.quad;if(item.role==="logo"&&!quad){const box=logoBox({canvas,aspect:source.width/source.height,occupied:[...(item.occupied||[]),...placedLogos],anchor:item.anchor});quad=boxQuad(box);placedLogos.push(box);}
+  let quad=item.quad,backing=false;
+  if(item.role==="logo"&&!quad){
+   const box=logoBox({canvas,aspect:source.width/source.height,occupied:[...(item.occupied||[]),...placedLogos],anchor:item.anchor});
+   if(item.ensureContrast===true)backing=placeLogoBacking(canvas,source,box);
+   quad=boxQuad(box);placedLogos.push(box);
+  }
   const points=quadOf(quad,canvas.width,canvas.height),owned=[],keep=x=>(owned.push(x),x);
   try{
    const premult=Buffer.from(source.data);for(let i=0;i<premult.length;i+=4)for(let c=0;c<3;c++)premult[i+c]=Math.round(premult[i+c]*premult[i+3]/255);
@@ -136,7 +176,7 @@ async function compose({canvas:bytes,placements}){
     for(let c=0;c<3;c++)canvas.data[i+c]=Math.max(0,Math.min(255,Math.round((warped.data[i+c]+canvas.data[i+c]*da*(1-a))/oa)));
     canvas.data[i+3]=Math.round(oa*255);
    }
-   manifest.push({role:item.role,sourceSha256:sourceHash,method,quad,sourceWidth:source.width,sourceHeight:source.height});
+   manifest.push({role:item.role,sourceSha256:sourceHash,method,quad,sourceWidth:source.width,sourceHeight:source.height,...(backing?{backing:true}:{})});
   }finally{for(const mat of owned.reverse())mat.delete();}
  }
  const png=PNG.sync.write(canvas);

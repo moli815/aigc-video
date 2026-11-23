@@ -96,7 +96,7 @@ function createProtectionRuntime({assetStore,readAsset,locate,fetcher=fetch,log=
     // Paste original screens first. Logos must avoid these screens as well as
     // text/faces, even when the locator omitted a screen from occupied.
     const placements=[...prepared.selected].sort((a,b)=>(a.role==="logo")-(b.role==="logo")).map(p=>({role:p.role,bytes:p.bytes,sha256:p.sha256,crop:p.crop,anchor:p.anchor||"auto",preparedRaster:p.preparedRaster,method:p.method,
-     ...(p.role==="ui"?{quad:layout.regions.find(r=>r.index===p.index)?.quad}:{occupied:[...layout.occupied,...protectedBoxes]})}));
+     ...(p.role==="ui"?{quad:layout.regions.find(r=>r.index===p.index)?.quad}:{occupied:[...layout.occupied,...protectedBoxes],ensureContrast:prepared.plan.posterBrand===true})}));
     const rendered=await compositor.compose({canvas:bytes,placements});
     const asset=await assetStore.archive(prepared.owner,rendered.png,"image/png"),signed=await assetStore.sign(prepared.owner,[asset.id]);
     const finalUrl=signed.find(s=>s.id===asset.id)?.url;if(!finalUrl)fail("ASSET_URL_FAILED");
