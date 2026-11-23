@@ -13,6 +13,7 @@
  *   3. 对模型给的 structured.text 做硬校验与修补（缺公司名/缺热线/有占位/有重复）
  */
 
+const { restylesReference } = require("./reference-text");
 const LOGO_MAX_RATIO = 3.2;   // Logo 一般扁平但不至于超过 3.2:1
 
 /** 读 data URL 里图片的宽高（只解析头部，不整图解码） */
@@ -68,6 +69,7 @@ function classify(images, userText) {
   // 只有一张图时也必须能判角色：小扁图当 Logo，否则按语义在「旧稿 / 素材照片」之间选
   if (valid.length === 1) {
     const only = valid[0];
+    if(restylesReference(mentionsOldText))return {logo:null,poster:only,photo:null,count:1};
     const ratio = only.size.w / only.size.h;
     const area = only.size.w * only.size.h;
     if (ratio <= LOGO_MAX_RATIO && area < 400 * 200) return { logo: only, poster: null, photo: null, count: 1 };

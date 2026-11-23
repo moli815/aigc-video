@@ -2574,6 +2574,7 @@ async function handleMe(req, res, requireActive = false) {
     },
     // P0-64 App 远程行为配置（在线可修复）：App 写死的超时/重试由此下发——管理台改数不用出包
     appBehavior: {
+      posterDesignByServer: String(RUNTIME.APP_IMAGE_SERVER_EXECUTION) !== "0",
       chatTimeout: Number(RUNTIME.APP_CHAT_TIMEOUT || 165),
       imageTimeout: Number(RUNTIME.APP_IMAGE_TIMEOUT || 315),
       streamRetry: Number(RUNTIME.APP_STREAM_RETRY != null && RUNTIME.APP_STREAM_RETRY !== "" ? RUNTIME.APP_STREAM_RETRY : 1),
@@ -2871,6 +2872,17 @@ async function handleChat(req, res) {
   messages = singleReferences.messages;
   if (seriesReferences.issuedCount) logSafe({ tag: "image_series_reference_context", requestId: currentRequestId(),
     recalled: seriesReferences.issuedCount, ready: seriesReferences.readyCount });
+  const posterBrand=require('./poster-brand-guidance');
+  let ownedPosterBrand=null;
+  if(Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')){
+    try{
+      ownedPosterBrand=await posterBrand.preparePosterBrand({db,owner:auth.sub,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,
+        referenceStore:imageReferenceStore,text:imageUserText,hasCurrentImages:require('./reference-text').currentImageParts(body.messages).length>0});
+    }catch(e){logSafe({tag:"poster_brand_lookup_unavailable",requestId:currentRequestId()});}
+    if(require('./shared/poster-delivery').posterRequested('',imageUserText)||require('./reference-text').restylesReference(imageUserText)){
+      messages=[...messages,{role:"system",content:"【本轮海报设计】用户本轮指定的风格、元素、版式和禁止项优先。默认结合主题、产品、文字之间的关系及同品牌已确认的风格，选适合本次题材的视觉语言与装饰；参考历史海报只延续确立的品牌特征和仍有效的业务资料，不抄旧活动与旧模板。改款时识别原图是图解、旧海报还是实拍；旧稿保留主体、关系和有效栏目。当前用户没要求改变的定稿文案与素材不换。视觉提示简洁具体，固定布局只在用户指定时使用。"+(ownedPosterBrand?"公司确认的Logo原件由服务端放入成品。画面中留一个与构图协调、对比清晰、不挡正文的品牌区，Logo不交给模型重画。":"")}];
+    }
+  }
   const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
     policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
@@ -2964,8 +2976,9 @@ async function handleChat(req, res) {
       count: Array.isArray(calls) ? calls.length : -1,
       names: (Array.isArray(calls) ? calls : []).map(c => c && c.function && c.function.name).join(",") });
     try {
-      return intentContract.apply(finalizeImageCallsBase(calls), intent,
+      const finalized=intentContract.apply(finalizeImageCallsBase(calls), intent,
         f => logSafe({ ...f, requestId: currentRequestId() }));
+      return posterBrand.addBrand(finalized,ownedPosterBrand,imageUserText);
     } catch (error) { return recoverReferenceContract(calls, error, "prompt"); }
   };
   if (legacyBrandActive) observeBrand({ event: "planning_enabled" });
@@ -4931,7 +4944,8 @@ async function handleToolEvent(req, res) {
 const handleFoundation = require("./domains/foundation").createFoundationHandler({
   requireMember, readJsonBody, syncV2, eventService, assetStore, sendJson, sendError, logSafe, currentRequestId,
   afterSync:async(owner,records,result)=>{
-    if(!require("./shared/image-workflow").enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,owner))return;
+    if(!require("./shared/image-workflow").enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,owner)
+      &&!require("./poster-brand-guidance").brandEnabled(RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,owner))return;
     await require("./account-context").createImageMemoryIndexer({db,assetStore,syncService:syncV2,
       observe:fields=>logSafe({tag:"account_image_memory",requestId:currentRequestId(),...fields})})(owner,records,result);
   },
@@ -5457,18 +5471,23 @@ function imageLayoutServiceOf(){
 async function handleImageLayout(req,res){
   const auth=await requireMember(req,res);if(!auth)return;
   await refreshRuntime();
-  if(!require("./shared/image-workflow").enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub))return sendError(res,404,"NOT_FOUND","该能力尚未启用");
+  const fullLayout=require("./shared/image-workflow").enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
+  const logoLayout=require("./poster-brand-guidance").brandEnabled(RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,auth.sub);
+  if(!fullLayout&&!logoLayout)return sendError(res,404,"NOT_FOUND","该能力尚未启用");
   if(String(RUNTIME.CAP_IMAGE_ENABLED)==="0")return sendError(res,403,"CAPABILITY_DISABLED","图片功能暂未启用");
   const limited=rateLimited(auth.sub,"chat");if(limited)return sendError(res,429,"RATE_LIMITED",limited);
   const account=require("./shared/document-store").documentOf(await db.collection(C.accounts).doc(auth.sub).get());
   if(!account)return sendError(res,401,"UNAUTHORIZED","请重新登录");
   const bad=precheckMember(await ensurePeriod(account));if(bad)return sendError(res,bad.code,bad.error,bad.message);
   try{
-    const body=await readJsonBody(req),result=await imageLayoutServiceOf().analyze(auth.sub,body,RUNTIME.CHAT_MODEL_VISION);
+    const body=await readJsonBody(req);
+    if(!fullLayout&&!(body?.placement_only===true&&Array.isArray(body.references)&&body.references.length===1&&body.references[0]?.role==="logo"))return sendError(res,404,"NOT_FOUND","该能力尚未启用");
+    const result=await imageLayoutServiceOf().analyze(auth.sub,body,RUNTIME.CHAT_MODEL_VISION);
     return sendJson(res,200,{ok:true,...result});
   }catch(e){
     const invalid=e?.code==="IMAGE_LAYOUT_INVALID";
-    logSafe({tag:"image_layout_failed",requestId:currentRequestId(),code:invalid?e.code:"IMAGE_LAYOUT_UNAVAILABLE"});
+    const detail=String(e?.code||e?.message||"");
+    logSafe({tag:"image_layout_failed",requestId:currentRequestId(),code:/^IMAGE_LAYOUT_(?:INVALID|UNCERTAIN|UPSTREAM_UNAVAILABLE)$/.test(detail)?detail:"IMAGE_LAYOUT_UNAVAILABLE"});
     return sendError(res,invalid?422:503,invalid?"IMAGE_LAYOUT_INVALID":"IMAGE_LAYOUT_UNAVAILABLE","这张图的素材位置仍在确认中，请稍后查看，暂时不要重复生成。");
   }
 }

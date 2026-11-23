@@ -83,7 +83,7 @@ function createProtectionRuntime({assetStore,readAsset,locate,fetcher=fetch,log=
    const bytes=await boundedBytes(url,24*1024*1024,fetcher);
    const draft=await assetStore.archive(prepared.owner,bytes,bytes[0]===137?"image/png":"image/jpeg");
    try{
-    const raw=requestOf({image:await preview(bytes),references:prepared.selected.map(p=>({index:p.index,role:p.role,aspect:p.aspect,anchor:p.anchor||"auto"})),expected_text:prepared.expected});
+    const raw=requestOf({image:await preview(bytes),references:prepared.selected.map(p=>({index:p.index,role:p.role,aspect:p.aspect,anchor:p.anchor||"auto"})),expected_text:prepared.expected,...(prepared.plan.posterBrand?{placement_only:true}:{})});
     const layout=responseOf(await locate(raw,prepared.authorization),raw);
     const occlusions=copyOcclusions(layout);if(occlusions.length){log({event:"source_copy_occlusion_rejected",count:occlusions.length});fail("IMAGE_ASSET_TEXT_OCCLUSION");}
     const numeric=numericIssues(layout,prepared.expected);

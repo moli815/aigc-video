@@ -1,13 +1,14 @@
 "use strict";
-const VERSION="layout-protocol-v3";
+const VERSION="layout-protocol-v6";
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 function requestOf(raw){
- if(!raw||typeof raw!=="object"||Object.keys(raw).some(k=>!["image","references","expected_text"].includes(k)))fail("IMAGE_LAYOUT_INVALID");
+ if(!raw||typeof raw!=="object"||Object.keys(raw).some(k=>!["image","references","expected_text","placement_only"].includes(k)))fail("IMAGE_LAYOUT_INVALID");
  if(typeof raw.image!=="string"||raw.image.length>4e6||!/^data:image\/(?:jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(raw.image))fail("IMAGE_LAYOUT_INVALID");
  if(!Array.isArray(raw.references)||raw.references.length>4)fail("IMAGE_LAYOUT_INVALID");
  const seen=new Set();for(const r of raw.references){if(!r||Object.keys(r).some(k=>!["index","role","aspect","anchor"].includes(k))||!Number.isInteger(r.index)||r.index<1||r.index>6||seen.has(r.index)||!["ui","logo","product"].includes(r.role)||!Number.isFinite(r.aspect)||r.aspect<.05||r.aspect>20||r.anchor!=null&&!["auto","top_left","top_right","bottom_left","bottom_right"].includes(r.anchor))fail("IMAGE_LAYOUT_INVALID");seen.add(r.index);}
  if(raw.expected_text!=null&&(!Array.isArray(raw.expected_text)||raw.expected_text.length>80||raw.expected_text.some(t=>typeof t!=="string"||t.length>2000)||raw.expected_text.join("").length>16000))fail("IMAGE_LAYOUT_INVALID");
- return {image:raw.image,references:raw.references.map(r=>({...r})),expected_text:raw.expected_text||[]};
+ if(raw.placement_only!=null&&(raw.placement_only!==true||raw.references.length!==1||raw.references[0].role!=="logo"))fail("IMAGE_LAYOUT_INVALID");
+ return {image:raw.image,references:raw.references.map(r=>({...r})),expected_text:raw.expected_text||[],...(raw.placement_only===true?{placement_only:true}:{})};
 }
 function boxOf(b){return Array.isArray(b)&&b.length===4&&b.every(Number.isFinite)&&b[0]>=0&&b[1]>=0&&b[2]>0&&b[3]>0&&b[0]+b[2]<=1.00001&&b[1]+b[3]<=1.00001;}
 function quadOf(q){
@@ -15,6 +16,18 @@ function quadOf(q){
  let area=0;for(let i=0;i<4;i++){const a=q[i],b=q[(i+1)%4],c=q[(i+2)%4];if((b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0])<=1e-7)return false;area+=a[0]*b[1]-b[0]*a[1];}return area/2>=.0003&&area/2<=.9;
 }
 function responseOf(raw,input){
+ if(input.placement_only===true){
+  // Vision models express boxes as two corners. Convert once; the API
+  // response is a validated layout already normalized to x/y/width/height.
+  const candidate=Array.isArray(raw?.boxes_xyxy)?raw.boxes_xyxy.map(b=>{
+    if(!Array.isArray(b)||b.length!==4||!b.every(Number.isFinite))return null;
+    const [x1,y1,x2,y2]=b;
+    return [x1,y1,x2-x1,y2-y1];
+  }):(Array.isArray(raw?.regions)&&!raw.regions.length?raw.occupied:null);
+  if(!raw||!Number.isFinite(raw.confidence)||raw.confidence<.75||raw.confidence>1||!Array.isArray(candidate)
+     ||candidate.length<1||candidate.length>80||candidate.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
+  return {confidence:raw.confidence,regions:[],occupied:candidate,issues:[],recognized_text:[]};
+ }
  if(!raw||!Number.isFinite(raw.confidence)||raw.confidence<.75||raw.confidence>1||!Array.isArray(raw.regions)||raw.regions.length>4||!Array.isArray(raw.occupied)||raw.occupied.length>80||raw.occupied.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
  const allowed=new Set(input.references.filter(r=>r.role!=="logo").map(r=>r.index)),seen=new Set();
  for(const r of raw.regions){if(!r||!allowed.has(r.index)||seen.has(r.index)||!quadOf(r.quad))fail("IMAGE_LAYOUT_UNCERTAIN");seen.add(r.index);}
@@ -24,7 +37,15 @@ function responseOf(raw,input){
   issues:raw.issues.map(i=>({code:i.code,detail:i.detail})),
   recognized_text:Array.isArray(raw.recognized_text)?raw.recognized_text.filter(t=>typeof t?.text==="string"&&t.text.length<=2000&&boxOf(t.box)).slice(0,80).map(t=>({text:t.text,box:t.box})):[]};
 }
-function messagesOf(input){return [{role:"system",content:[
+function messagesOf(input){
+ if(input.placement_only===true)return [
+  {role:"system",content:[
+   '标注海报上已有内容的位置，给真实Logo避让。只输出JSON：{"confidence":0.9,"boxes_xyxy":[[0.12,0.08,0.84,0.21]]}。示例坐标不可照抄。',
+   'boxes_xyxy逐项标注实际标题、正文、产品、人脸、二维码和已有品牌图形。背景纹理不占位置。每项是左上、右下两点[x1,y1,x2,y2]，坐标归一化为0到1。不要转录文字或输出透视框。confidence表示位置标注把握。'
+  ].join("\n")},
+  {role:"user",content:[{type:"text",text:"找出所有原有内容的位置"},{type:"image_url",image_url:{url:input.image}}]}
+ ];
+ return [{role:"system",content:[
  '你是商业图像的几何与文字检查器，只分析这一张预览，不负责生图。只输出JSON：{"confidence":0.0,"regions":[{"index":1,"quad":[[0,0],[1,0],[1,1],[0,1]]}],"occupied":[[x,y,width,height]],"issues":[],"recognized_text":[{"text":"实际可见字","box":[x,y,width,height]}]}。',
  '坐标归一化到0至1。对ui找主展示屏内部四角，左上、右上、右下、左下，不包含屏框；product找对应平面展示区。不臆造看不清的角。标题或悬浮文案卡片与屏幕相交也属于遮挡，必须issues加入OCCLUSION，且confidence低于0.75；不能只看得见四角就判无遮挡。',
  'Logo原件尚未贴回，本张草稿中不应出现任何生成的Logo、图标徽标或品牌占位符；如出现则issues加入UNSUPPORTED_COPY并说明位置。普通功能图解图标不算品牌Logo。Logo不输出region。occupied标注所有标题、正文、电话、二维码、人物和关键产品的不遮挡区域，不把整幅图当成一个框。主屏幕可整体标occupied。',

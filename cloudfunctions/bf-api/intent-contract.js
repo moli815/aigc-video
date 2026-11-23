@@ -218,9 +218,14 @@ function apply(calls, intent, observe) {
       return call;
     }
 
-    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText);
+    const referenceRedesign=args.source==='attached'&&intent.currentImageCount===1
+      &&require('./reference-text').restylesReference(intent.userText);
+    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceRedesign});
     const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
     let blocks = nativePoster ? posterDelivery.copyOf(args.structured) : blocksOf(args);
+    if(nativePoster && referenceRedesign && refLines?.length){
+      blocks=require('./reference-text').keepSourceLines(blocks,refLines);
+    }
     if (nativePoster && !blocks.some(row => typeof row?.text === 'string' && row.text.trim())) {
       throw Object.assign(Error('TOOL_ARGUMENTS_INVALID'), { code: 'TOOL_ARGUMENTS_INVALID', reason: 'TEXT_ARRAY_INVALID', field: 'structured.text' });
     }
@@ -238,7 +243,7 @@ function apply(calls, intent, observe) {
       changed = { completeCurrentReferences: count };
     }
     if (nativePoster) {
-      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText);
+      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign});
       changed = { posterDelivery: true, copyRows: blocks.length };
     }
     // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组

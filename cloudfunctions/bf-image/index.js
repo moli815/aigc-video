@@ -1424,7 +1424,7 @@ function resolveSize(size, aspectRatio) {
 const RENDER_INTENT_RULES = {
   flat_artwork:
     "【输出形态：平面成稿】直接输出可交付的平面设计稿：设计内容填满整张画布并按比例留出安全边距；" +
-    "禁止出现桌面、台面、纸张、相框、手部、投影、展厅等外部展示场景；" +
+    "允许画面内部有相关真实人物、工位、设备、实体材质与自然光影；禁止把整张海报画成放在桌上、相框里或手持展示的物件；" +
     "禁止在作品外围添加白色或浅色衬底/外边框；不要把作品再画成『放在白纸上的一张图』。",
   mockup:
     "【输出形态：展示稿】允许把作品置于真实场景（桌面、纸张、材质、环境光）中展示，保留合理投影与景深。",
@@ -1528,6 +1528,18 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   let workflowPlan;
   try{workflowPlan=reformat?null:require("./shared/image-workflow").compile({structured,image,taskKind,textMode,policy:RT.IMAGE_COMPOSITION_POLICY,owner:accountId});}
   catch(e){logStage("image_plan_rejected",{reason:e.code});return {ok:false,code:422,error:e.code,msg:"作图方案的素材或文字模式不一致，尚未开始生成，请重新选择素材后重试。"};}
+  const brand=structured?.poster_brand;
+  const brandRefs=structured?.image_references;
+  const brandImages=Array.isArray(image)?image:image?[image]:[];
+  if(!reformat&&!workflowPlan&&brand?.version===1&&brandRefs?.mode==="replace"
+      &&brandRefs.items?.length===1&&brandRefs.items[0].role==="公司Logo原件"
+      &&brandImages.length===1&&taskKind==="generate"&&textMode!=="overlay"&&!layerDecomposition
+      &&!structured.preserve_assets?.length&&['auto','top_left','top_right','bottom_left','bottom_right'].includes(brand.anchor)){
+    // Requests reached this point via the owned-reference preparation.
+    // This plan protects one source layer and leaves the artwork native.
+    workflowPlan={native:true,protectUI:false,intent:"campaign",posterBrand:true,
+      protected_references:[{index:1,role:"logo",anchor:brand.anchor}]};
+  }
   let protection;
   if((workflowPlan?.native||workflowPlan?.protectUI)&&workflowPlan.protected_references.some(r=>["ui","logo"].includes(r.role))){
     try{protection=await protectedAssetCompositionOf().prepare({plan:workflowPlan,image,owner:accountId,structured,authorization:reqStore.getStore()?.memberAuthorization,deferGarbledText:repairNativeCopy});}
@@ -1586,8 +1598,10 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const providerInput=workflowPlan?require("./shared/image-workflow").providerInput(workflowPlan,image,referenceRoles,basePrompt):null;
   if(providerInput){image=providerInput.image;referenceRoles=providerInput.referenceRoles;basePrompt=providerInput.prompt;
     logStage("protected_reference_dispatch",{originalCount:providerInput.originalCount,providerCount:providerInput.providerCount,serverLogoCount:providerInput.excludedLogos.length});}
-  const scopedReference = !workflowPlan && !composition && taskKind==="reference" && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
-    ? require("./shared/image-design-brief").compileNativeReferenceConstraints(referenceRoles,image):"";
+  const brandCorner={top_left:"左上角",top_right:"右上角",bottom_left:"左下角",bottom_right:"右下角"};
+  const brandPolicy=workflowPlan?.posterBrand?"\n公司Logo使用用户原件合成，"+(brandCorner[brand.anchor]?"在"+brandCorner[brand.anchor]+"留出品牌区。":"在符合本轮构图的安全位置留出品牌区。")+"为Logo原件保留合适的底色对比度，不挡正文和主体。不画替代徽章、字标或占位字。":"";
+  const scopedReference = brandPolicy || (!workflowPlan && !composition && taskKind==="reference" && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
+    ? require("./shared/image-design-brief").compileNativeReferenceConstraints(referenceRoles,image):"");
   const taskPolicy = scopedReference || (composition?.designEngine==="product_v2"?"":workflowPlan ? require("./shared/image-workflow").constraints(workflowPlan,providerInput) : isPixelEdit
     ? EDIT_CONSTRAINTS
     : (image && String(taskKind || "") === "reference" ? REFERENCE_CONSTRAINTS : ""));

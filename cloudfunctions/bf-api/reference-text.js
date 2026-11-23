@@ -20,23 +20,33 @@ const TRANSCRIBE_PROMPT = [
   "只输出文字本身，每行一条。看不清的字用 ？ 代替。",
 ].join("");
 
-const DESIGN_HINT = /海报|宣传|设计|重绘|重新做|做成|排版|长图|宣传图|信息图|banner|封面/i;
+const DESIGN_HINT = /海报|宣传|设计|重绘|重新做|重新生成|做成|排版|长图|宣传图|信息图|banner|封面/i;
+function restylesReference(text) {
+  const value=String(text||"");
+  return /(?:换|改|重做|重新生成|重绘).{0,35}(?:风格|样式|画风)|(?:风格|画风).{0,12}(?:换|改)/.test(value)
+    && !/(?:删|去掉|移除|替换|修改|改写|新增).{0,8}(?:文案|文字|标题|栏目|内容|产品)|不要.{0,8}(?:保留|照抄)/.test(value);
+}
+function latestUserMessage(messages) {
+  return [...(Array.isArray(messages)?messages:[])].reverse().find(m=>m?.role==="user"&&!require("./shared/image-delivery").isHistoryPreview(m));
+}
 
 function lastUserText(messages) {
-  const last = [...(Array.isArray(messages) ? messages : [])].reverse().find(m => m && m.role === "user");
+  const last = latestUserMessage(messages);
   const c = last && last.content;
   if (typeof c === "string") return c;
   if (Array.isArray(c)) return c.filter(p => p && p.type === "text").map(p => p.text || "").join("\n");
   return "";
 }
 
+function currentImageParts(messages) {
+  const parts = latestUserMessage(messages)?.content;
+  return Array.isArray(parts)?parts.filter(p=>p?.type==="image_url" && typeof p.image_url?.url==="string"):[];
+}
+
 function firstUserImage(messages) {
-  for (const m of messages || []) {
-    if (!m || m.role !== "user" || !Array.isArray(m.content)) continue;
-    const img = m.content.find(p => p && p.type === "image_url" && p.image_url && typeof p.image_url.url === "string");
-    if (img) return img.image_url.url;
-  }
-  return "";
+  const images=currentImageParts(messages);
+  // A mixed set has no unambiguous source for a full transcription.
+  return images.length===1?images[0].image_url.url:"";
 }
 
 /** 是否值得做前置转录：有图 + 是设计类诉求 */
@@ -49,13 +59,13 @@ function shouldTranscribe(messages) {
     // 局部小改不需要重抄全文
     return false;
   }
-  return DESIGN_HINT.test(lastUserText(messages));
+  return DESIGN_HINT.test(lastUserText(messages)) || restylesReference(lastUserText(messages));
 }
 
 function linesOf(text) {
   return String(text || "")
     .split("\n")
-    .map(s => s.replace(/^[\s\-*•\d.、]+/, "").trim())
+    .map(s => s.trim().replace(/^(?:[-*•]\s+|\d+[.、]\s+)/, ""))
     .filter(s => s.length >= 2 && s.length <= 30)
     .filter(s => !/^(好的|以下是|图中|文字如下|注[:：])/.test(s));
 }
@@ -83,7 +93,7 @@ function verbatimMessage(lines) {
   if (!Array.isArray(lines) || !lines.length) return null;
   const list = lines.slice(0, 60).join(" / ");
   return [
-    "【参考图逐字稿】下面是从用户上传的参考图里逐行抄下来的原文，已经核对过：",
+    "【参考图逐字稿】下面是从本轮原图读出的文字，遇到不清楚的字符以原图为准：",
     list,
     "本轮 structured.text 必须**从这份逐字稿里逐字取用**：不得替换成近义术语（例如 PGM 接口不能写成 PWM/PoE，多防区接口不能写成多协议接口），不得改写数字与型号。",
     "逐字稿里没有的信息不要编造；确实缺少的公司名/电话，用已知信息或留空，不要填占位词。",
@@ -119,4 +129,19 @@ function repairTerms(text, lines) {
   return { text: out, fixed };
 }
 
-module.exports = { shouldTranscribe, transcribe, verbatimMessage, repairTerms, linesOf, firstUserImage, lastUserText, TRANSCRIBE_PROMPT };
+function keepSourceLines(blocks, lines) {
+  const normalize = s=>String(s||"").replace(/\s+/g,"");
+  const result=Array.isArray(blocks)?[...blocks]:[];
+  const printed=()=>result.map(b=>normalize(b?.text)).join("\n");
+  const used=new Set(result.map(b=>b?.key));
+  for(const line of lines.slice(0,60)){
+    if(typeof line!=="string" || !line.trim() || /[?？]/.test(line) || printed().includes(normalize(line)))continue;
+    let key="source_copy_"+(result.length+1);
+    while(used.has(key))key+="_";
+    used.add(key);
+    result.push({key,role:"label",text:line});
+  }
+  return result;
+}
+
+module.exports = { currentImageParts, restylesReference, keepSourceLines, shouldTranscribe, transcribe, verbatimMessage, repairTerms, linesOf, firstUserImage, lastUserText, TRANSCRIBE_PROMPT };

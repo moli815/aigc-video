@@ -39,6 +39,15 @@ final class ImageQualityPolicyTests: XCTestCase {
         XCTAssertLessThanOrEqual(ImageDesignGuidance.suggestions(for:"水墨国风").count,4)
         XCTAssertFalse(ImageDesignGuidance.suggestions(for:"不要动漫，要水墨").contains{$0.id=="anime-story"})
     }
+    func testHostedDesignDelegatesDefaultsAndKeepsAssetContract() {
+        let instructions = ImageDesignGuidance.instructions(for: "只换原有 logo", serverDesign: true)
+        XCTAssertTrue(instructions.contains("structured.preserve_assets"))
+        XCTAssertTrue(instructions.contains("reference_index"))
+        XCTAssertFalse(instructions.contains("【设计参考词典】"))
+        XCTAssertFalse(instructions.contains("structured.layout"))
+        XCTAssertTrue(ImageDesignGuidance.instructions(for: "商业海报").contains("【设计参考词典】"))
+    }
+
     func testLogoReplacementCannotFallThroughToGenerativeRedrawing() {
         for request in ["把海报左上角旧Logo换成我上传的原素材", "将标志替换为这张原图", "Please replace the logo with the uploaded original"] {
             XCTAssertTrue(ImageToolArguments.requiresOriginalAsset(request))

@@ -19,11 +19,11 @@ function excluded(structured, textMode, layerDecomposition) {
     || ['redesign','local_edit'].includes(plan?.intent) || plan?.protected_references?.length;
 }
 
-function nativePoster(args, userText) {
+function nativePoster(args, userText, { referenceRedesign = false } = {}) {
   if (args.render_intent === 'mockup' || ['edit', 'series'].includes(args.task_kind)) return false;
   return !excluded(args.structured, args.text_mode, args.layer_decomposition)
     && !['last', 'both'].includes(args.source)
-    && !LOCAL_CHANGE.test(String(userText || ''))
+    && (referenceRedesign || !LOCAL_CHANGE.test(String(userText || '')))
     && !NO_COPY.test(String(userText || ''))
     && posterRequested(args.render_intent, args.prompt, userText);
 }
@@ -79,15 +79,20 @@ function copyOf(structured) {
   return rows;
 }
 
-function mark(structured, userText) {
-  return { ...structured, poster_delivery: { version: 1, density: SPARSE.test(String(userText || '')) ? 'sparse' : 'dense' } };
+function mark(structured, userText, { referenceRedesign = false } = {}) {
+  const request=String(userText||'').trim();
+  const explicitDesign=request.length<=300 && /风格|版式|构图|画风|配色|色调|手绘|插画|极简|留白|横版|竖版|复古|摄影|不要.{0,8}(?:图标|文字|装饰)/.test(request);
+  return { ...structured, poster_delivery: { version: 1, density: SPARSE.test(request) ? 'sparse' : 'dense',
+    ...(explicitDesign ? {user_direction:request}: {}),
+    ...(referenceRedesign ? {reference_redesign:true}: {}) } };
 }
 
 function modeFor({ structured, prompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel }) {
   if (!/^doubao-seedream-5-5-/.test(selectedModel) || !['generate', 'reference', ''].includes(taskKind || '')
     || renderIntent === 'mockup' || excluded(structured, textMode, layerDecomposition) || LEGACY_COMPILED.test(prompt)
-    || NO_COPY.test(prompt) || LOCAL_CHANGE.test(prompt)) return null;
+    ) return null;
   const delivery = structured?.poster_delivery;
+  if(delivery?.version!==1 && (NO_COPY.test(prompt)||LOCAL_CHANGE.test(prompt)))return null;
   if (delivery?.version !== 1 && !posterRequested(renderIntent, prompt)) return null;
   if (!copyOf(structured).some(row => typeof row?.text === 'string' && row.text.trim())) return null;
   return delivery?.density === 'sparse' || (!delivery && SPARSE.test(prompt)) ? 'sparse' : 'dense';
@@ -97,13 +102,21 @@ function compile({ visual, structured, density }) {
   const roles = {title:'主标题',subtitle:'副标题',label:'分区标题',body:'说明',contact:'联系方式',footer:'署名'};
   const rows = copyOf(structured).filter(row => typeof row?.text === 'string' && row.text.trim());
   const design = density === 'dense' ?
-    '按内容组织高密度商业海报。场景、材质和光影共同建立有层次的背景。用相关实景、产品细节、图标或关系图承载各组信息，避免大块空白或纯色；按阅读顺序安排疏密。' :
+    '根据本次主题、产品、文案关系和品牌资料决定视觉语言与配图。用有用的信息、相关场景与图形建立阅读层级，版式、配色、装饰随内容变化。' :
     '遵循用户指定的留白与简洁程度，保持文字清晰。';
   const brief = typeof structured.design_brief?.visual_approach === 'string' ? structured.design_brief.visual_approach.trim() : '';
   const copy = rows.map(row => `${roles[row.role] || roles.body}：${row.text.split(/\r?\n/).map(line => JSON.stringify(line)).join('\n')}`);
-  return [visual, brief && !visual.includes(brief) && brief, design,
+  const userDirection=structured?.poster_delivery?.user_direction;
+  const priority=typeof userDirection==='string' && userDirection.trim() && userDirection.length<=300
+    ? '最高优先级是本轮用户明确的风格、元素和版式要求，原话：'+JSON.stringify(userDirection)
+    : '当前明确要求优先，其次使用本轮选定的参考；同品牌已确认偏好才用于补默认。布局与美术由你决定。';
+  const polished=visual.replace(/(?:不要|不)(?:出现|绘制|添加)(?:任何)?(?:文字|文案)[。.!！]?(?=$|\s)/g,'').trim();
+  const reference=structured?.poster_delivery?.reference_redesign
+    ? '图1是整张需要换风格的原稿。保留原有设备、连接关系、功能、标签和终端，用新的视觉语言和构图呈现，只保留原稿与本轮确认的内容。无明确授权时不要新增任何电话、地址、网址、二维码、价格、联系栏、品牌或宣传承诺。' : '';
+  const rawVisual=reference?polished.replace(/不照抄它的文字[。.]?/g,''):polished;
+  return [priority, design, reference, rawVisual, brief && !visual.includes(brief) && brief,
     '以下为全部印刷文字。逐行照写，保持所属分区。不加清单以外的标题、数字、价格、标号、界面文字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
 }
 
-module.exports = { nativePoster, normalizeRows, copyOf, mark, modeFor, compile };
+module.exports = { posterRequested, nativePoster, normalizeRows, copyOf, mark, modeFor, compile };
