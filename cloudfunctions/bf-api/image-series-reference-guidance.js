@@ -35,21 +35,14 @@ async function prepareSeriesReferenceGuidance({messages,tools,owner,referenceSto
       args.structured={...args.structured,image_references:{version:1,mode:"replace",items:args.library_refs.map((id,i)=>({kind:"library",id,role:(args.reference_roles||[])[i]||(i===0?"底图":"素材"+i)}))}};
     }
     if(args.structured?.image_references) {
-      // 2026-11-22：参考冲突不再抛错杀流。
-      // 线上实例：模型把「4 张历史原图」和「本轮附件」同时塞进一次组图调用，旧实现直接
-      // throw IMAGE_REFERENCE_CONFLICT，冒到最外层就把整条 SSE 结束，用户只看到
-      // 「输出尚未完成」，而画面一张都没出。契约是素材编排的护栏，不该决定回复生死。
-      // 收敛规则：本轮有附件就以附件为准，丢掉历史项；历史编号未签发/格式不合法也降级放行。
-      let contract=null,bad=false;
-      try{contract=contractOf(args.structured.image_references);}catch{bad=true;}
-      if(!bad&&(contract.mode!=="replace"||contract.items.some(i=>i.kind!=="library"||!allowed.has(i.id))))bad=true;
-      const hasCurrent=!!((args.source&&args.source!=="none")||args.source_indexes||args.source_index);
-      if(bad||hasCurrent){
-        const reason=bad?"refs_not_issued":"attachment_over_history";
-        const structured={...(args.structured||{})};delete structured.image_references;
-        args.structured=structured;delete args.library_refs;delete args.reference_roles;
-        try{console.log(JSON.stringify({tag:"image_reference_converged",stage:"series",reason,call:call.id,hasCurrent}));}catch{}
-        return {...call,function:{...call.function,arguments:JSON.stringify(args)}};
+      let contract;
+      try { contract = contractOf(args.structured.image_references); }
+      catch { throw Error("IMAGE_REFERENCE_NOT_ISSUED"); }
+      if (contract.mode !== "replace" || contract.items.some(item => item.kind !== "library" || !allowed.has(item.id))) {
+        throw Error("IMAGE_REFERENCE_NOT_ISSUED");
+      }
+      if ((args.source && args.source !== "none") || args.source_indexes || args.source_index) {
+        throw Error("IMAGE_REFERENCE_CONFLICT");
       }
       args.structured={...args.structured,image_references:contract};delete args.library_refs;delete args.reference_roles;
     }

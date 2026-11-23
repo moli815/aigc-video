@@ -170,7 +170,7 @@ test("IMG-02 低于上游像素下限时等比放大（实测 512x512 会被上�
 
 test("IMG-02 越界与非法尺寸返回 null", () => {
   assert.strictEqual(clampExplicitSize("99999x99999"), null);
-  assert.strictEqual(clampExplicitSize("100x100"), null, "低于最小边应拒绝");
+  assert.strictEqual(clampExplicitSize("10x10"), null, "低于安全边界应拒绝");
   assert.strictEqual(clampExplicitSize("abc"), null);
   assert.strictEqual(clampExplicitSize("1024x"), null);
 });

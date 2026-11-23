@@ -24,8 +24,8 @@ import CoreGraphics
 enum ImageGeometry {
 
     // MARK: - 与服务端对齐的尺寸预算
-    static let minEdge = 512
-    static let maxEdge = 4096
+    static let minEdge = 64
+    static let maxEdge = 8192
     static let minPixels = 921_600        // 960×960 级别
     static let maxPixels = 4_622_220
     /// 比例判定容差：超过 3% 视为"比例不一致"（约 1:1.03，肉眼已能看出被切边）
@@ -56,6 +56,7 @@ enum ImageGeometry {
         guard width > 0, height > 0 else { return nil }
         var w = Double(width)
         var h = Double(height)
+        guard w / h >= 1.0 / 16.0, w / h <= 16 else { return nil }
         if let pixels = targetPixels, pixels.isFinite, pixels > 0 {
             let scale = sqrt(min(pixels, Double(maxPixels)) / (w * h))
             w *= scale; h *= scale

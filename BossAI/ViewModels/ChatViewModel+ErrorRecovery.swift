@@ -128,8 +128,17 @@ extension ChatViewModel {
     }
 
     /// 统一吸收错误：写文案 + 保留信封（供 UI 渲染按钮）+ 记录组图重试上下文。
-    func adopt(_ error: Error) {
-        errorMessage = error.localizedDescription
+    ///
+    /// 11-03 修复：文案统一走 `FriendlyError`（P0-13 规定它是全 App 唯一出口）。
+    /// 旧实现直接取 `error.localizedDescription`，于是 `ChatError.incomplete` 里塞的
+    /// 上游原始帧会原样上屏——真机截图里那串
+    /// `输出尚未完成（{ code = "UPSTREAM_ERROR"; message = "\U8fd9..." }）` 就是这么来的。
+    /// 原始原因改走 `diagnostic` 进日志，客户只看得到一句可执行的提示。
+    func adopt(_ error: Error, scene: FriendlyError.Scene = .chat) {
+        errorMessage = FriendlyError.message(for: error, scene: scene)
+        if let chatError = error as? ChatService.ChatError {
+            PerformanceTrace.event("chat_error", fields: ["diagnostic": String(chatError.diagnostic.prefix(200))])
+        }
         // 图片与对话两类错误都实现了 APIErrorCarrying：这里只认协议、不认具体类型，
         // 以后新增模块只要带上信封就自动获得按钮能力。
         guard let env = (error as? any APIErrorCarrying)?.envelope else { return }

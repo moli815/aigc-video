@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import BackgroundTasks
+import Combine
 
 // ============================================================================
 // 文件职责：P0-18 云端同步引擎。
@@ -32,7 +33,7 @@ enum SyncError: LocalizedError {
 ///    若设备当天没用过 App，系统可能延后——这是 iOS 的既有约束，不是实现缺陷）；
 /// 5. 失败一律静默 + 保留本地数据，绝不因同步失败影响使用（安全冗余）。
 @MainActor
-final class SyncService {
+final class SyncService: ObservableObject {
     static let shared = SyncService()
     static let bgTaskIdentifier = "com.bossai.sync.daily"
 
@@ -41,6 +42,19 @@ final class SyncService {
     private var lastSyncKey: String { "bossai.sync.lastSyncAt.\(HostedAccount.scopeKey)" }
     private let autoSyncKey = "bossai.sync.autoEnabled"
     private var running = false
+    private var scheduled: Task<Void, Never>?
+    private var rerunRequested = false
+
+    /// Coalesces completed local writes; a daily background task is only a fallback.
+    func schedule(context: ModelContext) {
+        guard autoSyncEnabled else { return }
+        if running { rerunRequested = true; return }
+        scheduled?.cancel()
+        scheduled = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 1_500_000_000) } catch { return }
+            _ = await syncNow(context: context)
+        }
+    }
     // P0-46 错误可见性：同步失败不再是纯静默——记录最近错误与连续失败次数
     @Published private(set) var lastSyncError: String?
     @Published private(set) var consecutiveFailures = 0
@@ -61,17 +75,25 @@ final class SyncService {
     /// 全量推 + 增量拉（登录后 / 回前台 / 手动 / 后台任务 共用一条路径）
     @discardableResult
     func syncNow(context: ModelContext) async -> Bool {
-        guard !running, HostedAccount.isHostedActive, HostedAccount.shared.isLoggedIn else { return false }
+        guard !running, let session = CloudSession.capture() else { return false }
         running = true
-        defer { running = false }
+        defer {
+            running = false
+            if rerunRequested { rerunRequested = false; schedule(context: context) }
+        }
         // 10-22 账号切换保护：同步跨账号时不能把结果算到新账号头上
         let ownerAtStart = HostedAccount.scopeKey
         do {
-            try await push(context: context)
+            await ConversationDeletion.flushPendingDeletes()
+            // Dual-read migration: import legacy text first, but never push old snapshots
+            // from the new client. V2 message records carry complete asset references.
+            if try SyncV2Engine.needsLegacyImport(session.owner) {
+                try await pull(context: context, sinceOverride: 0, session: session)
+            }
             // 10-25 历史删除：先把上次离线没删成功的云端墓碑补推一遍。
             // 纯成员级 DELETE，失败不影响本次同步（id 仍留在补删队列里等下次）。
-            await ConversationDeletion.flushPendingDeletes()
-            try await pull(context: context)
+            try session.validate()
+            try await SyncV2Engine.synchronize(context: context, session: session)
             guard HostedAccount.scopeKey == ownerAtStart else {
                 // 中途切了账号：不推进游标，下次按新账号完整拉取
                 running = false
@@ -84,10 +106,15 @@ final class SyncService {
             try? UserDefaults.standard.removeObject(forKey: "bossai.sync.lastError")
             return true
         } catch {
+            guard HostedAccount.scopeKey == ownerAtStart else {
+                rerunRequested = true
+                return false
+            }
             // P0-46 错误可见性：不再纯静默——记录最近错误与连续失败次数（供诊断与 UI 提示）。
             // 本地数据完整，下次仍会重试；连续失败是"信息可能未同步"的可观测信号。
             consecutiveFailures += 1
             lastSyncError = (error as NSError).localizedDescription
+            DiagnosticQueue.shared.record(domain: "sync", stage: "synchronize", code: "SYNC_FAILED")
             try? UserDefaults.standard.set(lastSyncError, forKey: "bossai.sync.lastError")
             return false
         }
@@ -113,73 +140,15 @@ final class SyncService {
         return ok
     }
 
-    // MARK: - 推送
-
-    /// 推送：把本账号的对话与记忆序列化后分批上云。
-    /// 只推 ownerKey == scopeKey 的条目（多账号数据隔离）；
-    /// updatedAt 取 createdAt/updatedAt 的较大者（记忆条目 updatedAt 可能晚于创建）。
-    private func push(context: ModelContext) async throws {
-        let key = HostedAccount.scopeKey
-        var items: [[String: Any]] = []
-
-        // 10-22 P1：fetch 失败不能当成「没有数据」继续同步（会把空推送上去并推进游标）
-        let convsToPush = try context.fetch(FetchDescriptor<Conversation>(
-            predicate: #Predicate { $0.ownerKey == key }
-        ))
-        if !convsToPush.isEmpty {
-            for c in convsToPush {
-                items.append([
-                    "kind": "conversation",
-                    "refId": c.id.uuidString,
-                    "updatedAt": Int(c.updatedAt.timeIntervalSince1970 * 1000),
-                    "payload": Self.encodeConversation(c),
-                ])
-            }
-        }
-        // 墓碑也必须推送：否则「A 设备删除 → B 设备 pull 到旧记录 → 记忆复活」
-        let memoriesToPush = try context.fetch(FetchDescriptor<MemoryItem>(
-            predicate: #Predicate { $0.ownerKey == key }
-        ))
-        if !memoriesToPush.isEmpty {
-            for m in memoriesToPush {
-                items.append([
-                    "kind": "memory",
-                    "refId": m.id.uuidString,
-                    "updatedAt": Int(max(m.createdAt, m.updatedAt).timeIntervalSince1970 * 1000),
-                    "payload": Self.encodeMemory(m),
-                ])
-            }
-        }
-        // 分批发（服务端单次上限 200 条）：按 100 条切片，既留余量又减少请求次数
-        var index = 0
-        while index < items.count {
-            let slice = Array(items[index..<min(index + 100, items.count)])
-            let body: [String: Any] = ["items": slice]
-            let resp = try await HostedAccount.shared.syncPush(items: body)
-            // 10-24 P1：服务端已改为逐条回执。旧实现只看 HTTP 2xx，
-            // 部分条目写库失败也当成功 → 直接推进游标 → 那几条永远不再推。
-            // 兼容旧服务端：没有 acceptedIds 字段时退回「saved 必须等于本批条数」。
-            if let failed = resp["failedItems"] as? [[String: Any]], !failed.isEmpty {
-                let ids = failed.compactMap { $0["refId"] as? String }.prefix(5).joined(separator: ",")
-                throw SyncError.invalidResponse("本轮有 \(failed.count) 条未写入云端（\(ids)…），稍后重试")
-            }
-            if resp["acceptedIds"] == nil {
-                let saved = (resp["saved"] as? NSNumber)?.intValue ?? (resp["saved"] as? Int) ?? -1
-                if saved >= 0 && saved < slice.count {
-                    throw SyncError.invalidResponse("云端仅接收 \(saved)/\(slice.count) 条，稍后重试")
-                }
-            }
-            index += 100
-        }
-    }
+    // V1 is migration-read-only. All new writes use SyncV2Engine.
 
     // MARK: - 拉取与合并
 
     /// 拉取：用 lastSyncAt（毫秒时间戳）做增量拉取，逐条按 kind 合并后统一落盘。
     /// deleted=true 的条目是墓碑，本地存在即删除。
-    private func pull(context: ModelContext) async throws {
+    private func pull(context: ModelContext, sinceOverride: Int? = nil, session: CloudSession? = nil) async throws {
         let key = HostedAccount.scopeKey
-        let since = Int((lastSyncAt?.timeIntervalSince1970 ?? 0) * 1000)
+        let since = sinceOverride ?? Int((lastSyncAt?.timeIntervalSince1970 ?? 0) * 1000)
         // 10-24 P1：分页拉取。服务端单页有上限（默认 500），旧实现只拉一页就推进游标，
         // 数据超过一页时剩余记录永远拉不到。现在循环到 hasMore == false，
         // 任何一页失败都抛错（syncNow 不推进游标），全部成功才提交。
@@ -192,7 +161,15 @@ final class SyncService {
             if page > maxPages {
                 throw SyncError.invalidResponse("同步分页超过 \(maxPages) 页，已中止本轮（请联系客服）")
             }
-            let json = try await HostedAccount.shared.syncPull(since: since, limit: pageLimit, cursor: cursor)
+            let json: [String: Any]
+            if let session {
+                var path = "/sync/pull?since=\(since)&limit=\(pageLimit)"
+                if let cursor { path += "&cursor=\(cursor)" }
+                json = try await session.request(path, responseLimit: 16 * 1024 * 1024)
+                try session.validate()
+            } else {
+                json = try await HostedAccount.shared.syncPull(since: since, limit: pageLimit, cursor: cursor)
+            }
             // 10-23 P1：结构错误（items 缺失或类型不对）必须抛错，不能当空列表处理——
             // 否则 syncNow 会推进游标，这批数据永远不会再被拉取。
             guard let list = json["items"] as? [[String: Any]] else {

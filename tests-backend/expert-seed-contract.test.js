@@ -63,12 +63,26 @@ test("SEED-04 短视频脚本专家（short_video）必须存在且职责边界�
   assert.ok(e.role.includes("流量策划"), "缺少与流量策划的分工说明");
   assert.ok(e.role.includes("营销策划"), "缺少与营销策划的分工说明");
   assert.ok(e.role.includes("顶级演讲"), "缺少与演讲专家的分工说明");
-  assert.ok(e.steps.some((s) => s.includes("3 个")), "缺少「3 个差异化角度/钩子」步骤");
+  assert.ok(e.steps.some((s) => s.includes("纯口播") && s.includes("一份完整正文")), "纯口播必须直接交付正文");
+  assert.ok(e.steps.some((s) => s.includes("只有用户要求策划或多选时")), "不能再默认强制输出三个角度");
   assert.ok(e.steps.some((s) => s.includes("speech_duration")), "缺少口播时长核算步骤");
   assert.ok(e.checklist.some((s) => s.includes("播放量")), "缺少「不承诺播放量」自检项");
 });
 
-test("SEED-05 内置版本号必须 >= 3（否则旧 DB 不会升级到含短视频的目录）", () => {
+test("SEED-05 专家方法不再默认覆盖本轮交付格式", () => {
+  const forbidden = /输出 2~4 周内容日历|预演投资人最可能问的 8 个|设置 2~3 个情绪高潮|用画布九要素描述现状|给 3 个实质不同的创作角度/;
+  for (const e of SEED.experts) {
+    assert.ok(e.steps.length <= 6, `${e.id} 仍有过长固定工作流`);
+    assert.doesNotMatch(e.steps.join("\n"), forbidden, `${e.id} 仍包含机械输出要求`);
+    assert.ok(e.deliverable === null || e.tools.includes(e.deliverable), `${e.id} 默认交付物与工具权限不一致`);
+  }
+  assert.equal(SEED.experts.length, 16);
+  assert.ok(SEED.experts.find(e => e.id === "legal").steps[1].includes("需要风险清单时"));
+  assert.ok(SEED.experts.find(e => e.id === "fire_safety").steps.some(s => s.includes("人身安全")));
+  assert.ok(SEED.experts.find(e => e.id === "short_video").steps.some(s => s.includes("纯口播")));
+});
+
+test("SEED-06 内置版本号必须 >= 3（否则旧 DB 不会升级到含短视频的目录）", () => {
   const src = require("node:fs").readFileSync(path.join(__dirname, "../cloudfunctions/bf-api/index.js"), "utf8");
   const m = src.match(/const EXPERTS_SEED_VERSION = (\d+);/);
   assert.ok(m, "找不到 EXPERTS_SEED_VERSION（上一轮曾被误删成注释，导致整个目录不可用）");

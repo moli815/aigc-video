@@ -59,17 +59,15 @@ function injectDeliveryRule(messages) {
   }
   return output;
 }
-/**
- * 判断某条 user 消息是不是「历史图片预览」而不是本轮附件。
- * 客户端会把召回的历史图以固定前缀插进消息里，这类消息不参与「用户本轮要求」的解析。
- */
 function isHistoryPreview(message) {
   if (!Array.isArray(message?.content) || !message.content.some(p => p?.type === "image_url")) return false;
   const text = message.content.filter(p => p?.type === "text").map(p => p.text || "");
+  // Exact transport prefix used by the shipped client, not a general rule
+  // that any user mentioning history or quoting this marker is ignorable.
   return text.length > 0 && text.every(s => /^历史图片预览，非(?:本轮|当前)附件；图片ID：[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}[，；]/i.test(s));
 }
 function latestUserText(messages) {
-  const user = [...messages].reverse().find(m => m && m.role === "user");
+  const user = [...messages].reverse().find(m => m && m.role === "user" && !isHistoryPreview(m));
   if (!user) return "";
   return typeof user.content === "string" ? user.content : (Array.isArray(user.content) ? user.content.filter(p => p.type === "text").map(p => p.text || "").join("\n") : "");
 }
@@ -102,7 +100,15 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   try { args = JSON.parse(call.function.arguments || "{}"); }
   catch { throw toolArgumentError("JSON_SYNTAX","arguments"); }
   if (!args || typeof args !== "object" || Array.isArray(args)) throw toolArgumentError("ARGUMENTS_NOT_OBJECT","arguments");
+  if (Object.hasOwn(args,"image_references")) throw toolArgumentError("REFERENCE_PATH_INVALID","structured.image_references");
   if(args.prompt!=null&&typeof args.prompt!=="string")throw toolArgumentError("PROMPT_INVALID","prompt");
+  if(call.function.name==='image_generate')for(const field of ['design_brief','style_reference']){
+    if(!Object.hasOwn(args,field))continue;
+    if(!args[field]||typeof args[field]!=='object'||Array.isArray(args[field]))throw toolArgumentError('DESIGN_PATH_CONFLICT','structured.'+field);
+    const stable=(v,depth=0)=>{if(depth>16)throw toolArgumentError('DESIGN_PATH_CONFLICT','structured.'+field);return Array.isArray(v)?v.map(x=>stable(x,depth+1)):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k],depth+1)])):v;};
+    if(args.structured?.[field]!==undefined&&JSON.stringify(stable(args.structured[field]))!==JSON.stringify(stable(args[field])))throw toolArgumentError('DESIGN_PATH_CONFLICT','structured.'+field);
+    args.structured={...args.structured,[field]:args[field]};delete args[field];
+  }
   const normalized = args.structured && typeof args.structured === "object" && !Array.isArray(args.structured)
     ? { ...args, structured: { ...args.structured, text: normalizeVisibleCopy(args.structured.text) } } : args;
   const result = cleanImageRequest(normalized, userText);
@@ -127,21 +133,21 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   if (result.removed) observe({ removed: result.removed, tool: call.function.name });
   return { ...call, function: { ...call.function, arguments: JSON.stringify(args) } };
 }
-function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => calls) {
+function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => calls, normalizeCalls = calls => calls) {
   if (!data || !Array.isArray(data.choices)) return data;
   return { ...data, choices: data.choices.map(choice => {
     const message = choice.message;
     if (!message || !Array.isArray(message.tool_calls)) return choice;
-    return { ...choice, message: { ...message, tool_calls: finalizeCalls(message.tool_calls.map(call => sanitizeToolCall(call, userText, observe))) } };
+    return { ...choice, message: { ...message, tool_calls: finalizeCalls(normalizeCalls(message.tool_calls).map(call => sanitizeToolCall(call, userText, observe))) } };
   }) };
 }
 class ToolCallStreamGuard {
-  constructor(userText, observe, finalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; }
+  constructor(userText, observe, finalizeCalls = calls => calls, normalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.normalizeCalls = normalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; }
   flush(index) {
     const calls = this.pending.get(index);
     if (!calls) return [];
     this.pending.delete(index);
-    const output=this.finalizeCalls([...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe)));
+    const output=this.finalizeCalls(this.normalizeCalls([...calls.values()]).map(call => sanitizeToolCall(call, this.userText, this.observe)));
     this.releasedCalls=(this.releasedCalls||0)+output.length;
     return output;
   }

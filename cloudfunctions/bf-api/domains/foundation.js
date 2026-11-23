@@ -9,14 +9,21 @@ function assetSizeMessage(error) {
     ? `这张图约 ${toMb(actual)}MB，超过 ${limit}MB 上限；请压缩后或换一张再发。`
     : `这张图超过 ${limit}MB 上限，请压缩后或换一张再发。`;
 }
-function createFoundationHandler({ requireMember, readJsonBody, syncV2, eventService, assetStore, sendJson, sendError, logSafe, currentRequestId }) {
+function createFoundationHandler({ requireMember, readJsonBody, syncV2, eventService, assetStore, sendJson, sendError, logSafe, currentRequestId, afterSync }) {
 return async function handleFoundation(req, res, url) {
   const auth = await requireMember(req, res);
   if (!auth) return;
   const path = url.pathname;
   const body = req.method === "GET" ? {} : await readJsonBody(req);
   try {
-    if (path === "/api/sync/v2/push") return sendJson(res, 200, { ok: true, ...await syncV2.push(auth.sub, body.records) });
+    if (path === "/api/sync/v2/push") {
+      const result = await syncV2.push(auth.sub, body.records);
+      if (afterSync) {
+        try { await afterSync(auth.sub, body.records, result); }
+        catch { logSafe({ tag: "optional_sync_index_failed", requestId: currentRequestId() }); }
+      }
+      return sendJson(res, 200, { ok: true, ...result });
+    }
     if (path === "/api/sync/v2/pull") {
       const q = url.searchParams;
       return sendJson(res, 200, { ok: true, ...await syncV2.pull(auth.sub,

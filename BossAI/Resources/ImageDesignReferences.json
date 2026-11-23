@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "source": {
     "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
     "commit": "a38d04c3d5c298c851dbe5e6ee1965ee3de42cb5",
@@ -8,11 +8,228 @@
     "notice": "Copyright (c) 2024 Next Level Builder. Adapted for static Chinese graphic design; no upstream scripts, UI components or fonts are executed or bundled. See ImageDesignReferences-LICENSE.txt."
   },
   "patterns": [
-    {"id":"swiss","sourceStyle":"minimalism-and-swiss-style","name":"瑞士网格","principles":"用严格对齐、几何网格和高对比无衬线字体建立秩序；黑白或克制配色，主要视觉与信息明确分区，靠留白而非装饰提升质感。","layout":"editorial","font":"sans"},
-    {"id":"bold-minimal","sourceStyle":"exaggerated-minimalism","name":"大字极简","principles":"一个强焦点、醒目大标题、大面积负空间、一种强调色；压低装饰密度，让主视觉和标题承担表达，正文作为次级信息。","layout":"centered","font":"sans"},
-    {"id":"flat-illustration","sourceStyle":"flat-design","name":"平面插画","principles":"采用清晰二维色块、有限且连贯的色板、简洁线条和几何形；用插画叙事与大小关系组织画面，避免把所有服务都画成同样发光图标。","layout":"editorial","font":"rounded"},
-    {"id":"organic","sourceStyle":"organic-biophilic","name":"自然有机","principles":"以自然曲线、纸张或自然材质和低刺激色彩表达亲和感；绿色、米色或土色只是候选，按用户品牌调整；保持充足呼吸空间。","layout":"split","font":"serif"},
-    {"id":"modular","sourceStyle":"bento-box-grid","name":"模块信息设计","principles":"按信息重要程度使用不同大小的模块，共享网格和对齐线；主模块突出，辅助模块有节奏；只适用于信息密集需求，不要给所有文案套相同卡片。","layout":"editorial","font":"sans"},
-    {"id":"graphic-contrast","sourceStyle":"neubrutalism","name":"鲜明平面图形","principles":"在用户需要醒目年轻风格时使用强对比、大字和清晰图形边界；控制强调色数量与装饰，不适合被默认套到正式、轻柔或写实需求。","layout":"split","font":"sans"}
+    {
+      "id": "swiss",
+      "sourceStyle": "minimalism-and-swiss-style",
+      "name": "瑞士网格",
+      "principles": "用严格对齐、几何网格和高对比无衬线字体建立秩序；黑白或克制配色，主要视觉与信息明确分区，靠留白而非装饰提升质感。",
+      "layout": "editorial",
+      "font": "sans",
+      "tags": [
+        "瑞士",
+        "网格",
+        "理性"
+      ]
+    },
+    {
+      "id": "bold-minimal",
+      "sourceStyle": "exaggerated-minimalism",
+      "name": "大字极简",
+      "principles": "一个强焦点、醒目大标题、大面积负空间、一种强调色；压低装饰密度，让主视觉和标题承担表达，正文作为次级信息。",
+      "layout": "centered",
+      "font": "sans",
+      "tags": [
+        "极简",
+        "大字",
+        "留白"
+      ]
+    },
+    {
+      "id": "flat-illustration",
+      "sourceStyle": "flat-design",
+      "name": "平面插画",
+      "principles": "采用清晰二维色块、有限且连贯的色板、简洁线条和几何形；用插画叙事与大小关系组织画面，避免把所有服务都画成同样发光图标。",
+      "layout": "editorial",
+      "font": "rounded",
+      "tags": [
+        "扁平",
+        "矢量",
+        "插画"
+      ]
+    },
+    {
+      "id": "organic",
+      "sourceStyle": "organic-biophilic",
+      "name": "自然有机",
+      "principles": "以自然曲线、纸张或自然材质和低刺激色彩表达亲和感；绿色、米色或土色只是候选，按用户品牌调整；保持充足呼吸空间。",
+      "layout": "split",
+      "font": "serif",
+      "tags": [
+        "自然",
+        "有机",
+        "环保"
+      ]
+    },
+    {
+      "id": "modular",
+      "sourceStyle": "bento-box-grid",
+      "name": "模块信息设计",
+      "principles": "按信息重要程度使用不同大小的模块，共享网格和对齐线；主模块突出，辅助模块有节奏；只适用于信息密集需求，不要给所有文案套相同卡片。",
+      "layout": "editorial",
+      "font": "sans",
+      "tags": [
+        "信息图",
+        "信息密集",
+        "服务矩阵"
+      ]
+    },
+    {
+      "id": "graphic-contrast",
+      "sourceStyle": "neubrutalism",
+      "name": "鲜明平面图形",
+      "principles": "在用户需要醒目年轻风格时使用强对比、大字和清晰图形边界；控制强调色数量与装饰，不适合被默认套到正式、轻柔或写实需求。",
+      "layout": "split",
+      "font": "sans",
+      "tags": [
+        "年轻",
+        "鲜明",
+        "撞色"
+      ]
+    },
+    {
+      "id": "art-deco",
+      "name": "装饰艺术",
+      "principles": "用清晰几何比例、放射或阶梯式结构建立仪式感；精简装饰线条，品牌主色优先，金色只作可选强调，不强制黑金。",
+      "layout": "centered",
+      "font": "serif",
+      "tags": [
+        "装饰艺术",
+        "复古奢华",
+        "art deco"
+      ]
+    },
+    {
+      "id": "anime-story",
+      "name": "动漫叙事",
+      "principles": "明确日式赛璐璐、绘本或手绘的具体表现；让角色和情境讲故事，文字占独立清晰区域，不以霓虹城市替代动漫风。",
+      "layout": "editorial",
+      "font": "rounded",
+      "tags": [
+        "动漫",
+        "漫画",
+        "二次元",
+        "绘本"
+      ]
+    },
+    {
+      "id": "editorial-photo",
+      "name": "摄影编辑",
+      "principles": "以一张有叙事张力的摄影主视觉跨栏，标题和信息带形成清晰层级；按主题选择冷暖与明暗，不叠无关科技符号。",
+      "layout": "split",
+      "font": "sans",
+      "tags": [
+        "摄影",
+        "写实",
+        "杂志",
+        "大片"
+      ]
+    },
+    {
+      "id": "printmaking",
+      "name": "版画印刷",
+      "principles": "用少量专色、纸张纹理和有限的套色感建立手工节奏；标题保持清晰，肌理只服务主视觉，避免让正文噪点化。",
+      "layout": "editorial",
+      "font": "serif",
+      "tags": [
+        "版画",
+        "丝网",
+        "印刷质感",
+        "复古海报"
+      ]
+    },
+    {
+      "id": "ink-space",
+      "name": "水墨留白",
+      "principles": "用墨色浓淡、疏密与纸面呼吸组织视线；现代文字层级配合少量书写性标题，保留全部必要信息，不堆传统符号。",
+      "layout": "split",
+      "font": "serif",
+      "tags": [
+        "水墨",
+        "国风",
+        "书法",
+        "东方"
+      ]
+    },
+    {
+      "id": "paper-collage",
+      "name": "纸艺拼贴",
+      "principles": "用剪纸边缘、叠层和大小差异构成一个明确主体；克制色彩与投影，信息落在安静区域，不把所有内容切成碎片。",
+      "layout": "editorial",
+      "font": "rounded",
+      "tags": [
+        "剪纸",
+        "拼贴",
+        "手工",
+        "纸艺"
+      ]
+    },
+    {
+      "id": "diagram-system",
+      "name": "清晰信息图",
+      "principles": "按内容关系选流程、比较、层级、放射或空间结构；用一致图例和阅读路径解释事实，不能把不相关信息机械放成同样卡片。",
+      "layout": "editorial",
+      "font": "sans",
+      "tags": [
+        "信息图",
+        "流程",
+        "对比",
+        "架构"
+      ]
+    },
+    {
+      "id": "museum-editorial",
+      "name": "文化编辑",
+      "principles": "借用展览图录的边距、节奏与文字秩序；主视觉与标题错位相呼应，文案多时重新分区，不默认缩成左上角密集小字。",
+      "layout": "split",
+      "font": "serif",
+      "tags": [
+        "文化",
+        "展览",
+        "美术馆",
+        "艺术展"
+      ]
+    },
+    {
+      "id": "isometric-space",
+      "name": "空间几何",
+      "principles": "以统一视角与光源表达空间关系；图形做视觉解释，文字区保持平面和清晰，不把每个图标都做成立体装饰。",
+      "layout": "split",
+      "font": "sans",
+      "tags": [
+        "等距",
+        "空间",
+        "几何",
+        "立体"
+      ]
+    },
+    {
+      "id": "soft-editorial",
+      "name": "温和编辑",
+      "principles": "通过柔和色阶、自然光感和有节奏的留白表达可信与亲和；标题和主体不抢位，不用柔弱对比牺牲可读性。",
+      "layout": "centered",
+      "font": "sans",
+      "tags": [
+        "温柔",
+        "亲和",
+        "柔和",
+        "社区"
+      ]
+    }
+  ],
+  "researchSources": [
+    {
+      "repository": "https://github.com/JimLiu/baoyu-skills",
+      "files": [
+        "skills/baoyu-cover-image/references/style-presets.md",
+        "skills/baoyu-infographic/SKILL.md"
+      ],
+      "license": "MIT",
+      "note": "Style/rendering/layout dimensions inform original Chinese guidance; no scripts executed."
+    },
+    {
+      "repository": "https://github.com/anthropics/skills",
+      "file": "skills/canvas-design/SKILL.md",
+      "note": "Research reference for visual hierarchy and intentional composition. Workflow and minimal-copy constraints are not imported."
+    }
   ]
 }

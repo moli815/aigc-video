@@ -2938,6 +2938,14 @@ async function handleChat(req, res) {
   const recoverReferenceContract = (calls, error, stage) => {
     const code = String((error && (error.code || error.message)) || "");
     if (!REFERENCE_CONTRACT_CODES.has(code)) throw error;
+    const requiredAsset = /都用上|全部使用|全部用上|历史原图|之前上传|前面发|原件|第[一二三四五六七八九十0-9]+张/.test(imageUserText);
+    if (requiredAsset) {
+      throw Object.assign(Error("TOOL_ARGUMENTS_INVALID"), {
+        code:"TOOL_ARGUMENTS_INVALID",
+        reason:code === "IMAGE_REFERENCE_NOT_ISSUED" ? "HISTORY_REQUIRED_MISSING" : "REFERENCE_REQUIRED_MISSING",
+        field:"source_indexes",
+      });
+    }
     logSafe({ tag: "image_contract_recovered", requestId: currentRequestId(), code, stage: stage || "finalize" });
     const safe = stripReferenceContract(calls);
     try { return finalizeImageCallsRaw(safe); } catch { return safe; }
@@ -3485,7 +3493,10 @@ async function handleChat(req, res) {
           res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: "tool_calls" }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
           logSafe({ tag: "tool_tag_converted", requestId: currentRequestId(), format: parsedTag.format, tool: parsedTag.name });
         } else {
-          const plain = tagParser.stripToolTags(heldTag);
+          const plain = tagParser.stripToolTags(textOut);
+          if (!plain) throw Object.assign(new Error("TOOL_ARGUMENTS_INVALID"), {
+            code: "TOOL_ARGUMENTS_INVALID", reason: "JSON_SYNTAX", field: "arguments",
+          });
           if (plain) res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { content: plain } }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
           logSafe({ tag: "tool_tag_unparsed", requestId: currentRequestId(), len: heldTag.length });
         }

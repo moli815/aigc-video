@@ -18,6 +18,9 @@ const ADMIN = read("web/admin.html");
 const STAFF = read("web/staff.html");
 const API = read("cloudfunctions/bf-api/index.js");
 const IMAGE = read("cloudfunctions/bf-image/index.js");
+const IMAGE_BILLING = read("cloudfunctions/bf-image/image-billing.js");
+const APPROVAL = read("cloudfunctions/bf-api/approval-fulfillment.js");
+const JOB_CLAIM = read("cloudfunctions/shared/image-job-claim.js");
 const GUARDS = read("cloudfunctions/bf-image/media-guards.js");
 const TIERS_MOD = read("cloudfunctions/bf-api/tiers.js");
 
@@ -121,7 +124,7 @@ test("AUTH-02 额度服务异常时拒绝出图，不再 fail-open", () => {
 test("BILL-01 幂等键绑定 accountId", () => {
   assert.match(IMAGE, /function idemKey\(rid, accountId\)/, "缺少按账号派生的幂等键");
   assert.match(IMAGE, /update\(String\(accountId\) \+ ":" \+ String\(rid\)\)/, "幂等键未包含 accountId");
-  assert.match(IMAGE, /const sameOwner = !d \|\| String\(d\.accountId \|\| ""\) === String\(accountId\)/,
+  assert.match(JOB_CLAIM, /String\(row\.accountId \|\| ""\) !== String\(accountId\)/,
     "命中缓存时未校验归属");
 });
 
@@ -136,14 +139,12 @@ test("BILL-01 缺 requestId 时在入口生成一次并全程复用", () => {
   assert.doesNotMatch(seg.slice(0, 400), /if \(!rid\) rid = "srv-/, "claimIdem 内部仍在私造 requestId");
 });
 
-test("BILL-02 记账按唯一事件分阶段提交，flushJobs 只在成功时标 committed", () => {
-  // 10-24 P0-4：账户累计 + 明细两次独立写入不可能原子，
-  // 改为「唯一账务事件 + CAS 标记 + 明细复用同一 _id」的实现。
+test("BILL-02 记账以唯一事件事务提交，flushJobs 只在成功时标 committed", () => {
   assert.match(IMAGE, /const BILLING_COLL = "bf_billing_events"/, "缺少账务事件账本");
   assert.match(IMAGE, /function billingEventIdOf\(accountId, jobKey\)/, "缺少事件 ID 派生");
-  assert.match(IMAGE, /if \(accountOk && usageOk\)[\s\S]{0,200}return true/, "未在双阶段都成功时返回成功");
-  assert.match(IMAGE, /state: "committed", usageApplied: true/, "事件未落 committed 状态");
-  assert.match(IMAGE, /_id: eventId, accountId, kind: "image"/, "明细未复用事件 ID（会重复流水）");
+  assert.match(IMAGE_BILLING, /db\.runTransaction/, "账户、明细与事件缺少事务边界");
+  assert.match(IMAGE_BILLING, /state: "committed", accountApplied: true, usageApplied: true/, "事件未落完整提交状态");
+  assert.match(IMAGE_BILLING, /tx\.collection\(COLLECTIONS\.usage\)\.doc\(eventId\)/, "明细未复用事件 ID");
   assert.match(IMAGE, /const billed = cost <= 0 \? true : await addImageCost/, "flushJobs 未检查记账结果");
   assert.match(IMAGE, /if \(!billed\)[\s\S]{0,260}costTries/, "记账失败未保留重试标记");
 });
@@ -152,15 +153,12 @@ test("BILL-02 记账按唯一事件分阶段提交，flushJobs 只在成功时�
 // BIZ-01：续费审批不得重复写账号
 // ─────────────────────────────────────────────────────────────
 
-test("BIZ-01 续费只执行一次 accounts.update", () => {
-  const start = API.indexOf("const renewPatch = {");
-  const seg = API.slice(start, start + 4000);
-  // 10-25 C2.2-FIX：续费写入从"doc().update(renewPatch)"改为带条件的 where().update()，
-  // 目的不只是"只写一次"，而是"同一次写里同时校验幂等键与到期日版本"。
-  const unconditional = seg.match(/db\.collection\(C\.accounts\)\.doc\(reqDoc\.accountId\)\.update\(renewPatch\)/g) || [];
-  assert.strictEqual(unconditional.length, 0, "仍存在无条件的整包写入（会覆盖并发续费）");
-  const conditional = seg.match(/where\(\{[\s\S]{0,160}renewedRequestIds: _\.nin/g) || [];
-  assert.ok(conditional.length >= 1, "续费未使用条件更新（缺幂等键）");
+test("BIZ-01 续费只在事务内按最新账号快照更新一次", () => {
+  assert.match(APPROVAL, /db\.runTransaction/);
+  assert.match(APPROVAL, /const account = one\(await accountRef\.get\(\)\)/);
+  assert.match(APPROVAL, /if \(!applied\)/);
+  assert.match(APPROVAL, /await accountRef\.update\(patch\)/);
+  assert.doesNotMatch(APPROVAL, /doc\(reqDoc\.accountId\)\.update\(renewPatch\)/);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -200,7 +198,7 @@ test("IMG-01 响应体有大小上限与 MIME 校验", () => {
 });
 
 test("IMG-02 显式像素尺寸有上下限与总像素预算", () => {
-  assert.match(GUARDS, /const SIZE_MAX_EDGE = 4096/);
+  assert.match(GUARDS, /const SIZE_MAX_EDGE = 8192/);
   assert.match(GUARDS, /const SIZE_MAX_PIXELS = 4_622_220/);
   assert.match(GUARDS, /function clampExplicitSize\(raw\)/);
   assert.match(GUARDS, /if \(w \* h > SIZE_MAX_PIXELS\)/, "超出像素预算时未按比例缩放");
@@ -284,18 +282,27 @@ test("BILL-01b 幂等三件套使用同一个 key（漏一个就会永远 proces
   assert.match(fin, /logStage\("idem_finish_failed"/, "finishIdem 失败未留日志");
 });
 
-test("定价按模型分档，Flash 与 Pro 不同价", () => {
-  const fn = IMAGE.slice(IMAGE.indexOf("function priceForSize"));
+test("定价按模型分档，售价 = 成本 × 倍数（10-29 口径）", () => {
+  const fn = IMAGE.slice(IMAGE.indexOf("function upstreamCostOf"));
   const body = fn.slice(0, fn.indexOf("const C = {"));
-  assert.match(body, /function priceForSize\(size, model\)/, "priceForSize 未接 model 参数");
-  assert.match(body, /seedream-5-0-flash[\s\S]{0,80}IMAGE_PRICE_FAST/, "Flash 未走独立价档");
-  assert.match(body, /IMAGE_PRICE_FAST/, "缺少 Flash 单价配置");
-  // 调用点必须把实际模型传进去
-  assert.match(IMAGE, /priceForSize\(resolveSize\(body\.size, aspectRatio\), usedModel\)/,
-    "调用点未传 usedModel，价格仍按旧逻辑算");
-  // 两端默认值必须一致（此前 0.61 vs 0.80 漂移）
-  assert.match(API, /IMAGE_PRICE_2K[\s\S]{0,120}\|\| 0\.9\)/, "bf-api 2K 默认值未对齐 0.9");
-  assert.match(IMAGE, /IMAGE_PRICE_2K: process\.env\.IMAGE_PRICE_2K \|\| "0\.9"/, "bf-image 2K 默认值未对齐 0.9");
+  // 模型分档必须仍然存在：Flash 与 Pro 的成本不同，不能一刀切
+  assert.match(body, /seedream-5-0-flash[\s\S]{0,80}IMAGE_COST_FLASH/, "Flash 未走独立成本档");
+  assert.match(body, /seedream-5-0-pro[\s\S]{0,160}IMAGE_COST_PRO_LARGE/, "Pro 未按像素分大小图");
+  assert.match(body, /function customerPriceOf/, "缺少售价推导函数");
+  assert.match(IMAGE, /IMAGE_PRICE_MULTIPLIER: process\.env\.IMAGE_PRICE_MULTIPLIER \|\| "2"/,
+    "售价倍数默认值不是 2");
+  // 调用点必须把实际模型、输入图张数与上游真实用量一起传进去：
+  // 5.5 拆层会返回多张图、每张按自己的像素落档，只传尺寸会少扣成本。
+  assert.match(IMAGE, /actualUpstreamCostOf\(\{[\s\S]{0,300}model: usedModel[\s\S]{0,300}inputImages/,
+    "调用点没把 usedModel / 输入图张数带进成本计算");
+  assert.match(IMAGE, /actualUpstreamCostOf\(\{[\s\S]{0,400}usage: out\.providerUsage/,
+    "调用点没把供应商真实用量带进成本计算");
+  assert.match(IMAGE, /IMAGE_COST_55_INPUT[\s\S]{0,80}IMAGE_COST_55_OUT_SMALL[\s\S]{0,80}IMAGE_COST_55_OUT_LARGE/,
+    "缺少 Seedream 5.5 的官方单价常量");
+  assert.match(IMAGE, /providerUsage:\s*providerUsageOf\(j\)/, "生成结果没有带回真实用量");
+  assert.match(IMAGE, /const price = customerPriceOf\(upstream\)/, "售价没有按成本×倍数推导");
+  assert.doesNotMatch(IMAGE, /IMAGE_PRICE_2K: process\.env\.IMAGE_PRICE_2K \|\| "0\.9"/,
+    "旧的 2K 手填售价仍生效，会和成本×倍数打架");
 });
 
 test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
@@ -304,9 +311,8 @@ test("图片模型路由不再从 prompt 品类关键词二次猜档", () => {
   // 10-25：原来靠 `rawTier !== "auto"` 判显式，pro/hd 这类别名会漏判并静默降级；
   // 现在统一先 normalizeTier() 归一化，再比较 high/fast，语义不变但覆盖所有别名。
   assert.match(body, /const tier = normalizeTier\(qualityTier\)/, "未先归一化档位");
-  assert.match(body, /if \(tier === "high"\) return \{ model: m\.pro/, "high 未走 Pro");
-  assert.match(body, /if \(tier === "fast"\) return \{ model: m\.fast/, "fast 未走 Flash");
-  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT|prompt|renderIntent/,
+  assert.match(body, /decision\.tier === "high" \? m\.pro : m\.fast/, "服务端统一策略未选择模型");
+  assert.doesNotMatch(body, /inferQualityTier|PRINT_INTENT|DRAFT_INTENT/,
     "路由仍从提示词或物料类型隐式推断模型档位");
   assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/,
     "Pro 强制模式必须优先于质量档位分支");

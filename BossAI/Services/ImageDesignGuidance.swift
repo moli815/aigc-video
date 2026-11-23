@@ -9,6 +9,7 @@ enum ImageDesignGuidance {
         let principles: String
         let layout: String
         let font: String
+        let tags: [String]?
     }
     private struct Library: Decodable { let patterns: [Reference] }
     static let references: [Reference] = {
@@ -19,10 +20,25 @@ enum ImageDesignGuidance {
     }()
 
     static var instructions: String {
-        let examples = references.map { reference in
+        instructions(for: "")
+    }
+    static func suggestions(for request: String) -> [Reference] {
+        let text = request.lowercased()
+        let matched = references.filter { reference in
+            (reference.tags ?? []).contains { tag in
+                let tag = tag.lowercased()
+                return text.contains(tag) && !["不要", "不想要", "别用", "不要再"].contains { text.contains($0+tag) }
+            }
+        }
+        if !matched.isEmpty { return Array(matched.prefix(4)) }
+        let diverseDefaults = ["swiss", "flat-illustration", "art-deco", "anime-story", "editorial-photo", "printmaking"]
+        return diverseDefaults.compactMap { id in references.first { $0.id == id } }
+    }
+    static func instructions(for request: String) -> String {
+        let examples = suggestions(for: request).map { reference in
             "\(reference.name)：\(reference.principles) 可参考 layout=\(reference.layout)、fontStyle=\(reference.font)。"
         }.joined(separator: "\n")
-        return baseInstructions + "\n【成熟设计库的静态设计参考】以下是可组合的参考，不是固定模板；用户指定风格、完整原文和品牌要求始终优先，不匹配时自主设计。\n" + examples
+        return baseInstructions + "\n【设计参考词典】只选择与任务匹配的一个主方向，不把所有风格混用；版式、色板与表现手法可以独立组合，用户新要求始终优先。\n" + examples
     }
 
     private static let baseInstructions = """
@@ -33,5 +49,13 @@ enum ImageDesignGuidance {
     4. structured.text 按语义逐项保存精确原文，key 唯一稳定；不能把构图指令、负面约束或内部分析当正文。信息必须完整，不编造姓名、电话或宣传事实。
     5. structured.layout 可选 editorial/centered/split 构图；需要自由排布时为每个 key 给出归一化 blocks（0到1），完整覆盖所有文字、留足边距、不重叠。不要给每项都相同坐标。
     6. prompt 用具体主体、构图、风格表现、材质和光线描述画面，明确用户要求改变什么、保留什么；少用空泛的高级/震撼/精美形容词。文字原文放 structured.text。新风格优先于参考图旧风格，用户明确否定的风格不能继续沿用。
+    7. 将版式骨架（例如非对称编排/主视觉跨栏/上下信息带/信息图结构）、色板、表现手法、文字密度分开判断，不把行业等同于固定审美。信息多时优先完整性与可读性，不能为艺术化删掉用户文案。写给Seedream的视觉描述尽量简洁连贯，中文约300字以内为目标；用户必需原文不能为凑长度被截断，不另加一次LLM提示词改写。
+    8. 原样替换上传Logo/二维码时，image_edit必须source=both（图1海报底图，图2上传原素材），structured.preserve_assets指定reference_index=2和归一化替换区域，默认preserve_outside=true。模型只清理旧区域，程序合成原素材；不能把品牌重画成相似图，也不凭文字臆造Logo。替换区域必须有依据，位置不清楚时只确认该位置。
+    9. preserve_assets的Logo素材标kind=logo，默认background=auto：先在本机把背景抠成透明再贴回原图形，不让Seedream重画Logo；复杂背景自动采用可用的最佳抠图结果，不因置信度反复询问。用户明确保留底色用keep。二维码用kind=qr，保护扫码所需的浅色留白，不当Logo去底。没有可用输出的技术失败不能谎报成功。
+    原素材替换的执行契约：只在prompt里写“贴入上传Logo”不会粘贴原图，反而会触发重绘。必须实际输出structured.preserve_assets非空数组，每项含reference_index、kind、background和box四个归一化数值；用预览测量旧标识完整范围，不能输出示例坐标。其余内容不变时preserve_outside=true，structured.text=[]，不要重复叠写底图已有文字。参数校验退回时修正工具参数，不重试相同参数，不让用户重传已有素材。
+    11. 多图合成（把A图里的人物/产品放进B图）：image_edit必须source=attached + source_indexes=[底图序号, 素材序号]，并在reference_roles里逐项写角色（如["底图","人物照片"]），prompt里也点名“图几”。**只传一张等于把素材丢了**——模型看不到那张图，只能照文字画一个相似但不同的人。用户说“第一张图的人放到第二张图”时，序号按附件显示顺序：第一张=1，第二张=2。
+    12. 需要某人的长相时，必须拿到他的照片。用户只给名字（如“P一个马云”）却没有该人物的参考图时，先说明“需要一张这个人的照片才能保证是他”，请用户上传，**不得凭名字臆造肖像**，也不得把一个陌生人当成本人交付。
+    13. Logo 落位由程序按品牌规范计算（短边 16%、边距 5.5%、按真实宽高比缩放），模型只需给出大致方位与 box。因此不要把 box 写得又大又贴边，也不要在 prompt 里要求“logo 铺满/占满”。用户要求“重新排版给 logo 让位/把标题挪开”时，贴图做不到——必须走参考图重设计（image_generate + source=attached，在构图里预留 logo 区），并在 prompt 里写明预留位置，不得假装 preserve_assets 能重排。
+    14. 为图片工具选择quality_tier和quality_reason：草稿、简单插画/图标、简单背景改色可fast；信息密集布局、人物保真、品牌精确、复杂编辑、正式终稿选high。不按“海报/名片”类别一刀切，不因故障静默降档。保留用户明确要求的高质量；不确定时选high。该选择只影响图片模型，不改变聊天模型。
     """
 }

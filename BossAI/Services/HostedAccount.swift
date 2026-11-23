@@ -612,12 +612,14 @@ final class HostedAccount: ObservableObject {
             let message = json["message"] as? String
             // 会员 token 失效：直接清空登录态，UI 会回到登录页
             // 但仅在发起请求的账号仍当前账号时才执行登出，避免旧请求登出新账号
-            if http.statusCode == 401, authorized, startGeneration == sessionGeneration {
+            if authorized, startGeneration == sessionGeneration,
+               http.statusCode == 401 || ["MEMBERSHIP_EXPIRED", "ACCOUNT_SUSPENDED"].contains(code) {
                 // P0-15 单设备：区分"被其他设备顶下线"与普通过期，给出明确提示
+                lastErrorMessage = message ?? "登录状态已失效，请重新登录"
+                await forceLogout()
                 if code == "SESSION_REPLACED" {
                     sessionReplacedNotice = message ?? "账号已在其他设备登录，当前设备已退出"
                 }
-                await forceLogout()
             }
             throw HostedError.server(code: code, status: http.statusCode, message: message)
         }
@@ -1050,7 +1052,7 @@ final class HostedAccount: ObservableObject {
 
 /// 云端服务错误的统一封装：错误码由服务端下发，客户端只负责映射成
 /// 用户可读的中文文案（不透出上游厂商/技术细节）。
-enum HostedError: LocalizedError {
+enum HostedError: LocalizedError, UserFacingError {
     /// 输入校验失败（客户端侧）
     case input(String)
     /// 网络不可达 / 连接失败
@@ -1058,23 +1060,20 @@ enum HostedError: LocalizedError {
     /// 服务端返回的业务错误：code 为机器可读错误码，message 为服务端中文消息
     case server(code: String, status: Int, message: String?)
 
+    /// `UserFacingError`：文案本就在这里维护，出口直接取用
+    var userFacingMessage: String { errorDescription ?? "请求没有完成，请重试" }
+
     var errorDescription: String? {
         switch self {
         case .input(let m): return m
         case .network(let m): return m
         case .server(let code, let status, let message):
-            switch code {
-            case "BAD_CREDENTIALS": return "账号或密码不正确"
-            case "ACCOUNT_SUSPENDED": return "该账号已停用，请联系客服"
-            case "MEMBERSHIP_EXPIRED": return "会员已到期，请联系续费"
-            case "QUOTA_EXCEEDED": return "近期使用量较高，请稍后再试"
-            case "OUT_OF_SERVICE_HOURS": return message ?? "当前非服务时段"
-            case "UPSTREAM_NOT_CONFIGURED": return "服务暂未就绪，请联系管理员"
-            case "UPSTREAM_ERROR": return "模型服务暂时不可用，请稍后重试"
-            default:
-                if let message, !message.isEmpty { return message }
-                return "请求失败（\(status)）"
-            }
+            // 非服务时段要带上服务端给的具体时段，这张通用表答不了
+            if code == "OUT_OF_SERVICE_HOURS" { return message ?? "当前非服务时段" }
+            // 其余统一查 FriendlyError 的错误码表：避免流式/非流式两条路径各写一份、互相漂移
+            if let copy = FriendlyError.copy(forCode: code) { return copy }
+            if let message, !message.isEmpty { return message }
+            return "请求失败（\(status)）"
         }
     }
 }

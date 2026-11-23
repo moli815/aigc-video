@@ -27,12 +27,18 @@ import SwiftData
 final class BriefingService {
     /// 全局单例
     static let shared = BriefingService()
+    private var running = false
 
     /// 检查所有云端定时计划并生成到期简报（每日补偿入口）。
     /// 未登录/托管失效时直接返回；单个计划解析失败仅跳过该计划。
     func generateDueBriefings(context: ModelContext) async {
         guard HostedAccount.isHostedActive, HostedAccount.shared.isLoggedIn else { return }
+        guard !running else { return }
+        running = true
+        defer { running = false }
+        let owner = HostedAccount.scopeKey
         let payload = await HostedAccount.shared.fetchSchedules()
+        guard HostedAccount.scopeKey == owner else { return }
         // 云端返回结构宽松：_id/id 双兼容、hour 缺省 7 点，解析失败的计划直接跳过不中断
         let schedules = (payload["list"] as? [[String: Any]]) ?? []
         for sched in schedules {
@@ -44,6 +50,7 @@ final class BriefingService {
             guard isDue(type: type, hour: hour, scheduleId: id) else { continue }
             let identity = sched["identity"] as? [String: Any] ?? [:]
             await generate(type: type, identity: identity, scheduleId: id, context: context)
+            guard HostedAccount.scopeKey == owner else { return }
         }
     }
 
@@ -107,6 +114,7 @@ final class BriefingService {
 
         do {
             let content = try await HostedAccount.shared.chatOnce(prompt: prompt)
+            guard conv.ownerKey == HostedAccount.scopeKey, conv.modelContext != nil, !Task.isCancelled else { return }
             let msg = Message(role: "assistant", text: content)
             msg.createdAt = Date()
             msg.conversation = conv

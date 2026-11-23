@@ -138,11 +138,8 @@ enum TextIntentDecider {
         if accuracyRequired && extractedCharCount > 0 { return true }
         // “排版随意”不是允许写错客户文案，只有明确授权文字艺术化才交给模型。
         if t.contains("艺术字") || t.contains("文字可以艺术化") || t.contains("文字可以随意") { return false }
-        // 单个长文案字段同样属于文字密集内容；不能因为 Agent 把多字段合并成一段而漏分流。
-        if extractedCharCount >= 40 { return true }
-        // 字段多且字数大 → 必须程序排版
-        if extractedFieldCount >= 3 && extractedCharCount >= 20 { return true }
-        // 短标题可使用 Pro 原生文字能力；不按“海报/名片”等品类强制进入排版。
+        // Density and document category are observations, not authorization to replace
+        // native design with our renderer. Explicit exact-copy intent decides the branch.
         return false
     }
 }

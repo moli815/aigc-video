@@ -85,6 +85,13 @@ function buildArguments(params) {
   if (params.render_intent) args.render_intent = params.render_intent;
   if (params.task_kind) args.task_kind = params.task_kind;
   if (params.text_mode) args.text_mode = params.text_mode;
+  for (const key of ["source_indexes", "reference_roles", "library_refs"]) {
+    const value = typeof params[key] === "string" ? tryJson(params[key]) : params[key];
+    if (Array.isArray(value)) args[key] = value;
+  }
+  const index = typeof params.source_index === "string" && /^\d+$/.test(params.source_index)
+    ? Number(params.source_index) : params.source_index;
+  if (Number.isSafeInteger(index)) args.source_index = index;
   return args;
 }
 

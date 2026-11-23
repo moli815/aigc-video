@@ -36,11 +36,11 @@ test("ROUTE-03 未知模型走保守默认（不给 fast / 组图 / 图层）", 
 });
 
 test("ROUTE-04 fast 参数只在能力允许时下发", () => {
-  assert.match(IMAGE, /if \(caps\.fastPromptMode\)/,
+  assert.match(IMAGE, /if \(caps\.fastPromptMode && !image\)/,
     "optimize_prompt_options 未受能力表约束");
   assert.doesNotMatch(IMAGE, /const mode = String\(RT\.IMAGE_FAST_MODE\) === "0" \? "standard" : "fast";/,
     "仍是旧的全局 fast 开关");
-  assert.match(IMAGE, /mode: promptOptimizationMode\(RT\.IMAGE_ROUTING_MODE, RT\.IMAGE_FAST_MODE\)/,
+  assert.match(IMAGE, /providerPromptOptions\(selectedModel, RT\.IMAGE_ROUTING_MODE, RT\.IMAGE_FAST_MODE\)/,
     "Pro 调试模式未使用统一的标准质量策略");
 });
 
@@ -49,7 +49,7 @@ test("ROUTE-05 路由按任务与质量档分支，且能力优先", () => {
   const body = fn.slice(0, fn.indexOf("\nlet _rtLoadedAt", 10));
   assert.match(body, /kind === "series"[\s\S]{0,220}series-unsupported/, "组图无模型时未明确拒绝");
   assert.match(body, /kind === "decompose"[\s\S]{0,200}layers/, "图层任务未按能力选择");
-  assert.match(body, /tier === "high"[\s\S]{0,80}m\.pro/, "高质量档未路由到 Pro");
+  assert.match(body, /decision\.tier === "high"[\s\S]{0,80}m\.pro/, "服务端策略高质量档未路由到 Pro");
   assert.match(body, /mode === "flash_only"[\s\S]{0,80}m\.fast/, "缺少运维强制快速档");
   assert.match(body, /mode === "pro_only"[\s\S]{0,80}m\.pro/, "缺少运维强制高质量档");
 });
@@ -64,8 +64,9 @@ test("ROUTE-06 能力不支持时前置拦截，不发上游", () => {
 test("ROUTE-07 记账与响应记录真实模型", () => {
   assert.match(IMAGE, /const usedModel = String\(out\.model \|\| RT\.IMAGE_MODEL \|\| ""\)/,
     "未记录实际使用模型");
-  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel\)/,
-    "台账仍写默认模型");
+  // 10-29：台账除了售价还要记上游成本，签名多了 { upstreamCostCny }
+  assert.match(IMAGE, /finishIdem\(rid, auth\.sub, out\.url, price, usedModel, \{ upstreamCostCny: upstream, modelCallId: out\.modelCallId,asset:out\.asset[\s,]/,
+    "台账仍写默认模型，或没把上游成本落账");
   assert.match(IMAGE, /model: usedModel, route_reason: out\.routeReason/,
     "响应未回传模型与路由原因");
 });

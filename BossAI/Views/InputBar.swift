@@ -173,7 +173,7 @@ struct InputBar: View {
         }
         // 相册多选：限 10 张、仅图片；单张解析失败跳过，不中断整批。
         .photosPicker(isPresented: $showPhotos, selection: $photoItems,
-                      maxSelectionCount: 10, matching: .images)
+                      maxSelectionCount: ImageReferenceResolver.maxAttachments, matching: .images)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -186,6 +186,9 @@ struct InputBar: View {
                 }
                 photoItems = []
                 viewModel.attach(images: images)
+                if images.count != items.count {
+                    viewModel.errorMessage = "有 \(items.count - images.count) 张照片未能读取，请重新选择后再发送。"
+                }
             }
         }
         .fileImporter(isPresented: $showFiles,

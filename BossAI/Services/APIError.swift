@@ -62,6 +62,47 @@ struct APIErrorEnvelope: Equatable {
         return ["ACCOUNT_SUSPENDED", "MEMBERSHIP_EXPIRED", "UNAUTHORIZED", "SESSION_REPLACED"].contains(code)
     }
 
+    /// 解析**流内错误帧**（SSE 里的 `error` 字段）。
+    ///
+    /// 事故（2026-11-03，真机截图）：服务端在流里下发
+    /// `{"error":{"code":"UPSTREAM_ERROR","message":"这次回复没有接收完整，请再试一次。"}}`，
+    /// 客户端把整个字典 `String(describing:)` 成字符串塞进错误文案，用户看到的是
+    /// ```
+    /// 输出尚未完成（{ code = "UPSTREAM_ERROR"; message = "\U8fd9\U6b21..." }）。
+    /// ```
+    /// 既看不懂，也把内部错误码和 unicode 转义暴露给了最终客户。
+    ///
+    /// 约定（与 P0-13「FriendlyError 是唯一出口」一致）：
+    ///   1. 有服务端中文 message → 用服务端的（服务端是文案权威）；
+    ///   2. 只有 code → 按 code 映射固定文案；
+    ///   3. 两个都没有 → 通用兜底。
+    /// 原始帧一律不进 UI，只进日志。
+    static func streamFailure(_ raw: Any, status: Int = 502) -> APIErrorEnvelope? {
+        var code = ""
+        var message = ""
+        var retryable = true
+        if let dict = raw as? [String: Any] {
+            code = (dict["code"] as? String) ?? (dict["error"] as? String) ?? ""
+            message = (dict["message"] as? String) ?? (dict["msg"] as? String) ?? ""
+            retryable = (dict["retryable"] as? Bool) ?? true
+        } else if let text = raw as? String {
+            // 两种历史形态都要认：
+            //   · 旧服务端：error 是错误码（"UPSTREAM_ERROR"）
+            //   · 11-03 起：error 是**中文短句**（为了让老版 App 直接 toString 也不难看）
+            // 靠"有没有汉字"区分，比靠前缀猜测可靠。
+            let hasCJK = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
+            if hasCJK { message = text } else { code = text }
+        }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty || !trimmed.isEmpty else { return nil }
+        let copy = trimmed.isEmpty
+            ? (FriendlyError.copy(forCode: code) ?? "这次回复没有接收完整，请重试一次。")
+            : trimmed
+        return APIErrorEnvelope(status: status, code: code, message: copy,
+                                actions: ["retry"], requestId: "",
+                                retryable: retryable, category: "upstream")
+    }
+
     /// 解析服务端 JSON。没有任何可展示信息时返回 nil（调用方回落到本地文案）。
     static func parse(status: Int, json: [String: Any]) -> APIErrorEnvelope? {
         let code = (json["error"] as? String) ?? ""
@@ -99,4 +140,15 @@ struct APIErrorEnvelope: Equatable {
 /// 统一的信封提取入口：任何 Error 只要携带信封就能被 UI 消费。
 protocol APIErrorCarrying {
     var envelope: APIErrorEnvelope? { get }
+}
+
+/// 自带**已脱敏**用户文案的错误。
+///
+/// 存在理由（11-03）：`FriendlyError.message(for:)` 是唯一出口，但它此前只认识
+/// `APIErrorCarrying` 和系统错误类型；自定义 Error 一律掉进 `String(describing: error)`
+/// 的模糊匹配，甚至直接拿 `localizedDescription` 上屏。
+/// 有了这个协议，实现方为文案负责，出口只负责兜底——不会再出现「谁的 dump 更详细」。
+protocol UserFacingError {
+    /// 已经被脱敏、可以直接展示的一句中文
+    var userFacingMessage: String { get }
 }

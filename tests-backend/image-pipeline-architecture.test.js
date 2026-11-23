@@ -11,7 +11,7 @@ const stream = read("BossAI/ViewModels/ChatViewModel+Streaming.swift");
 const chatViewModel = read("BossAI/ViewModels/ChatViewModel.swift");
 const planner = read("BossAI/Services/ImageTaskPlanner.swift");
 const resolver = read("BossAI/Services/ImageReferenceResolver.swift");
-const chatService = read("BossAI/Services/ChatService.swift");
+const chatService = read("BossAI/Services/ToolManifest+Schema.swift");
 const imageService = read("BossAI/Services/ImageService.swift");
 const baseImageCache = read("BossAI/Services/BaseImageCache.swift");
 const mediaGuards = read("cloudfunctions/bf-image/media-guards.js");
@@ -43,7 +43,7 @@ test("reference-based generation tool can explicitly select an attached image", 
   assert.match(stream, /resolvedToolSource/);
   assert.match(referenceCandidates, /currentFiles\.map \{ file in[\s\S]{0,260}\?\? Data\(\)/);
   assert.doesNotMatch(referenceCandidates, /compactMap/);
-  assert.match(chatService, /"required": \["prompt", "structured", "aspect_ratio"\]/);
+  assert.match(chatService, /"required": \["prompt"\]/);
 });
 
 test("text overlay background excludes visible copy while retaining visual structure", () => {
@@ -55,9 +55,16 @@ test("text overlay background excludes visible copy while retaining visual struc
 
 test("only pixel edits receive edit boundaries; pixel similarity is diagnostic only", () => {
   assert.match(imageFunction, /const isPixelEdit = !!image && String\(taskKind \|\| ""\) === "edit"/);
-  // 10-26：finalPrompt 现在多了"底图无字"这一层，但 EDIT_CONSTRAINTS 仍只给像素编辑
-  assert.match(imageFunction, /const finalPrompt = basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
-  assert.match(imageFunction, /const taskPolicy = isPixelEdit[\s\S]{0,160}EDIT_CONSTRAINTS/);
+  // 10-26：finalPrompt 多了"底图无字"这一层；10-28 又在最前面加了多图编号契约。
+  // 三段拼接顺序固定：多图编号 → 用户 prompt → 无字约束 → 任务边界。EDIT_CONSTRAINTS 仍只给像素编辑。
+  assert.match(imageFunction, /const finalPrompt = reformat\?reformat.prompt:multiImageContract\(image, referenceRoles, taskKind, workflowPlan, !!scopedReference\)\s*\n\s*\+ basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
+  const expression=imageFunction.match(/const taskPolicy = ([\s\S]*?);/)[1];
+  const evaluate=new Function("composition","workflowPlan","isPixelEdit","image","taskKind","EDIT_CONSTRAINTS","REFERENCE_CONSTRAINTS",'scopedReference=""',"return ("+expression+");");
+  assert.equal(evaluate(null,null,false,["source"],"reference","EDIT","REF","SCOPED"),"SCOPED");
+  assert.equal(evaluate(null,null,true,["source"],"edit","EDIT","REF"),"EDIT");
+  assert.equal(evaluate(null,null,false,["source"],"reference","EDIT","REF"),"REF");
+  assert.equal(evaluate(null,null,false,null,"generate","EDIT","REF"),"");
+  assert.equal(evaluate({designEngine:"product_v2"},null,false,["source"],"reference","EDIT","REF"),"");
   assert.match(imageFunction, /if \(out\.ok && body\.image && taskKind === "edit"\)[\s\S]{0,400}decision: "diagnostic_only"/);
   assert.doesNotMatch(imageFunction, /edit_over_redraw_retry/);
   assert.doesNotMatch(imageFunction, /逐像素保持一致，禁止整体重绘/);
@@ -118,7 +125,7 @@ test("base image is wordless in overlay mode and never gets copy appended back",
   const block = imageFunction.slice(start, end);
   assert.ok(start > 0, "缺少 overlayMode 判定");
   assert.match(imageFunction, /const NO_TEXT_CONSTRAINTS/, "缺少无字约束常量");
-  assert.match(block, /if \(rawPrompt && !overlayMode\)/, "overlay 模式仍会把精确文案追加回底图 prompt");
+  assert.match(block, /if \(rawPrompt && !overlayMode && !nativePoster && !\(designBrief/, "overlay 模式仍会把精确文案追加回底图 prompt");
   assert.match(block, /needsNoText/, "缺少无字判定");
   assert.match(block, /NO_TEXT_CONSTRAINTS/, "无字约束没有被拼进 finalPrompt");
 });
@@ -128,7 +135,7 @@ test("client sends text_mode=overlay so the server can strip copy", () => {
   assert.match(compiler, /body\["text_mode"\] = textMode/, "hosted envelope 没有透出 text_mode");
   assert.match(imageService, /textMode: textMode/, "ImageService 没有把 textMode 传给编译器");
   assert.match(imageService, /textMode: \.overlay/, "无字底图没有声明 overlay");
-  assert.match(chatViewModel, /textMode: context\.textMode == \.overlay \? "overlay" : nil/,
+  assert.match(read("BossAI/Services/ImageUseCase.swift"), /textMode: context\.textMode == \.overlay \? "overlay" : nil/,
     "重试入口必须从同一上下文读取文字模式");
 });
 

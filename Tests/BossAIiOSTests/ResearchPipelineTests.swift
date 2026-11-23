@@ -23,11 +23,21 @@ final class ResearchPipelineTests: XCTestCase {
     }
     @MainActor private func vm(chat: ChatService, search: FakeResearchSearch) throws -> ChatViewModel {
         let container = try ModelContainer(for: Conversation.self, Message.self, StoredFile.self, MemoryItem.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-        return ChatViewModel(conversation: nil, expert: ExpertCatalog.general, modelContext: ModelContext(container), chatKey: { "offline-research-fixture" }, imageKey: { nil }, chatService: chat, researchService: search)
+        // The synthetic turn mocks chat and search; its query planner must also be
+        // injected. Otherwise completeOnce uses the global real provider/session
+        // with a fixture key, making an offline test depend on external networking.
+        return ChatViewModel(conversation: nil, expert: ExpertCatalog.general, modelContext: ModelContext(container), chatKey: { "offline-research-fixture" }, imageKey: { nil }, chatService: chat, researchService: search,
+                             searchPlanner: { _, _ in nil })
     }
     @MainActor private func finish(_ vm: ChatViewModel) async throws {
         for _ in 0..<500 { if !vm.isStreaming { break }; try await Task.sleep(nanoseconds: 10_000_000) }
-        XCTAssertFalse(vm.isStreaming, "native synthetic turn exceeded 5s")
+        guard !vm.isStreaming else {
+            let pending=vm.streamTask
+            vm.stop()
+            await pending?.value
+            XCTFail("offline synthetic turn exceeded 5s; cancelled before the next fixture")
+            throw CancellationError()
+        }
         XCTAssertNil(vm.errorMessage)
     }
     @MainActor func testToolRoundNotesAndReasoningAreNotSavedAsAnswerAndDuplicateQueriesRunOnce() async throws {

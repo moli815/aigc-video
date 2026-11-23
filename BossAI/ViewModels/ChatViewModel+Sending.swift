@@ -46,7 +46,8 @@ extension ChatViewModel {
 
         // 草稿态在这里才真正建会话：点专家不会凭空产生对话记录
         let conv: Conversation
-        do { conv = try ensureConversation() } catch { errorMessage = "会话保存失败：" + error.localizedDescription; return }
+        // 本地存储异常文案已脱敏：不要把 SwiftData 的英文描述上屏
+        do { conv = try ensureConversation() } catch { errorMessage = "会话没能保存，请重试一次。"; return }
         inputText = ""
         // 注意：必须先判断，再插入消息（插入后 messages 里就有本条了）
         let isFirstUserMessage = conv.messages.filter { $0.role == "user" }.isEmpty
@@ -72,7 +73,7 @@ extension ChatViewModel {
             conv.updatedAt = Date()
             inputText = text
             pendingAttachments = attachments
-            errorMessage = "消息保存失败（\(error.localizedDescription)）。你的输入已保留，请重试。"
+            errorMessage = "消息没能保存，你的输入已保留，请重试一次。"
             return
         }
 
@@ -113,7 +114,7 @@ extension ChatViewModel {
         modelContext.insert(assistant)
         do { try modelContext.save() } catch {
             modelContext.rollback()
-            errorMessage = "重试准备失败：" + error.localizedDescription
+            errorMessage = "重试没能开始，请再点一次"
             return
         }
         orderedMessageCount = -1
@@ -169,7 +170,7 @@ extension ChatViewModel {
         modelContext.insert(assistant)
         do { try modelContext.save() } catch {
             modelContext.rollback()
-            errorMessage = "重新生成准备失败：" + error.localizedDescription
+            errorMessage = "重新生成没能开始，请再点一次"
             return
         }
         orderedMessageCount = -1

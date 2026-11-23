@@ -1,0 +1,299 @@
+{
+  "source": "official 5.5 isolated directed decomposition, 2026-11-16; fictional demo text; no signed URLs",
+  "width": 1672,
+  "height": 2508,
+  "rows": [
+    {
+      "index": 1,
+      "bounding_box": {
+        "absolute": [
+          544,
+          764,
+          962,
+          1182
+        ],
+        "normalized": [
+          325,
+          305,
+          575,
+          471
+        ]
+      },
+      "text_recognition": {
+        "text": "按项目安排巡检路线和检查\n项，记录检查时间、现场照\n片与处理说明，管理人员可\n查看完成情况与待跟进项。",
+        "lines": [
+          {
+            "runs": [
+              {
+                "text": "按项目安排巡检路线和检查",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121A24",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                618,
+                919,
+                902,
+                943
+              ],
+              "normalized": [
+                370,
+                366,
+                539,
+                376
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "项，记录检查时间、现场照",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121A24",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                618,
+                948,
+                902,
+                971
+              ],
+              "normalized": [
+                370,
+                378,
+                539,
+                387
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "片与处理说明，管理人员可",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121A24",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                618,
+                977,
+                902,
+                1000
+              ],
+              "normalized": [
+                370,
+                390,
+                539,
+                399
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "查看完成情况与待跟进项。",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121A24",
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                618,
+                1005,
+                905,
+                1029
+              ],
+              "normalized": [
+                370,
+                401,
+                541,
+                410
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "index": 2,
+      "bounding_box": {
+        "absolute": [
+          544,
+          989,
+          962,
+          1407
+        ],
+        "normalized": [
+          325,
+          394,
+          575,
+          561
+        ]
+      },
+      "text_recognition": {
+        "text": "投备手册、巡检照片、工单\n说明和验收记录按项目整理，\n交接时能技到上下文，便于\n查询与复盘。",
+        "lines": [
+          {
+            "runs": [
+              {
+                "text": "投备手册、巡检照片、工单",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121520",
+                  "bold": false,
+                  "italic": true,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                616,
+                1147,
+                901,
+                1171
+              ],
+              "normalized": [
+                368,
+                457,
+                539,
+                467
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "说明和验收记录按项目整理，",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121520",
+                  "bold": false,
+                  "italic": true,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                616,
+                1177,
+                922,
+                1200
+              ],
+              "normalized": [
+                368,
+                469,
+                551,
+                478
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "交接时能技到上下文，便于",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121520",
+                  "bold": false,
+                  "italic": true,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                616,
+                1207,
+                904,
+                1230
+              ],
+              "normalized": [
+                368,
+                481,
+                541,
+                490
+              ]
+            }
+          },
+          {
+            "runs": [
+              {
+                "text": "查询与复盘。",
+                "style": {
+                  "similar_font_family": "华文黑体",
+                  "foreground_color": "#121520",
+                  "bold": false,
+                  "italic": true,
+                  "underline": false,
+                  "strikethrough": false,
+                  "shadow": false,
+                  "translucent": false
+                }
+              }
+            ],
+            "bounding_box": {
+              "absolute": [
+                616,
+                1237,
+                762,
+                1261
+              ],
+              "normalized": [
+                368,
+                493,
+                456,
+                503
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

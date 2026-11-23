@@ -15,13 +15,13 @@ enum PerformanceTrace {
     static let log = OSLog(subsystem: "com.bossai.performance", category: .pointsOfInterest)
 
     private static let lock = NSLock()
-    private static var startTimes: [String: Date] = [:]
+    private static var startTimes: [UInt64: Date] = [:]
 
     /// 标记一段区间的开始。返回配对的 signpostID，必须传给 end() 成对使用。
     static func begin(_ name: StaticString) -> OSSignpostID {
         let id = OSSignpostID(log: log)
         os_signpost(.begin, log: log, name: name, signpostID: id)
-        lock.lock(); startTimes["\(name)"] = Date(); lock.unlock()
+        lock.lock(); startTimes[id.rawValue] = Date(); lock.unlock()
         return id
     }
     /// 标记区间结束（与 begin 用同一 id 配对，Instruments 据此计算区间耗时）。
@@ -29,7 +29,7 @@ enum PerformanceTrace {
     static func end(_ name: StaticString, _ id: OSSignpostID) {
         os_signpost(.end, log: log, name: name, signpostID: id)
         let key = "\(name)"
-        lock.lock(); let t = startTimes.removeValue(forKey: key); lock.unlock()
+        lock.lock(); let t = startTimes.removeValue(forKey: id.rawValue); lock.unlock()
         guard let t else { return }
         let ms = Date().timeIntervalSince(t) * 1000
         if ms > 8000 { reportSlow(name: key, ms: ms) }
@@ -51,19 +51,8 @@ enum PerformanceTrace {
     /// P0-68 慢链路上报（fire-and-forget）：只上报"链路名称 + 耗时"，无任何用户数据/内容。
     static func reportSlow(name: String, ms: Double) {
         Task { @MainActor in
-            guard HostedAccount.isHostedActive, let token = HostedAccount.shared.token,
-                  let url = URL(string: AppConfig.hostedAPIBase + "/tool-event") else { return }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: [
-                "tool": "perf:\\(name)", "reason": "slow \\(Int(ms))ms",
-            ])
-            // 10-23 P3：性能事件上报走受限网络客户端，响应体限制 128KB
-            _ = try? await BoundedHTTPClient.data(for: req,
-                                                  session: BoundedHTTPClient.searchSession,
-                                                  limit: 128 * 1024)
+            DiagnosticQueue.shared.record(domain: "performance", stage: name, code: "SLOW_OPERATION",
+                fields: ["durationMs": String(Int(ms))])
         }
     }
 }

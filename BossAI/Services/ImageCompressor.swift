@@ -42,6 +42,43 @@ enum ImageCompressor {
         cloudEdge = nil; cloudQuality = nil
     }
 
+    /// Combine ordered previews into numbered sheets while keeping the stored attachments intact.
+    static func referenceSheets(_ inputs: [Data]) -> [Data]? {
+        guard !inputs.isEmpty, inputs.count <= ImageReferenceResolver.maxAttachments else { return nil }
+        let previews = inputs.compactMap { input -> UIImage? in
+            guard let jpeg = compressedData(from: input) else { return nil }
+            return UIImage(data: jpeg)
+        }
+        guard previews.count == inputs.count else { return nil }
+        var output: [Data] = []
+        for start in stride(from: 0, to: previews.count, by: 8) {
+            let batch = Array(previews[start..<min(start + 8, previews.count)])
+            let cell = CGSize(width: 384, height: 310)
+            let size = CGSize(width: cell.width * 2, height: cell.height * CGFloat((batch.count + 1) / 2))
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.opaque = true
+            let bitmap = UIGraphicsImageRenderer(size: size, format: format).image { renderer in
+                UIColor.white.setFill()
+                renderer.fill(CGRect(origin: .zero, size: size))
+                for (index, image) in batch.enumerated() {
+                    let x = CGFloat(index % 2) * cell.width
+                    let y = CGFloat(index / 2) * cell.height
+                    let scale = min((cell.width - 24) / image.size.width, (cell.height - 46) / image.size.height)
+                    let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    image.draw(in: CGRect(x: x + (cell.width - target.width) / 2, y: y + 30,
+                                          width: target.width, height: target.height))
+                    NSString(string: "REF \(start + index + 1)").draw(at: CGPoint(x: x + 12, y: y + 7),
+                        withAttributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 18, weight: .semibold),
+                                         .foregroundColor: UIColor.black])
+                }
+            }
+            guard let data = bitmap.jpegData(compressionQuality: 0.83), data.count <= maxBytes else { return nil }
+            output.append(data)
+        }
+        return output
+    }
+
     /// 生效的长边（云端优先，否则内置默认）
     static var effectiveMaxEdge: CGFloat {
         lock.lock(); defer { lock.unlock() }

@@ -89,7 +89,40 @@ enum FriendlyError {
         (json?["requestId"] as? String) ?? ""
     }
 
+    /// 服务端错误码 → 固定中文文案（单一事实源）。
+    ///
+    /// 为什么集中在这：错误码此前只有 `HostedError` 一处能翻译，流内错误帧走的是另一条路
+    /// （直接把字典 dump 成字符串），于是同一家服务端的同一个 `UPSTREAM_ERROR`，
+    /// 在登录/额度路径上是中文，在流式对话里就变成一串 `\U8fd9\U6b21...` 转义。
+    /// 现在所有「只有 code、没有中文 message」的场景都查这张表。
+    ///
+    /// 返回 nil = 这张表不认识该码，调用方自己决定兜底。
+    static func copy(forCode code: String) -> String? {
+        switch code {
+        case "BAD_CREDENTIALS": return "账号或密码不正确"
+        case "ACCOUNT_SUSPENDED": return "该账号已停用，请联系客服"
+        case "MEMBERSHIP_EXPIRED": return "会员已到期，请联系续费"
+        case "QUOTA_EXCEEDED": return "近期使用量较高，请稍后再试"
+        case "POOL_EXHAUSTED": return "本月额度已用完，续费后立即恢复"
+        case "UPSTREAM_NOT_CONFIGURED": return "服务暂未就绪，请联系管理员"
+        case "UPSTREAM_ERROR", "UPSTREAM_TIMEOUT": return "模型服务暂时不可用，请稍后重试"
+        case "RATE_LIMITED": return "操作太频繁了，请稍等一会儿再试"
+        case "SESSION_REPLACED": return "账号已在其他设备登录，请重新登录"
+        case "UNAUTHORIZED": return "登录状态已失效，请重新登录后再试"
+        default: return nil
+        }
+    }
+
     static func message(for error: Error, scene: Scene = .generic) -> String {
+        // Structured business failures already carry server-filtered public copy.
+        if let envelope = (error as? APIErrorCarrying)?.envelope {
+            return envelope.message
+        }
+        // 自带已脱敏文案的错误（ChatError / HostedError…）直接用，不再猜
+        if let friendly = error as? any UserFacingError {
+            let text = friendly.userFacingMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return text }
+        }
         // 第一层：网络类错误按 URLError 细分，给最贴切的行动建议
         if let urlError = error as? URLError {
             switch urlError.code {

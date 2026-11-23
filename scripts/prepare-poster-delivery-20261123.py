@@ -14,14 +14,23 @@ def decoded(data):
     return data.decode('utf-8').replace('\r\n', '\n')
 
 
-def replace_slice(online, local, start, end):
-    left, old_tail = online.split(start, 1)
-    local_left, new_tail = local.split(start, 1)
-    _, right = old_tail.split(end, 1)
-    middle, local_right = new_tail.split(end, 1)
-    if left != local_left or right != local_right:
-        raise ValueError(f'Unexpected changes outside {start}')
-    return left + start + middle + end + right
+def reviewed_slice(source, start, end):
+    left, tail = source.split(start, 1)
+    middle, right = tail.split(end, 1)
+    return left, start + middle, end + right
+
+
+def api_index(online, local):
+    for start, end in [
+        ('    if (!REFERENCE_CONTRACT_CODES.has(code))', '    logSafe({ tag: "image_contract_recovered"'),
+        ('      // 缓冲里是工具调用标签', '      streamCompleted = true;'),
+    ]:
+        left, _, right = reviewed_slice(online, start, end)
+        _, reviewed, _ = reviewed_slice(local, start, end)
+        online = left + reviewed + right
+    if online != local:
+        raise ValueError('Unexpected API index change outside reviewed branches')
+    return online
 
 
 def image_index(online, local):
@@ -52,8 +61,10 @@ for function in ('bf-api', 'bf-image'):
         files = {'shared/poster-delivery.js': local('shared/poster-delivery.js')}
         if function == 'bf-api':
             files['intent-contract.js'] = local('intent-contract.js')
-            files['index.js'] = replace_slice(archived('index.js'), local('index.js'),
-                '      // 缓冲里是工具调用标签', '      streamCompleted = true;')
+            files['tool-tag-parser.js'] = local('tool-tag-parser.js')
+            files['index.js'] = api_index(archived('index.js'), local('index.js'))
+            files['domains/foundation.js'] = local('domains/foundation.js')
+            files['image-series-reference-guidance.js'] = local('image-series-reference-guidance.js')
             source = archived('shared/image-delivery.js')
             normalizer = local('shared/image-delivery.js')
             for anchor, next_line in (
@@ -66,6 +77,7 @@ for function in ('bf-api', 'bf-image'):
             files['shared/image-delivery.js'] = source
         else:
             files['index.js'] = image_index(archived('index.js'), local('index.js'))
+            files['shared/poster-reformat.js'] = local('shared/poster-reformat.js')
     mapping = {}
     for name, content in files.items():
         dest = OUT / 'reviewed-changes' / function / name

@@ -115,7 +115,7 @@ final class ConversationDeletionTests: XCTestCase {
     }
 
     /// 永久失败不会无限重试：达到上限自动出队
-    func testRetryCapDropsAfterMaxAttempts() throws {
+    func testRecoverableFailuresNeverDiscardDeletionIntent() throws {
         let context = try makeContext()
         let conv = try seedConversation(in: context, messageCount: 1)
         let id = conv.id
@@ -125,9 +125,8 @@ final class ConversationDeletionTests: XCTestCase {
             XCTAssertFalse(ConversationDeletion.recordRetryFailure(id),
                            "第 \(attempt) 次失败后不应放弃")
         }
-        XCTAssertTrue(ConversationDeletion.recordRetryFailure(id),
-                      "达到上限必须放弃，不能无限刷云端")
-        XCTAssertFalse(ConversationDeletion.isPendingDelete(id))
+        XCTAssertFalse(ConversationDeletion.recordRetryFailure(id))
+        XCTAssertTrue(ConversationDeletion.isPendingDelete(id), "离线重试次数不能让已删会话复活")
     }
 
     func testAttemptsAreRecorded() throws {
@@ -148,7 +147,7 @@ final class ConversationDeletionTests: XCTestCase {
         let id = conv.id
         XCTAssertTrue(ConversationDeletion.delete(conv, context: context))
         ConversationDeletion.dropFromOutbox(id)
-        XCTAssertFalse(ConversationDeletion.isPendingDelete(id))
+        XCTAssertTrue(ConversationDeletion.isPendingDelete(id), "旧队列放弃后，V2 持久化墓碑仍保护用户删除意图")
         // 本地已经是物理删除，云端没删成——所以下次 pull 若推回来仍要再删一次
         // （isPendingDelete 为 false 时由「云端墓碑」分支兜底；这里只锁住"出队"这一动作）
         XCTAssertTrue(try context.fetch(FetchDescriptor<Conversation>()).isEmpty)

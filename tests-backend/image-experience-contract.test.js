@@ -55,19 +55,20 @@ test("IMG-02 旧占位与旧文案已清理（无 prompt 前缀、无施工进�
     "旧粒子占位组件仍在仓库里");
 });
 
-test("IMG-03 等待态只有一个轻量组件，支持 Reduce Motion，无 Canvas/TimelineView", () => {
+test("IMG-03 C版等待使用统一组件，限制帧率并支持后台/低电量/减少动态", () => {
   assert.match(CHATVIEW, /ImageWaitingRow\(state: wait\)/, "ChatView 未使用统一的轻量等待组件");
   assert.match(WAITROW, /accessibilityReduceMotion/, "未处理 Reduce Motion");
   assert.match(WAITROW, /isLowPowerModeEnabled/, "未处理低电量模式");
-  assert.doesNotMatch(WAITROW, /Canvas|TimelineView/, "等待组件里仍有画布/时间轴动画");
+  assert.match(WAITROW, /minimumInterval: 1\.0 \/ 30/);
+  assert.match(WAITROW, /paused: isStill \|\| !visible \|\| scenePhase != \.active/);
   assert.doesNotMatch(WAITROW, /repeatForever[\s\S]{0,40}TimelineView/);
   // 文案唯一来源
   assert.match(STATUS, /case \.generate:\s*return "正在生成图片"/);
   assert.match(STATUS, /case \.edit:\s*return "正在处理图片"/);
   assert.match(STATUS, /case \.textOverlay:\s*return "正在整理图片"/);
   assert.match(STATUS, /static let doneText = "图片已生成"/);
-  assert.match(STATUS, /case \.generateFailed: return "图片生成失败，请重试"/);
-  assert.match(STATUS, /case \.aspectMismatch: return "原图无法完整保留，请重新选择比例"/);
+  assert.match(STATUS, /case \.generateFailed: return "这次图片没有生成成功/);
+  assert.match(STATUS, /case \.aspectMismatch: return "生成结果的画布比例与要求不同/);
 });
 
 test("IMG-04 编辑任务比例只认用户原话，模型自带 aspect_ratio 不算授权", () => {
@@ -126,5 +127,5 @@ test("IMG-08 文字密集任务：底图禁字 + 只由程序排版一次 + 失�
 test("IMG-09 工具回注不诱导模型长篇解释（不再需要模型转述失败原因）", () => {
   assert.match(PIPELINE, /禁止建议用户「去 Canva \/ 用 PPT/, "失败回注未禁止把任务推回给用户");
   assert.match(PIPELINE, /禁止向用户解释技术原因、字段名、模型名、比例参数、requestId/);
-  assert.match(PIPELINE, /给用户的回复只允许一句话/);
+  assert.match(PIPELINE, /只根据已确认的错误类别给出下一步/);
 });

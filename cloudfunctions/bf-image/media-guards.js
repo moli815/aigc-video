@@ -62,8 +62,8 @@ function safeFetchURL(raw) {
 }
 
 // ── 请求尺寸上限 ──
-const SIZE_MIN_EDGE = 512;
-const SIZE_MAX_EDGE = 4096;
+const SIZE_MIN_EDGE = 64;
+const SIZE_MAX_EDGE = 8192;
 /**
  * 10-24 实测修正：火山 Seedream 的硬性要求是 **总像素 ≥ 921600**（约 960×960）。
  * 实测 512×512 会直接返回 400 InvalidParameter：
@@ -80,7 +80,7 @@ function clampExplicitSize(raw) {
   const m = String(raw || "").match(/^(\d+)\s*[xX×]\s*(\d+)$/);
   if (!m) return null;
   let w = Number(m[1]), h = Number(m[2]);
-  if (!(w > 0 && h > 0)) return null;
+  if (!Number.isSafeInteger(w) || !Number.isSafeInteger(h) || !(w > 0 && h > 0) || w / h < 1 / 16 || w / h > 16) return null;
   if (w < SIZE_MIN_EDGE || h < SIZE_MIN_EDGE || w > SIZE_MAX_EDGE || h > SIZE_MAX_EDGE) return null;
 
   // 低于上游像素下限：等比放大（用户要 512×512 就给 960×960，而不是报错）

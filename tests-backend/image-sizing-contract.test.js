@@ -26,7 +26,16 @@ test("explicit pixel dimensions win over an incompatible aspect hint", () => {
 });
 
 test("unrepresentable aspect ratios fail closed instead of silently becoming square", () => {
-  assert.equal(resolveImageSize("1.5K", "1:16"), null);
+  assert.equal(resolveImageSize("1.5K", "1:17"), null);
+});
+
+test("ultrawide and ultratall canvases retain 9:1 with a bounded pixel budget", () => {
+  for (const ratio of ["9:1", "1:9", "16:1", "1:16"]) {
+    const expected = ratio.split(":").map(Number).reduce((a,b) => a / b);
+    const result = dimensions(resolveImageSize("2K", ratio));
+    assert.ok(Math.abs(result.ratio / expected - 1) < 0.03);
+    assert.ok(result.pixels >= 921600 && result.pixels <= 4622220);
+  }
 });
 
 test("malformed explicit aspect ratios fail closed instead of silently using the default tier", () => {

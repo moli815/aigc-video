@@ -1,7 +1,7 @@
 /**
  * 管理端配置页静态契约测试（node --test）
  *
- * 管理端是单文件静态页，没有前端构建/测试框架。这里用源码级断言锁住
+ * 管理端由静态 HTML 与外部管理台脚本组成。这里用源码级断言锁住
  * 本次重构的关键行为，防止回退：
  *   · 不再在前端重复维护 CFG_GROUPS（分组由后端下发）
  *   · 保存只在当前分区容器内读取输入（旧版全页 querySelector 会读错分组的同名字段）
@@ -14,6 +14,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const html = fs.readFileSync(path.join(__dirname, "../web/admin.html"), "utf8");
+const consoleScript = fs.readFileSync(path.join(__dirname, "../web/admin-console-20261029.js"), "utf8");
 
 test("前端不再声明 CFG_GROUPS，分组改由后端下发", () => {
   assert.ok(!/var\s+CFG_GROUPS\s*=/.test(html), "CFG_GROUPS 已废弃，分组必须来自 /admin/settings");
@@ -41,7 +42,9 @@ test("只提交变更字段 + 乐观并发", () => {
 });
 
 test("渲染分组说明、来源与高风险提示", () => {
-  assert.ok(/sec\.desc/.test(html), "分组 desc 必须展示");
+  assert.match(html, /<script\b[^>]*\bsrc="admin-console-20261029\.js(?:\?[^\"]*)?"/, "配置页必须加载管理台脚本");
+  assert.match(html, /function renderSettings\(\)\{renderFocusedSettings\(\);\}/, "配置渲染必须调用外部管理台实现");
+  assert.ok(/esc\(sec\.desc\)/.test(consoleScript), "分组 desc 必须经过转义后展示");
   assert.ok(/fmtSource/.test(html), "缺少生效来源展示");
   assert.ok(/高风险/.test(html), "高风险配置需要有提示");
 });

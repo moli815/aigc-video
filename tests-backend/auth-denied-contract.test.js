@@ -49,21 +49,24 @@ test("DENY-03 401/403 必须透传，不能折叠成「额度不可用」", () =
   assert.match(body, /unavailable: true, reason: "auth-unavailable"/, "5xx 兜底被改动（会变成免费出图）");
 });
 
-test("DENY-04 三个作图入口都要先判 denied 再判 unavailable", () => {
-  const hits = (IMG.match(/if \(q\.denied\) return sendDenied\(q, send\);/g) || []).length;
-  assert.equal(hits, 3, "作图/组图/编辑三个入口的 denied 分支数量不对（应为 3）");
-  // 顺序：denied 必须在 unavailable 之前
-  const deniedIdx = IMG.indexOf("if (q.denied) return sendDenied(q, send);");
-  const unavailIdx = IMG.indexOf("if (q.unavailable) {");
-  assert.ok(deniedIdx > 0 && deniedIdx < unavailIdx + 4000, "denied 分支位置异常");
+test("DENY-04 所有付费作图入口共用同一个会员与额度门禁", () => {
+  for (const route of ["/series/start", "/series/step", "/series/retry", "/image"]) {
+    const start = IMG.indexOf(`u.indexOf("${route}")`);
+    assert.ok(start > 0, `缺少 ${route}`);
+    assert.match(IMG.slice(start, start + 4500), /paidImageGate\(req\)/, `${route} 未接入统一门禁`);
+  }
+  const gate = require("../cloudfunctions/bf-image/image-execution-gate");
+  assert.equal(gate.quotaDenial({ denied: 401 }).status, 401);
+  assert.equal(gate.quotaDenial({ denied: 403 }).status, 403);
+  assert.equal(gate.quotaDenial({ unavailable: true }).status, 503);
+  assert.equal(gate.quotaDenial({ exhausted: true }).status, 429);
 });
 
-test("DENY-05 sendDenied 的文案与 actions 要能直接用", () => {
-  const start = IMG.indexOf("function sendDenied");
-  assert.ok(start > 0, "缺少 sendDenied");
-  const body = IMG.slice(start, start + 900);
-  assert.match(body, /actions: q\.denied === 401 \? \["relogin"\] : \["renew"\]/, "actions 映射不对");
-  assert.match(body, /会员已到期，请联系续费/, "缺少到期文案");
-  assert.match(body, /该账号已停用，请联系客服/, "缺少停用文案");
-  assert.match(body, /requestId: currentRequestId\(\)/, "拒绝响应缺少 requestId（无法排查）");
+test("DENY-05 门禁文案、actions 与 requestId 可直接使用", () => {
+  const { quotaDenial } = require("../cloudfunctions/bf-image/image-execution-gate");
+  assert.deepEqual(quotaDenial({ denied: 401 }).body.actions, ["relogin"]);
+  assert.deepEqual(quotaDenial({ denied: 403 }).body.actions, ["renew"]);
+  assert.match(quotaDenial({ denied: 403, code: "MEMBERSHIP_EXPIRED" }).body.msg, /会员已到期/);
+  assert.match(quotaDenial({ denied: 403, code: "ACCOUNT_SUSPENDED" }).body.msg, /已停用/);
+  assert.match(IMG, /requestId: currentRequestId\(\)/, "拒绝响应缺少 requestId（无法排查）");
 });

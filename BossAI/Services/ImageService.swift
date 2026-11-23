@@ -28,6 +28,8 @@ import Foundation
 enum ImageTextMode: String { case native, overlay }
 
 struct ImageRequestContext {
+    /// Stable for transport retries. A changed generation intent creates a new instance/ID.
+    let requestId: String
     let prompt: String
     let references: [Data]
     let taskKind: String
@@ -39,6 +41,10 @@ struct ImageRequestContext {
     /// 图层拆分任务（image_decompose）：漏传会退化成普通生图
     let layerDecomposition: Bool
     let textMode: ImageTextMode
+    /// 多图输入的角色标注（与 references 一一对应），例 ["底图","人物照片"]。
+    /// 服务端据此在 prompt 前拼「图1=底图、图2=人物照片」——没有这段标注，
+    /// 两张图同时到达模型也会被搞混，等于白传。
+    let referenceRoles: [String]
 
     /// 10-25 几何保护：显式像素尺寸（"1200x800"）。
     /// 有值时请求走 size 字段，精确保留来源画布比例；服务端再按该尺寸请求模型。
@@ -48,7 +54,9 @@ struct ImageRequestContext {
     init(prompt: String, references: [Data], taskKind: String, qualityTier: String,
          requestedCount: Int?, aspectRatio: String, renderIntent: String,
          structured: [String: Any]?, layerDecomposition: Bool,
-         targetSize: String? = nil, textMode: ImageTextMode = .native) {
+         targetSize: String? = nil, textMode: ImageTextMode = .native,
+         referenceRoles: [String] = [], requestId: String = UUID().uuidString) {
+        self.requestId = requestId
         self.prompt = prompt
         self.references = references
         self.taskKind = taskKind
@@ -60,6 +68,7 @@ struct ImageRequestContext {
         self.layerDecomposition = layerDecomposition
         self.targetSize = targetSize
         self.textMode = textMode
+        self.referenceRoles = referenceRoles
     }
 
     /// 派生：追加提示词后缀（`prompt` 是 let，不能原地赋值；必须新建实例）
@@ -73,7 +82,7 @@ struct ImageRequestContext {
                             renderIntent: renderIntent,
                             structured: structured,
                             layerDecomposition: layerDecomposition,
-                            targetSize: targetSize, textMode: textMode)
+                            targetSize: targetSize, textMode: textMode, referenceRoles: referenceRoles)
     }
 
     /// Builds a text-free background request: remove exact display copy from both prompt
@@ -106,7 +115,7 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: visualFields.isEmpty ? nil : visualFields,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize, textMode: .overlay)
+                                   targetSize: targetSize, textMode: .overlay, referenceRoles: referenceRoles)
     }
 
     private static func removingVisibleCopy(_ value: Any, values: [String]) -> Any {
@@ -136,11 +145,12 @@ struct ImageRequestContext {
                                    renderIntent: renderIntent,
                                    structured: structured,
                                    layerDecomposition: layerDecomposition,
-                                   targetSize: targetSize, textMode: textMode)
+                                   targetSize: targetSize, textMode: textMode, referenceRoles: referenceRoles)
     }
 }
 
 final class ImageService {
+    var usesHostedIdempotency: Bool { profile.id == "hosted" }
     /// 生图相关错误的统一封装（errorDescription 均为用户可读中文）。
     enum ImageError: LocalizedError, APIErrorCarrying {
         case missingKey
@@ -247,6 +257,10 @@ final class ImageService {
         putReq.httpMethod = "PUT"
         putReq.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
         if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Authorization") }
+        if let auth = credJSON["authorization"] as? String { putReq.setValue(auth, forHTTPHeaderField: "Signature") }
+        if let cloudPath = credJSON["cloudPath"] as? String { putReq.setValue(cloudPath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), forHTTPHeaderField: "key") }
+        if let fileId = credJSON["cosFileId"] as? String { putReq.setValue(fileId, forHTTPHeaderField: "x-cos-meta-fileid") }
+        putReq.setValue("private", forHTTPHeaderField: "x-cos-acl")
         if let cosToken = credJSON["token"] as? String { putReq.setValue(cosToken, forHTTPHeaderField: "x-cos-security-token") }
         putReq.httpBody = data
         guard let (_, putResp) = try? await BoundedHTTPClient.data(for: putReq,
@@ -286,11 +300,13 @@ final class ImageService {
                              qualityTier: String?,
                              requestedCount: Int?,
                              targetSize: String? = nil,
-                             textMode: String? = nil) async throws -> URLRequest {
+                             textMode: String? = nil,
+                             referenceRoles: [String] = []) async throws -> URLRequest {
+        let session = profile.id == "hosted" ? await MainActor.run { CloudSession.capture() } : nil
         let apiKey: String
         if profile.id == "hosted" {
-            guard let t = HostedAccount.currentToken, !t.isEmpty else { throw ImageError.missingKey }
-            apiKey = t
+            guard let session else { throw ImageError.missingKey }
+            apiKey = session.token
         } else {
             guard let k = apiKeyProvider(), !k.isEmpty else { throw ImageError.missingKey }
             apiKey = k
@@ -330,7 +346,8 @@ final class ImageService {
                                                        renderIntent: renderIntent, aspectRatio: aspectRatio,
                                                        taskKind: taskKind, qualityTier: qualityTier,
                                                        requestedCount: requestedCount, targetSize: targetSize,
-                                                       textMode: textMode)
+                                                       textMode: textMode,
+                                                       referenceRoles: references.count > 1 ? referenceRoles : nil)
         } else {
             switch profile.style {
             case .volc:
@@ -357,8 +374,13 @@ final class ImageService {
             if !references.isEmpty {
                 var uris: [String] = []
                 for ref in references {
-                    if profile.id == "hosted", let u = await Self.uploadForHosted(ref) {
-                        uris.append(u)
+                    if let session {
+                        let asset = try await CloudAssetStore.upload(ref, mime: CloudAssetStore.contentType(ref), session: session)
+                        let signed = try await session.request("/assets/urls", method: "POST", body: ["ids": [asset.id]])
+                        guard let rows = signed["items"] as? [[String: Any]],
+                              let url = rows.first?["url"] as? String,
+                              let parsed = URL(string: url), CloudAssetStore.allowed(parsed) else { throw ImageError.noImage }
+                        uris.append(url)
                     } else {
                         let mime = ref.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
                         uris.append("data:\(mime);base64,\(ref.base64EncodedString())")
@@ -370,12 +392,21 @@ final class ImageService {
             break
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let session { try await session.validate() }
         return request
+    }
+
+    private func validateSession(for request: URLRequest) async throws {
+        try Task.checkCancellation()
+        guard profile.id == "hosted" else { return }
+        let token = await MainActor.run { HostedAccount.shared.token }
+        guard let token, request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)" else {
+            throw CancellationError()
+        }
     }
 
     /// 非 200 响应 → 结构化错误（hosted 模式解析信封；BYOK 脱敏展示）
     private func error(from data: Data, response: HTTPURLResponse) -> ImageError {
-        let bodyText = String(data: data, encoding: .utf8) ?? ""
         if profile.id == "hosted",
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             // 409 + IN_PROGRESS：不是错误，是"还在生成"。必须在信封解析前拦下，
@@ -395,7 +426,7 @@ final class ImageService {
         }
         return .badResponse(
             response.statusCode,
-            "服务商响应异常（\(response.statusCode)），请稍后重试。\(String(bodyText.suffix(200)))"
+            "作图服务暂时没有完成这次请求（\(response.statusCode)），请稍后重试。"
         )
     }
 
@@ -412,14 +443,15 @@ final class ImageService {
     // MARK: - 单图（保持原契约，旧调用点零改动）
 
     /// 执行单图请求；reference 可用于整体重设计，edit 才表示局部编辑。返回图片二进制。
-    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil) async throws -> Data {
+    func generate(prompt: String, references: [Data] = [], structured: [String: Any]? = nil, requestId: String? = nil, layerDecomposition: Bool = false, renderIntent: String? = nil, aspectRatio: String? = nil, taskKind: String? = nil, qualityTier: String? = nil, requestedCount: Int? = nil, targetSize: String? = nil, textMode: String? = nil, referenceRoles: [String] = []) async throws -> Data {
         let request = try await makeRequest(prompt: prompt, references: references, structured: structured,
                                             requestId: requestId, layerDecomposition: layerDecomposition,
                                             renderIntent: renderIntent, aspectRatio: aspectRatio,
                                             taskKind: taskKind, qualityTier: qualityTier,
                                             requestedCount: requestedCount, targetSize: targetSize,
-                                            textMode: textMode)
+                                            textMode: textMode, referenceRoles: referenceRoles)
         let (data, response) = try await BoundedHTTPClient.data(for: request, session: BoundedHTTPClient.imageSession, limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -431,7 +463,9 @@ final class ImageService {
             throw ImageError.noImage
         }
         if let urlString = json["url"] as? String {
-            return try await Self.downloadImage(urlString)
+            let image = try await Self.downloadImage(urlString)
+            try await validateSession(for: request)
+            return image
         }
         if let b64 = json["b64_json"] as? String, let img = Data(base64Encoded: b64), img.count <= 32 * 1024 * 1024 {
             return img
@@ -443,7 +477,9 @@ final class ImageService {
             return img
         }
         if let urlString = first["url"] as? String {
-            return try await Self.downloadImage(urlString)
+            let image = try await Self.downloadImage(urlString)
+            try await validateSession(for: request)
+            return image
         }
         throw ImageError.noImage
     }
@@ -534,6 +570,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -711,6 +748,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -736,6 +774,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {
@@ -762,6 +801,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             throw error(from: data, response: response)
         }
@@ -780,6 +820,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.chatSession,
                                                                 limit: 2 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 { throw error(from: data, response: response) }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ImageError.noImage
@@ -836,6 +877,7 @@ final class ImageService {
         let (data, response) = try await BoundedHTTPClient.data(for: request,
                                                                 session: BoundedHTTPClient.imageSession,
                                                                 limit: 48 * 1024 * 1024)
+        try await validateSession(for: request)
         if response.statusCode != 200 {
             let err = error(from: data, response: response)
             if err.isSessionFailure {

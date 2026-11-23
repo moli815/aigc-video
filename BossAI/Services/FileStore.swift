@@ -132,12 +132,17 @@ enum FileStore {
     static func storeAsync(data: Data, filename: String, kind: FileKind,
                            category: FileCategory? = nil, sourceConversationId: String = "",
                            textContent: String = "", context: ModelContext) async throws -> StoredFile {
+        let ownerAtStart = HostedAccount.scopeKey
         let ext = (filename as NSString).pathExtension.lowercased()
         // 磁盘名 UUID 化，与同步版 store 保持一致
         let storedName = "\(UUID().uuidString).\(ext.isEmpty ? "dat" : ext)"
         let directory = rootURL
         let destination = directory.appendingPathComponent(storedName)
         try await FileIOWorker.shared.write(data, to: destination, directory: directory)
+        guard !Task.isCancelled, HostedAccount.scopeKey == ownerAtStart else {
+            await FileIOWorker.shared.remove(destination)
+            throw CancellationError()
+        }
         // 防谎报（P0-21）：写盘后立即回读验证——文件不存在或字节数不符视为写盘失败，
         // 绝不写库、绝不向上层返回"已导出"。此前对话中出现过 AI 说"文件已生成"
         // 但实际没有落盘的情况，根因就是写盘成功与否从未被验证。
@@ -150,6 +155,7 @@ enum FileStore {
         let record = StoredFile(name: filename, ext: ext, storedName: storedName, kind: kind,
                                 category: category ?? FileCategory.from(ext: ext), byteCount: data.count,
                                 sourceConversationId: sourceConversationId, textContent: textContent)
+        record.ownerKey = ownerAtStart
         do {
             try Task.checkCancellation()
             context.insert(record)
@@ -167,6 +173,9 @@ enum FileStore {
     /// 10-23 P2：失败行为改为"手动恢复文件 + 清理日志"，避免对共享 ModelContext 调用宽泛 rollback()
     ///（rollback 会丢弃调用方在同一上下文上的所有未保存修改）。
     static func delete(_ file: StoredFile, context: ModelContext) throws {
+        let fileID = file.id
+        let fileOwner = file.ownerKey
+        // A durable tombstone must exist before deleting the last local metadata row.
         let path = url(for: file)
         let fileName = path.lastPathComponent
         // 隔离名：删除期间文件改姓改名，等库保存成功才真正移除
@@ -183,12 +192,19 @@ enum FileStore {
         if exists { try FileManager.default.moveItem(at: path, to: quarantine) }
 
         // 3) 删除数据库记录并保存
+        do { try SyncV2Engine.enqueueDeletion(kind: "file", id: fileID, owner: fileOwner) }
+        catch {
+            if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
+            try? FileManager.default.removeItem(at: journalURL)
+            throw error
+        }
         context.delete(file)
         do { try context.save() }
         catch {
             // 保存失败：撤销隔离（文件移回原位），清理日志，但不 rollback 整个上下文
             if exists { try? FileManager.default.moveItem(at: quarantine, to: path) }
             try? FileManager.default.removeItem(at: journalURL)
+            SyncV2Engine.cancelDeletion(kind: "file", id: fileID, owner: fileOwner)
             throw error
         }
 

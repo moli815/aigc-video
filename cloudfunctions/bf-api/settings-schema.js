@@ -9,6 +9,9 @@
  * 前端只负责渲染，后端保存时用同一份规则重新校验（不信任前端）。
  */
 
+const { policyError: deliveryPolicyError } = require("./expert-delivery-arbitration");
+const { stylePolicyError } = require("./response-behavior");
+
 // ── 分区（管理员视角的业务分类，不按代码变量名分）──
 const SECTIONS = [
   { id: "model_provider", title: "模型与服务商", desc: "对话/生图/向量用哪个平台、哪个模型、走哪个端点。换平台只改这里，App 无需发版。" },
@@ -27,18 +30,22 @@ const SECTION_OF = {
     "CHAT_MODEL_STANDARD", "CHAT_MODEL_HIGH", "CHAT_MODEL_ULTRA", "CHAT_MODEL_PRO",
     "CHAT_MODEL_UTILITY", "CHAT_MODEL_UTILITY_LITE", "CHAT_MODEL_VISION", "CHAT_THINKING_STYLE",
     "IMAGE_PROVIDER", "IMAGE_MODEL", "IMAGE_MODEL_FAST", "IMAGE_MODEL_PRO", "IMAGE_MODEL_SERIES",
-    "IMAGE_ROUTING_MODE", "EMBED_MODEL",
+    "IMAGE_ROUTING_MODE", "IMAGE_AUTO_POLICY", "IMAGE_LEGACY_BRAND_POLICY", "IMAGE_COMPOSITION_POLICY", "IMAGE_MIXED_REFERENCES_POLICY", "IMAGE_COPY_REVIEW", "EMBED_MODEL",
     "IMAGE_SIZES",
   ],
   generation: [
     "APP_CHAT_TIMEOUT", "APP_CHAT_FIRST_TOKEN_TIMEOUT", "APP_IMAGE_TIMEOUT",
     "APP_STREAM_RETRY", "APP_IMAGE_RETRY", "APP_IMAGE_VERIFY",
+    "APP_LOGO_CUTOUT", "APP_LOGO_CUTOUT_BEST_EFFORT", "APP_LOGO_CUTOUT_TOLERANCE", "APP_LOGO_CUTOUT_MAX_EDGE",
+    "APP_GENERATED_PREVIEW_ENABLED", "APP_GENERATED_PREVIEW_EDGE",
+    "APP_IMAGE_WAIT_PARTICLES", "APP_IMAGE_WAIT_PARTICLE_COUNT", "APP_IMAGE_WAIT_CYCLE",
     "IMAGE_FAST_MODE", "IMAGE_SIZE", "IMAGE_PRICE_FAST",
     "IMAGE_MAX_EDGE", "IMAGE_QUALITY", "IMAGE_MAX_PIXELS", "IMAGE_2K_PIXELS",
     "IMGPROG_STAGE1", "IMGPROG_STAGE2", "IMGPROG_STAGE3", "IMGPROG_ETA",
   ],
-  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES"],
+  context_rules: ["CTX_COMPACT_TOKENS", "CTX_KEEP_MESSAGES", "META_RULE", "CHAT_RULES", "CHAT_STYLE_POLICY", "CHAT_GROUNDED_REVIEW", "CHAT_DELIVERY_ARBITRATION", "CAPABILITY_OVERRIDES", "CAPABILITY_EXTRA"],
   membership_cost: [
+    "MODEL_COST_RATES", "USAGE_BILLING_MODE", "USAGE_COST_MULTIPLIER",
     "CHAT_PRICE_IN", "CHAT_PRICE_OUT", "CHAT_PRICE_STANDARD_IN", "CHAT_PRICE_STANDARD_OUT",
     "CHAT_PRICE_HIGH_IN", "CHAT_PRICE_HIGH_OUT", "CHAT_PRICE_ULTRA_IN", "CHAT_PRICE_ULTRA_OUT",
     "CHAT_PRO_PRICE_IN", "CHAT_PRO_PRICE_OUT",
@@ -68,6 +75,18 @@ for (const [sid, keys] of Object.entries(SECTION_OF)) {
 // ── 字段级元数据（未声明的键走按类型推导的默认规则）──
 // widget: text | number | toggle | enum | textarea | password | json
 const META = {
+  CHAT_STYLE_POLICY: {title:"对话行为与表达策略",widget:"json",risk:"high",maxLength:10000,description:"task_v2 先消除旧包固定交付包装，再约束上下文、事实与表达。支持enabled、profile=task_v2、audience=accounts及accountIds灰度，instructions最多6000字符；默认关闭，不改变权限或模型路由。legacy旧候选尚未通过质量验收，不建议启用。"},
+  CHAT_GROUNDED_REVIEW: {title:"商务交付 · 独立审查",widget:"json",risk:"high",maxLength:10000,description:"商业成稿增加一次审查/修订；includeBusinessAdvice可覆盖商务建议，reasonBusinessAdvice仅为商务建议审稿开启实际思考。普通问答、JSON、工具任务和内部任务跳过。支持账号灰度、有界超时与token预算；额外调用分别记账。"},
+  CHAT_DELIVERY_ARBITRATION: {title:"本轮交付仲裁（默认关闭）",widget:"json",risk:"high",maxLength:4000,description:"压过旧 IPA 硬编码的「必须遵循的工作流／交付章节」，避免用户只要纯口播却被塞一整套策划。默认关闭；启用前必须完成真实模型 A/B 与人工逐条事实验收。支持 enabled、audience=all 或 accounts、accountIds（最多100个）。"},
+  CAPABILITY_OVERRIDES: {title:"客户端能力开关（/me 下发）",widget:"json",risk:"high",maxLength:6000,description:"此前客户端一直解析此键，但云端从不下发，P0-59 开关恒空。按工具 id 覆盖，例如 {\"image_series\":{\"enabled\":false}}。只接受 enabled 布尔与 limits 字符串数组，最多30项；留空对象不改变任何行为。"},
+  CAPABILITY_EXTRA: {title:"客户端能力补充说明",widget:"textarea",maxLength:2000,risk:"medium",description:"追加进系统提示的能力清单。此前云端从不下发；留空不影响旧客户端。"},
+  IMAGE_MIXED_REFERENCES_POLICY:{title:'单图 · 当前底图与历史原图混合',widget:'json',risk:'high',maxLength:6000,help:'保留当前底图并追加本账号已同步历史原图；支持enabled、audience=all或accountIds。精确Logo本地合成及当前附件组图仍走原流程。'},
+  USAGE_BILLING_MODE: {title:"额度计费依据",widget:"enum",enum:["legacy","supplier_cost"],risk:"high",
+    description:"supplier_cost 按实际用量×账单核验单价×倍数扣额度；未知成本挂待核账；legacy 仅回滚旧计价。"},
+  USAGE_COST_MULTIPLIER: {title:"供应商成本扣费倍数",widget:"number",min:1,max:10,step:.1,risk:"high",
+    description:"聊天及旧海报接口使用；图片服务对应 IMAGE_PRICE_MULTIPLIER，应保持一致。"},
+  MODEL_COST_RATES: {title:"人工核验供应商单价",widget:"json",risk:"high",
+    description:"按 provider:完整模型ID 配置 peak/offpeak 的 input/output/cachedInput（元/百万Token）；留空用财务账单单价目录。不要填会员售价。"},
   // 模型与服务商
   CHAT_PROVIDER: { title: "对话服务商平台", widget: "enum", enum: ["qwen", "deepseek", "doubao", "zhipu", "moonshot", "openai"], risk: "high",
     description: "决定对话请求发往哪家平台。换平台需同时确认端点与三档模型名，改完约 30 秒生效。" },
@@ -81,6 +100,15 @@ const META = {
     description: "逗号分隔的尺寸白名单，供模型选择；留空使用服务端默认。" },
 
   // 生成与性能
+  APP_LOGO_CUTOUT: { title: "Logo 自动去底", widget: "toggle", risk: "medium" },
+  APP_LOGO_CUTOUT_BEST_EFFORT: { title: "复杂背景尽力处理", widget: "toggle", risk: "medium" },
+  APP_LOGO_CUTOUT_TOLERANCE: { title: "纯色背景容差", widget: "number", min: 8, max: 80, step: 1, risk: "medium" },
+  APP_LOGO_CUTOUT_MAX_EDGE: { title: "抠图最大长边", widget: "number", min: 256, max: 2048, step: 1, risk: "low" },
+  APP_GENERATED_PREVIEW_ENABLED: { title: "编辑时提供一张生成图预览", widget: "toggle", risk: "medium" },
+  APP_GENERATED_PREVIEW_EDGE: { title: "生成图预览长边", widget: "number", min: 256, max: 1024, step: 1, risk: "low" },
+  APP_IMAGE_WAIT_PARTICLES: { title: "C版等待粒子", widget: "toggle", risk: "low" },
+  APP_IMAGE_WAIT_PARTICLE_COUNT: { title: "等待粒子数量", widget: "number", min: 60, max: 240, step: 10, risk: "low" },
+  APP_IMAGE_WAIT_CYCLE: { title: "聚散周期秒数", widget: "number", min: 3, max: 12, step: 0.1, risk: "low" },
   APP_CHAT_TIMEOUT: { title: "对话请求超时", widget: "number", min: 10, max: 600, step: 1, unit: "秒", risk: "high",
     description: "单次对话请求的整体超时。过小会频繁中断，过大会让用户长时间等待。" },
   APP_CHAT_FIRST_TOKEN_TIMEOUT: { title: "首包超时", widget: "number", min: 0, max: 600, step: 1, unit: "秒", risk: "high",
@@ -101,6 +129,14 @@ const META = {
     enum: ["auto", "flash_only", "pro_only"],
     enumLabels: { auto: "自动（按任务）", flash_only: "全部快速档", pro_only: "全部高质量档" },
     description: "运维止损用。flash_only 可在高质量模型故障时立刻把全站切到快速档；pro_only 用于临时提质量对比。" },
+  IMAGE_AUTO_POLICY: { title: "自动作图 · 升级策略 JSON", widget: "json", risk: "medium", maxLength: 6000,
+    description: "auto 普通任务用 Flash，高质量/复杂任务升 Pro，不强凑比例。honorUserQuality 尊重用户明确高质量要求；proPromptTerms 为缺少用户意图标记的旧请求提供关键词兜底。另可配置 defaultTier、honorClientHigh、proTaskKinds、proReasons（不要求有参考图）、minReferencesForPro、nativeTextCharsForPro、retryQualityToPro、capabilityFallback、fallbackCodes。旧客户端默认 high 不等于用户高质量要求；不因网络超时盲目重画。" },
+  IMAGE_LEGACY_BRAND_POLICY: { title: "旧包 Logo 规划 · 启用范围", widget: "json", risk: "medium", maxLength: 6000,
+    description: '全员启用：{"enabled":true,"audience":"all"}；指定账号：{"enabled":true,"accountIds":["内部ID"]}；关闭：{"enabled":false}。仅对手机已声明兼容工具的标识任务生效，原素材仍在手机合成。约30秒更新，不改变正在执行的任务。' },
+  IMAGE_COMPOSITION_POLICY: { title:"商业海报 · 准确文字排版",widget:"json",risk:"high",maxLength:6000,
+    description:'enabled启用准确排字；minChars为文字阈值；accountIds仅限定准确排字，省略全员；fonts配置私有字体及SHA256。workflowVersion=2为统一任务计划候选，workflowAccountIds独立限定新流程灰度，不能用accountIds误关客户原有排字；按image_plan选择原生设计/准确排字。未验收不要启用，旧请求和手机Logo合成保持原协议。' },
+  IMAGE_COPY_REVIEW: { title:"商业海报 · 文字资料校对",widget:"toggle",risk:"medium",
+    description:"复杂生成/重设计在出图前增加一次文字校对，核对当前资料、改口及术语，保留工具来源/比例/版式参数。产生额外对话调用，单次校对限时20秒。" },
   IMAGE_FAST_MODE: { title: "生图提速模式", widget: "toggle", risk: "medium",
     description: "开启=fast（更快）；关闭=standard（质量优先）。由 bf-image 实际读取。" },
   IMAGE_SIZE: { title: "生图默认尺寸", widget: "enum", enum: ["1K", "1.5K", "2K"], risk: "high",
@@ -251,7 +287,42 @@ function validateValue(key, raw, spec, meta) {
     if (sv.length > 20000) return { ok: false, reason: `${m.title || spec.label} 内容过大` };
     let parsed;
     try { parsed = JSON.parse(sv); } catch { return { ok: false, reason: `${m.title || spec.label} 不是合法 JSON` }; }
-    if (typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: `${m.title || spec.label} 必须是 JSON 对象` };
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: `${m.title || spec.label} 必须是 JSON 对象` };
+    if(key==="IMAGE_COMPOSITION_POLICY"){
+      if(Object.hasOwn(parsed,"workflowVersion")&&parsed.workflowVersion!==2)return {ok:false,reason:"新图片流程版本只能为2；移除workflowVersion可回到旧流程"};
+      if(Object.hasOwn(parsed,"workflowAccountIds")&&(!Array.isArray(parsed.workflowAccountIds)||parsed.workflowAccountIds.length>100||parsed.workflowAccountIds.some(x=>typeof x!=="string"||!x||x.length>128)))return {ok:false,reason:"新图片流程灰度账号必须是最多100项的账号数组，不影响原准确排字accountIds"};
+    }
+    if (key === "CHAT_STYLE_POLICY") {
+      const reason = stylePolicyError(parsed);
+      if (reason) return { ok: false, reason: "表达策略：" + reason };
+    }
+    if (key === "CHAT_GROUNDED_REVIEW") {
+      const allowed = ["enabled", "audience", "accountIds", "generationTimeoutMs", "reviewTimeoutMs", "maxGenerationTokens", "maxReviewTokens", "maxSourceChars", "includeBusinessAdvice", "reasonBusinessAdvice"];
+      const numeric = ["generationTimeoutMs", "reviewTimeoutMs", "maxGenerationTokens", "maxReviewTokens", "maxSourceChars"];
+      if (Object.keys(parsed).some(k => !allowed.includes(k)) || parsed.enabled != null && typeof parsed.enabled !== "boolean" ||
+          parsed.audience != null && !["all", "accounts"].includes(parsed.audience) ||
+          Object.hasOwn(parsed, "includeBusinessAdvice") && typeof parsed.includeBusinessAdvice !== "boolean" ||
+          Object.hasOwn(parsed, "reasonBusinessAdvice") && typeof parsed.reasonBusinessAdvice !== "boolean" ||
+          parsed.accountIds != null && (!Array.isArray(parsed.accountIds) || parsed.accountIds.length > 100 || parsed.accountIds.some(id => typeof id !== "string" || id.length > 128)) ||
+          numeric.some(k => parsed[k] != null && (!Number.isFinite(parsed[k]) || parsed[k] <= 0))) {
+        return { ok: false, reason: "事实审查配置包含无效字段、账号范围或预算" };
+      }
+    }
+    if (key === "CHAT_DELIVERY_ARBITRATION") {
+      const reason = deliveryPolicyError(parsed);
+      if (reason) return { ok: false, reason: "交付仲裁配置：" + reason };
+    }
+    if (key === "CAPABILITY_OVERRIDES") {
+      const entries = Object.entries(parsed);
+      if (entries.length > 30 || entries.some(([id, v]) =>
+          !/^[a-z0-9_]{2,40}$/.test(id) || !v || typeof v !== "object" || Array.isArray(v) ||
+          Object.keys(v).some(k => !["enabled", "limits"].includes(k)) ||
+          (v.enabled != null && typeof v.enabled !== "boolean") ||
+          (v.limits != null && (!Array.isArray(v.limits) || v.limits.length > 20 ||
+            v.limits.some(x => typeof x !== "string" || x.length > 200))))) {
+        return { ok: false, reason: "能力开关必须是合法工具 id 到 {enabled, limits} 的映射（最多30项）" };
+      }
+    }
     return { ok: true, value: sv };
   }
   // 普通字符串 / 长文本

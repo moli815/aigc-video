@@ -93,25 +93,23 @@ function classify(images, userText) {
  * 生成交付要求（只写约束，不写具体文案）
  */
 function buildRequirements({ roles, company, contact }) {
-  const lines = ["【交付要求】以下为硬性约束，逐条执行，不要解释、不要把要求本身画进画面："];
-  lines.push("1. 同一段文字在画面里只能出现一次，不得图标下一个标题、卡片里再写一遍；");
-  lines.push("2. 画面中不得出现「品牌名称」「公司名称」「待补充」「XXX」这类占位词；");
-  lines.push("3. 图片素材保持原始宽高比，禁止拉伸变形（圆不能变椭圆，方不能变长条）；");
-  lines.push("4. 画布比例必须与 aspect_ratio 完全一致，不要自行改成超长条；");
-  lines.push("5. 小字要清晰可读，不要生成带糊英文的假界面。");
-
-  if (roles && roles.logo) {
-    lines.push(`6. 第 ${roles.logo.index} 张附件是公司 Logo：直接使用附件里的原图形，不要重画、不要加白色底或方框。`);
-  }
-  if (roles && roles.photo) {
-    lines.push(`7. 第 ${roles.photo.index} 张附件是实拍素材：作为主视觉使用，人物与设备保持原比例。`);
-  }
-  if (roles && roles.poster) {
-    lines.push(`8. 第 ${roles.poster.index} 张附件是要改版的旧稿：所有栏目与文字都要保留，不要丢项。`);
-  }
-  if (company) lines.push(`9. 公司全称固定写作「${company}」，需要署名的地方用这个全称。`);
-  if (contact) lines.push(`10. 联系方式固定写作「${contact}」，需要印电话时用这个号码。`);
-  return lines.join("\n");
+  // 刻意不用「1. 2. 3.」编号：模型会模仿输入格式，把要求转写成逐条版式清单，
+  // 结果 Seedream 收到一份「版式说明书」，画面死板、背景乱堆装饰。
+  const parts = [];
+  parts.push("同一段文字在画面里只出现一次，不要一处标题、另一处再写一遍");
+  parts.push("不出现「品牌名称」「公司名称」「待补充」「XXX」这类占位词");
+  parts.push("图片素材保持原始宽高比，不拉伸变形");
+  parts.push("画布比例与 aspect_ratio 完全一致");
+  parts.push("小字清晰可读，不生成带糊英文的假界面");
+  if (roles && roles.logo) parts.push("第 " + roles.logo.index + " 张附件是公司 Logo，直接用附件里的原图形，不重画、不加白底或方框");
+  if (roles && roles.photo) parts.push("第 " + roles.photo.index + " 张附件是实拍素材，作主视觉并保持人物与设备原比例");
+  if (roles && roles.poster) parts.push("第 " + roles.poster.index + " 张附件是要改版的旧稿，栏目与文字一个都不能丢");
+  if (company) parts.push("公司全称固定写作「" + company + "」");
+  if (contact) parts.push("联系方式固定写作「" + contact + "」");
+  // 多附件时最容易出的错：模型把数据看板/价目表整张截图贴进画面
+  const imgCount = [roles && roles.logo, roles && roles.photo, roles && roles.poster].filter(Boolean).length;
+  if (imgCount >= 3) parts.push("附件里除指定的主视觉与旧稿外，其余图片仅作信息参考——只提取其中的数值和文字，不要把整张界面截图贴进画面");
+  return "【交付要求】以下是硬性约束，直接执行，不要把要求本身画进画面：" + parts.join("；") + "。";
 }
 
 const PLACEHOLDER = /^(?:品牌名称|公司名称|公司名字|待补充|待填写|XXX+|示例|示例文字)$/;

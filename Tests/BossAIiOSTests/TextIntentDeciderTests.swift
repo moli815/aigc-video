@@ -2,14 +2,14 @@ import XCTest
 @testable import BossAI
 
 final class TextIntentDeciderTests: XCTestCase {
-    func testOneLongVisibleCopyFieldUsesOverlay() {
-        XCTAssertTrue(TextIntentDecider.needsOverlay(userText: "做一张宣传视觉",
+    func testLongCopyAloneKeepsNativeProviderDesign() {
+        XCTAssertFalse(TextIntentDecider.needsOverlay(userText: "做一张宣传视觉",
                                                       extractedFieldCount: 1,
                                                       extractedCharCount: 40))
     }
 
-    func testManyShortFieldsUseOverlay() {
-        XCTAssertTrue(TextIntentDecider.needsOverlay(userText: "制作正式宣传图",
+    func testFormalDesignAloneDoesNotForceProgrammaticLayout() {
+        XCTAssertFalse(TextIntentDecider.needsOverlay(userText: "制作正式宣传图",
                                                       extractedFieldCount: 3,
                                                       extractedCharCount: 20))
     }

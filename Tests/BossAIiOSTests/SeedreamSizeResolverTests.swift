@@ -17,7 +17,7 @@ final class SeedreamSizeResolverTests: XCTestCase {
     }
 
     func testUnrepresentableAspectFailsClosed() {
-        XCTAssertNil(SeedreamSizeResolver.resolve(aspectRatio: "1:16", tier: "2K"))
+        XCTAssertNil(SeedreamSizeResolver.resolve(aspectRatio: "1:17", tier: "2K"))
     }
 
     func testExplicitCanvasSizeIsValidatedAndPreserved() {

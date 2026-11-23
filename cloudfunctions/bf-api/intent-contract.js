@@ -99,6 +99,10 @@ function resolve({ messages = [], memories = [] } = {}) {
     // 用户本轮原话：判断「是不是海报任务」时以用户说法为准，
     // 不依赖模型自己在 tool 参数里填 render_intent（实测它经常不填）。
     userText: latest,
+    currentImageCount: (() => {
+      const user = [...messages].reverse().find(m => m?.role === 'user' && !require('./shared/image-delivery').isHistoryPreview(m));
+      return Array.isArray(user?.content) ? user.content.filter(part => part?.type === 'image_url').length : 0;
+    })(),
     hasAny: !!(orientation || contact || company),
   };
 }
@@ -222,6 +226,17 @@ function apply(calls, intent, observe) {
     }
     if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     let changed = null;
+    const count = intent.currentImageCount;
+    if (fn.name === 'image_generate' && args.source === 'attached' && count >= 2 && count <= 6
+        && !args.library_refs?.length && !args.structured?.image_references && !args.structured?.image_plan
+        && /都用上|全部使用|全部用上|每张都|所有产品图|所有附件|全部产品图/.test(intent.userText)
+        && !/只用|仅用|不要用|别用|不使用/.test(intent.userText)) {
+      const oldIndices = args.source_indexes || [args.source_index || 1];
+      const roles = new Map(oldIndices.map((index, slot) => [index, args.reference_roles?.[slot]]));
+      args.source_indexes = Array.from({ length: count }, (_, slot) => slot + 1);
+      args.reference_roles = args.source_indexes.map(index => roles.get(index) || ('本轮素材' + index));
+      changed = { completeCurrentReferences: count };
+    }
     if (nativePoster) {
       args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText);
       changed = { posterDelivery: true, copyRows: blocks.length };

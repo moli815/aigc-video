@@ -95,6 +95,10 @@ enum ConversationDeletion {
         // 防呆（跨账号）：只允许删当前账号名下的会话。侧栏已过滤，这里再兜一次，
         // 任何未来新增入口都不至于因为漏过滤而删到别人的数据。
         if !owner.isEmpty, !scope.isEmpty, owner != scope { return false }
+        // Durable tombstone precedes physical deletion. Legacy retry limits must never
+        // erase the user's intent, even after a long offline period or app restart.
+        do { try SyncV2Engine.enqueueDeletion(kind: "conversation", id: id, owner: scope) }
+        catch { return false }
 
         // 底图缓存里属于这条会话的底图一并清掉（只清这个会话的键，别的会话/并发任务不受影响）
         BaseImageCache.shared.evict(conversationId: id.uuidString)
@@ -112,6 +116,7 @@ enum ConversationDeletion {
         } catch {
             // 保存失败：回滚到删除前的状态，避免内存里"看着删了、库里还在"的半截状态
             context.rollback()
+            SyncV2Engine.cancelDeletion(kind: "conversation", id: id, owner: scope)
             return false
         }
 
@@ -151,11 +156,15 @@ enum ConversationDeletion {
     @discardableResult
     static func pushTombstone(id: UUID) async -> Bool {
         guard HostedAccount.isHostedActive, HostedAccount.shared.isLoggedIn else { return false }
+        guard let session = CloudSession.capture() else { return false }
         do {
-            _ = try await HostedAccount.shared.deleteConversation(id: id)
+            _ = try await session.request("/sync/conversations/" + id.uuidString, method: "DELETE")
+            try session.validate()
+            try SyncV2Engine.noteDeletedConversation(id, owner: session.owner)
             confirmRemoteDeleted(id)
             return true
         } catch {
+            guard (try? session.validate()) != nil else { return false }
             switch classify(error) {
             case .done:
                 confirmRemoteDeleted(id)
@@ -196,11 +205,12 @@ enum ConversationDeletion {
     /// 这条会话是否处于"本地已删、云端墓碑还没确认"的状态。
     /// pull 合并时用它挡住复活（云端旧数据/另一台设备的旧副本推上来一律不落地）。
     static func isPendingDelete(_ id: UUID) -> Bool {
-        rawOutbox()[id.uuidString] != nil
+        rawOutbox()[id.uuidString] != nil || SyncV2Engine.hasPendingDeletion(kind: "conversation", id: id, owner: HostedAccount.scopeKey)
     }
 
     /// 云端已确认删除（或云端返回墓碑）→ 出队
     static func confirmRemoteDeleted(_ id: UUID) {
+        SyncV2Engine.cancelDeletion(kind: "conversation", id: id, owner: HostedAccount.scopeKey)
         var raw = rawOutbox()
         guard raw.removeValue(forKey: id.uuidString) != nil else { return }
         writeOutbox(raw)
@@ -213,20 +223,15 @@ enum ConversationDeletion {
         writeOutbox(raw)
     }
 
-    /// 记一次失败尝试；达到上限即放弃。返回是否已被放弃（true = 已出队）。
+    /// Attempts are capped for diagnostics; a recoverable failure never removes a tombstone.
     @discardableResult
     static func recordRetryFailure(_ id: UUID, now: Date = Date()) -> Bool {
         var raw = rawOutbox()
         guard let value = raw[id.uuidString] else { return false }
         let old = meta(value)
         let tries = old.attempts + 1
-        if tries >= maxAttempts {
-            raw.removeValue(forKey: id.uuidString)
-            writeOutbox(raw)
-            return true
-        }
         raw[id.uuidString] = ["at": old.enqueuedAt.timeIntervalSince1970,
-                              "tries": tries,
+                              "tries": min(tries, maxAttempts),
                               "lastTry": now.timeIntervalSince1970]
         writeOutbox(raw)
         return false
