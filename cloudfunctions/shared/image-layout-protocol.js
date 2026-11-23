@@ -1,5 +1,5 @@
 "use strict";
-const VERSION="layout-protocol-v7";
+const VERSION="layout-protocol-v8";
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 function requestOf(raw){
  if(!raw||typeof raw!=="object"||Object.keys(raw).some(k=>!["image","references","expected_text","placement_only"].includes(k)))fail("IMAGE_LAYOUT_INVALID");
@@ -30,7 +30,10 @@ function responseOf(raw,input){
   const confidence=raw?.confidence;
   if(confidence!=null&&(!Number.isFinite(confidence)||confidence<.75||confidence>1))fail("IMAGE_LAYOUT_UNCERTAIN");
   if(!Array.isArray(candidate)||candidate.length<1||candidate.length>80||candidate.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
-  return {...(confidence!=null?{confidence}:{}),regions:[],occupied:candidate,issues:[],recognized_text:[]};
+  const generatedMarks=qwenBoxes?candidate.filter((box,i)=>raw.objects[i]?.kind==="generated_brand_mark"):(raw?.generated_marks??[]);
+  if(!Array.isArray(generatedMarks)||generatedMarks.length>2||generatedMarks.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
+  const occupied=qwenBoxes?candidate.filter((box,i)=>raw.objects[i]?.kind!=="generated_brand_mark"):candidate;
+  return {...(confidence!=null?{confidence}:{}),regions:[],occupied,issues:[],recognized_text:[],...(generatedMarks.length?{generated_marks:generatedMarks}:{})};
  }
  if(!raw||!Number.isFinite(raw.confidence)||raw.confidence<.75||raw.confidence>1||!Array.isArray(raw.regions)||raw.regions.length>4||!Array.isArray(raw.occupied)||raw.occupied.length>80||raw.occupied.some(b=>!boxOf(b)))fail("IMAGE_LAYOUT_UNCERTAIN");
  const allowed=new Set(input.references.filter(r=>r.role!=="logo").map(r=>r.index)),seen=new Set();
@@ -44,8 +47,10 @@ function responseOf(raw,input){
 function messagesOf(input){
  if(input.placement_only===true)return [
   {role:"system",content:[
-   '标注海报上已有内容的位置，给真实Logo避让。只输出JSON：{"objects":[{"label":"标题","bbox_2d":[120,80,840,210]}]}。示例坐标不可照抄。',
-   'objects逐项标注实际标题、正文、产品、人脸、二维码和已有品牌图形。背景纹理不占位置。bbox_2d使用左上、右下两点[x1,y1,x2,y2]，坐标归一化为0到1000。不要转录文字或输出透视框。'
+   '标注海报上已有内容的位置，给真实Logo避让。只输出JSON：{"objects":[{"kind":"content","label":"标题","bbox_2d":[120,80,840,210]}]}。示例坐标不可照抄。',
+   '先查画面的四角、边缘和空隙。真实Logo尚未合成。单独的公司标志、签名角标、水印，包括盾牌等图形紧邻品牌字样的独立组合，紧贴整组边缘框选并标记kind=generated_brand_mark。即使字样恰好是本公司的名字，也照样标记。不要把嵌在产品照片上的标牌、单独的装饰图标或正文里的公司名称当成角标。',
+   '再逐项框选标题、正文、功能图标、产品、人脸、二维码并标记kind=content。已标记的独立角标不要重复算入content。背景纹理不占位置。',
+   'bbox_2d使用左上、右下两点[x1,y1,x2,y2]，坐标归一化为0到1000。不要转录文字或输出透视框。'
   ].join("\n")},
   {role:"user",content:[{type:"text",text:"找出所有原有内容的位置"},{type:"image_url",image_url:{url:input.image}}]}
  ];

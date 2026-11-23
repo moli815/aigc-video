@@ -97,10 +97,12 @@ function createProtectionRuntime({assetStore,readAsset,locate,fetcher=fetch,log=
     // text/faces, even when the locator omitted a screen from occupied.
     const placements=[...prepared.selected].sort((a,b)=>(a.role==="logo")-(b.role==="logo")).map(p=>({role:p.role,bytes:p.bytes,sha256:p.sha256,crop:p.crop,anchor:p.anchor||"auto",preparedRaster:p.preparedRaster,method:p.method,
      ...(p.role==="ui"?{quad:layout.regions.find(r=>r.index===p.index)?.quad}:{occupied:[...layout.occupied,...protectedBoxes],ensureContrast:prepared.plan.posterBrand===true})}));
-    const rendered=await compositor.compose({canvas:bytes,placements});
+    const marks=prepared.plan.posterBrand?layout.generated_marks||[]:[];
+    const clean=marks.length?await require("./brand-draft-repair").clearGeneratedMarks(bytes,marks,layout.occupied):bytes;
+    const rendered=await compositor.compose({canvas:clean,placements});
     const asset=await assetStore.archive(prepared.owner,rendered.png,"image/png"),signed=await assetStore.sign(prepared.owner,[asset.id]);
     const finalUrl=signed.find(s=>s.id===asset.id)?.url;if(!finalUrl)fail("ASSET_URL_FAILED");
-    log({event:"protected_assets_composed",count:placements.length,ms:rendered.manifest.ms,rss:rendered.manifest.rss});
+    log({event:"protected_assets_composed",count:placements.length,cleanedBrandMarks:marks.length,ms:rendered.manifest.ms,rss:rendered.manifest.rss});
     return {url:finalUrl,asset:{...asset,variants:{background:draft}},protection:rendered.manifest};
    }catch(e){e.draftAsset=draft;throw e;}
   }

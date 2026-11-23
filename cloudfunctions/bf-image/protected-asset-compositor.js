@@ -71,11 +71,11 @@ function uniformCutout(r){
  for(let i=0;i<n;i++)if(seen[i])p[i*4+3]=0;
  return true;
 }
-async function cutout(r){
+async function cutout(r,{trim=true}={}){
  const result={...r,data:Buffer.from(r.data)};
  let transparent=0;for(let i=3;i<result.data.length;i+=4)if(result.data[i]<128)transparent++;
- if(transparent>result.width*result.height*.01)return {raster:trimAlpha(result),method:"existing-alpha"};
- if(uniformCutout(result))return {raster:trimAlpha(result),method:"border-connected-uniform"};
+ if(transparent>result.width*result.height*.01)return {raster:trim?trimAlpha(result):result,method:"existing-alpha"};
+ if(uniformCutout(result))return {raster:trim?trimAlpha(result):result,method:"border-connected-uniform"};
  const {cv}=await engine(),owned=[];const keep=x=>(owned.push(x),x);
  try{
   const src=keep(cv.matFromArray(r.height,r.width,cv.CV_8UC4,r.data)),small=keep(new cv.Mat()),rgb=keep(new cv.Mat());
@@ -86,7 +86,7 @@ async function cutout(r){
   if(count<mask.data.length*.005||count>mask.data.length*.98)fail("ASSET_MATTING_UNCERTAIN");
   const alpha=keep(new cv.Mat());cv.resize(mask,alpha,new cv.Size(r.width,r.height),0,0,cv.INTER_LINEAR);
   for(let i=0;i<alpha.data.length;i++)result.data[i*4+3]=Math.min(result.data[i*4+3],alpha.data[i]);
-  return {raster:trimAlpha(result),method:"grabcut-best-effort"};
+  return {raster:trim?trimAlpha(result):result,method:"grabcut-best-effort"};
  }finally{for(const mat of owned.reverse())mat.delete();}
 }
 function quadOf(raw,width,height){

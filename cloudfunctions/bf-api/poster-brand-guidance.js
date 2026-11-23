@@ -15,7 +15,8 @@ function brandEnabled(policy,owner){
 }
 function requestedBrand(text){
   return /(?:我们公司|自己公司|我们品牌|本公司|公司(?:自己的)?(?:logo|标志|标识))/i.test(text)
-    && !/(?:不要|不用|不需要|无|去掉|去除|删掉|省略|别).{0,12}(?:logo|标识|标志|品牌)/i.test(text);
+    && !/(?:不要|不用|不需要|无|去掉|去除|删掉|省略|别).{0,12}(?:logo|标识|标志|品牌)/i.test(text)
+    && !/(?:联名|联合主办|双品牌|(?:双方|两家|合作方|合作伙伴).{0,10}(?:logo|标识|标志))/i.test(text);
 }
 function anchorFor(text){
   const matches=[...text.matchAll(/(?:logo|标识|标志)[^。；，\n]{0,14}([左右][上下])|([左右][上下])[^。；，\n]{0,12}(?:logo|标识|标志)/ig)];
