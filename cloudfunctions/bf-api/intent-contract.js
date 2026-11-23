@@ -1,4 +1,5 @@
 "use strict";
+const posterDelivery = require('./shared/poster-delivery');
 
 /**
  * 前置意图契约（Intent Contract）
@@ -163,8 +164,7 @@ function wantsPosterLayout(args, blocks, intent) {
   if (/海报|宣传|展架|易拉宝|物料|门店贴|促销|广告图|朋友圈图|banner|poster|flyer/i.test(userText + " " + p)) return true;
   // 2026-11-22：只在最后一句找关键词会漏判——用户上一轮说「按这个做吧」，
   // 关键词全在前面的对话里，结果契约没追加，标题和规格被模型自由发挥。
-  // 商业物料的确定性信号：有联系电话/公司署名，或画面里出现两个以上价格。
-  if (intent && (intent.contact || intent.company)) return true;
+  // 账号记忆中的公司名或电话不代表每轮配图都是商业物料。
   if ((p.match(/[¥￥]\s*\d+/g) || []).length >= 2) return true;
   return false;
 }
@@ -214,9 +214,18 @@ function apply(calls, intent, observe) {
       return call;
     }
 
-    let blocks = blocksOf(args);
+    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText);
+    const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
+    let blocks = nativePoster ? posterDelivery.copyOf(args.structured) : blocksOf(args);
+    if (nativePoster && !blocks.some(row => typeof row?.text === 'string' && row.text.trim())) {
+      throw Object.assign(Error('TOOL_ARGUMENTS_INVALID'), { code: 'TOOL_ARGUMENTS_INVALID', reason: 'TEXT_ARRAY_INVALID', field: 'structured.text' });
+    }
     if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     let changed = null;
+    if (nativePoster) {
+      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText);
+      changed = { posterDelivery: true, copyRows: blocks.length };
+    }
     // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组
     if (blocks && blocks.length && typeof (args.structured && args.structured.text) === "string") {
       args.structured = { ...(args.structured || {}), text: blocks };
@@ -225,7 +234,7 @@ function apply(calls, intent, observe) {
     }
     // 兜底：模型漏了 structured.text 时，至少把已知的公司与电话补上，
     // 否则 prompt 里一条文字都没有，画面文字只能由生成模型瞎猜。
-    if ((!blocks || !blocks.length) && intent.enforceSpec) {
+    if (poster && (!blocks || !blocks.length) && intent.enforceSpec) {
       const seed = [];
       if (intent.enforceSpec.company) seed.push({ key: "company_name", role: "footer", text: String(intent.enforceSpec.company) });
       if (intent.enforceSpec.contact) seed.push({ key: "contact_hotline", role: "contact", text: `全国服务热线 ${intent.enforceSpec.contact}` });
@@ -240,7 +249,7 @@ function apply(calls, intent, observe) {
       }
     }
     // 交付要求硬校验：占位/重复/必需字段
-    if (blocks && intent.enforceSpec) {
+    if (poster && blocks && intent.enforceSpec) {
       const r = require("./requirement-guard").enforce(blocks, intent.enforceSpec);
       if (r.issues.length) {
         args.structured = { ...(args.structured || {}), text: r.blocks };
@@ -272,7 +281,7 @@ function apply(calls, intent, observe) {
     // 模型会自己挑比例：同一段烘焙需求出过 2:3、4:5、3:4 三种。客户端按请求比例做几何校验，
     // 一不一致就判「画布比例与要求不同」并把整张图丢掉——用户白等 40 秒还看不到图。
     // 用户没明确要求比例时，海报统一锁 3:4（门店海报通行比例），减少这类误杀。
-    if (!explicit && wantsPosterLayout(args, blocks, intent)) {
+    if (!nativePoster && !explicit && !intent.orientation && wantsPosterLayout(args, blocks, intent)) {
       const cur = ratioValue(String(args.aspect_ratio || ""));
       if (!cur || Math.abs(cur.value - 0.75) / 0.75 > 0.02) {
         args.aspect_ratio = "3:4";
@@ -303,7 +312,7 @@ function apply(calls, intent, observe) {
     }
 
     // ③ 联系方式：用户/记忆给过、而模型漏了，就补一条（不改其他文案）
-    if (intent.contact && blocks && !hasContact(blocks, intent.contact)) {
+    if (poster && intent.contact && blocks && !hasContact(blocks, intent.contact)) {
       blocks.push({ key: "contact_hotline", role: "contact", text: `全国服务热线 ${intent.contact}` });
       changed = changed || {};
       changed.contact = { added: intent.contact };
@@ -314,7 +323,7 @@ function apply(calls, intent, observe) {
     // 旧实现在有任何 prompt 时都追加，会把「画一只猫」改成商业海报并塞进一堆
     // 版式与文字要求，严重破坏普通配图——上线前必须按意图分流。
     if (observe && args.prompt) observe({ tag: "intent_apply_decision", tool: fn.name, want: wantsPosterLayout(args, blocks, intent) });
-    if (args.prompt && wantsPosterLayout(args, blocks, intent)) {
+    if (!nativePoster && args.prompt && wantsPosterLayout(args, blocks, intent)) {
       // fail-open：排版契约只是锦上添花，任何异常都不能让整条回复流中断
       //（历史事故：一个未定义的函数就让客户端看到「输出尚未完成」）。
       try {
@@ -348,25 +357,26 @@ function apply(calls, intent, observe) {
 
 /** 给模型的一段极短计划提示（不进入画面文案） */
 function guidance(intent) {
-  if (!intent || !intent.hasAny) return "";
+  if (!intent) return "";
+  const newPoster = posterDelivery.nativePoster({}, intent.userText);
   const parts = [];
   if (intent.orientation === "portrait") parts.push("版式必须是竖版（高大于宽）");
   if (intent.orientation === "landscape") parts.push("版式必须是横版（宽大于高）");
   if (intent.ratio) parts.push(`画布比例用 ${intent.ratio.label}`);
   if (intent.contact) parts.push(`必须原样印出全国服务热线 ${intent.contact}`);
   if (intent.company) parts.push(`公司全称是「${intent.company}」`);
-  if (!parts.length) return "";
+  if (!parts.length && !newPoster) return "";
   return [
-    `【本轮硬约束】${parts.join("；")}。这些是从用户历史里确认过的要求，不是让你重写画面内容。`,
+    parts.length && `【本轮硬约束】${parts.join("；")}。这些是从用户历史里确认过的要求，不是让你重写画面内容。`,
     "【照抄规则】参考图里已有的栏目名、接口名、型号、参数必须逐字照抄，不得换成近义术语（例如 PGM 接口不能写成 PWM/PoE，多防区接口不能写成多协议接口）；拿不准就保留原图文字。",
     "【禁占位】画面不得出现「品牌名称」「公司名称」「待补充」「XXX」「您好」这类占位或示例文字；已知信息直接写实，未知信息就留空不写字。",
-    "【structured.text 要写全】image_generate / image_edit 的 structured.text 至少 4 条：主标题、副标题、各区块标题与说明、电话。限长：title ≤8 字只 1 条；subtitle ≤20 字只 1 条；label ≤8 字；body ≤14 字、一条一个事实；contact 电话照抄；footer 公司署名。",
+    "【structured.text 要写全】新海报默认高信息密度。按已确认资料写全标题、分区标题、完整说明和联系信息，按阅读顺序逐项放入 structured.text。用户指定极简、少字或逐字全文时直接遵循。价格、日期、型号、联系方式只用已有依据。",
     "【prompt 只写画面】prompt 只描述主体、场景、材质、光线、气质，≤180 字；不要把文案抄进 prompt，也不要写 1./2./3. 版式清单或坐标。",
-    "【长段落不进画面】品牌故事、公司简介、免责声明这类超过 40 字的段落不要放进 structured.text（印上去必然糊），提炼成 3–5 条≤14 字的事实短句，保留数字、年限、工艺、承诺。价格、参数、型号、卖点一个都不能少。",
+    "【长文】用栏目和自然句组织完整信息，显式全文要求保留原文。资料不足时只写确认内容，背景和图解承担视觉信息。",
     "【风格贴合场景】按行业定视觉基调，并配上该行业的内容型元素：食品烘焙用暖色食欲感，配产品特写缩略图与原料/工艺插画；医疗用干净克制，配诊室实景与设备示意；教育培训用明亮亲和，配课堂场景与进阶路径图；工程安防用专业冷静，配城市剪影、设备特写与系统联动示意。不要所有行业都套同一种深色科技风，也不要只有配色没有元素。",
     "【画面要有元素】不能是纯色底+文字块：用色带或圆角卡片分区、图标、场景缩略图、大数字、示意图承载信息，元素必须来自内容本身（烘焙用食材与工艺，安防用设备与联动节点，医疗用诊室与设备）。只挑用得上的，不要全堆。",
     "【直接执行】以上是执行约束，不要在回复里复述或列计划，直接调用工具。",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 module.exports = { resolve, apply, guidance, fallbackRatio, ratioValue, normalizeDirection, cleanPlaceholders, CONTACT };

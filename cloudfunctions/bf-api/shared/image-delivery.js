@@ -1,0 +1,194 @@
+"use strict";
+const { requestsQuality, modelPreference, imageQualityReason } = require("./image-quality-intent");
+const { fitTextScene } = require("./text-scene");
+
+// The same boundary runs before tool arguments reach existing phones and before
+// provider compilation. Never sanitize arbitrary chat/document content.
+const IMAGE_TOOLS = new Set(["image_generate", "image_edit", "image_series", "image_decompose", "generate_image"]);
+const BOUNDARY_VERSION = "IMAGE_DELIVERY_V2";
+const DELIVERY_RULE = `【${BOUNDARY_VERSION}·图片交付边界】图片作品的可见文案只写用户需要的内容。系统自行补充的数据来源、检索出处、未核实项、核对过程写在聊天正文，不放进 image prompt 或 structured.text。用户明确要求展示的出处、免责声明、仅供参考、风险提示及正常日期、报名截止信息照常保留；不得为画面完整编造事实。image_generate 用于生成/重设计，image_edit 用于局部编辑。多图工具 source_indexes 按附件原始编号选择且底图在首位；执行 prompt 用“底图”“人物素材”“风格参考”等角色称呼，不能把用户附件编号混同重排后的输入槽位。通常推荐 fast；只有复杂身份/动作编辑、多参考精确融合、Flash 明确质量失败重试或用户明确要求 Pro 才建议 high，海报/Logo/最终稿这些品类名称本身不是升级理由。`;
+const META_LABEL = /^(?:数据来源|资料来源|信息来源|来源|检索时间|未核实项|未核实|待确认项|整理自)(?:\s*[:：]|\s*[】\]])/;
+const LABELS = ["数据来源", "资料来源", "信息来源", "来源", "检索时间", "未核实项", "未核实", "待确认项", "整理自"];
+function labelOf(line) {
+  const normalized = String(line || "").trim().replace(/^(?:[·•*\-]+\s*|\d+[.)、]\s*)/, "").replace(/^[【\[]/, "");
+  if (!META_LABEL.test(normalized)) return "";
+  return LABELS.find(label => normalized.startsWith(label)) || "";
+}
+function preserveLabels(userText) {
+  const text = String(userText || "");
+  return LABELS.filter(label => text.includes(label) && !new RegExp("(?:不要|不加|去掉|删除|不显示|不需要)[^，。\\n]{0,8}" + label).test(text));
+}
+function cleanText(text, allowed = []) {
+  let removed = 0;
+  const value = String(text || "").split("\n").filter(line => {
+    const label = labelOf(line);
+    if (!label || allowed.includes(label)) return true;
+    removed++;
+    return false;
+  }).join("\n").trim();
+  return { text: value, removed };
+}
+function cleanImageRequest({ prompt, structured }, userText) {
+  const fields = structured && typeof structured === "object" && !Array.isArray(structured) ? { ...structured } : {};
+  const existing = fields.delivery_policy && Array.isArray(fields.delivery_policy.preserve_labels)
+    ? fields.delivery_policy.preserve_labels.filter(x => LABELS.includes(x)) : [];
+  const allowed = userText === undefined ? existing : preserveLabels(userText);
+  let removed = 0;
+  const clean = value => { const result = cleanText(value, allowed); removed += result.removed; return result.text; };
+  const cleanedPrompt = clean(prompt);
+  const deletedKeys = new Set();
+  if (Array.isArray(fields.text)) {
+    fields.text = fields.text.flatMap(item => {
+      if (!item || typeof item.text !== "string") return [item];
+      const text = clean(item.text);
+      if (!text) { if (item.key) deletedKeys.add(item.key); return []; }
+      return [{ ...item, text }];
+    });
+  } else if (typeof fields.text === "string") fields.text = clean(fields.text);
+  if (fields.layout && Array.isArray(fields.layout.blocks) && deletedKeys.size) {
+    fields.layout = { ...fields.layout, blocks: fields.layout.blocks.filter(block => !deletedKeys.has(block.key)) };
+  }
+  fields.delivery_policy = { version: BOUNDARY_VERSION, preserve_labels: allowed };
+  return { prompt: cleanedPrompt, structured: fields, removed };
+}
+function injectDeliveryRule(messages) {
+  // This policy must remain independent of legacy client META_RULE de-duplication.
+  const output = messages.slice();
+  if (!output.some(m => m && m.role === "system" && typeof m.content === "string" && m.content.includes(BOUNDARY_VERSION))) {
+    output.push({ role: "system", content: DELIVERY_RULE });
+  }
+  return output;
+}
+/**
+ * 判断某条 user 消息是不是「历史图片预览」而不是本轮附件。
+ * 客户端会把召回的历史图以固定前缀插进消息里，这类消息不参与「用户本轮要求」的解析。
+ */
+function isHistoryPreview(message) {
+  if (!Array.isArray(message?.content) || !message.content.some(p => p?.type === "image_url")) return false;
+  const text = message.content.filter(p => p?.type === "text").map(p => p.text || "");
+  return text.length > 0 && text.every(s => /^历史图片预览，非(?:本轮|当前)附件；图片ID：[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}[，；]/i.test(s));
+}
+function latestUserText(messages) {
+  const user = [...messages].reverse().find(m => m && m.role === "user");
+  if (!user) return "";
+  return typeof user.content === "string" ? user.content : (Array.isArray(user.content) ? user.content.filter(p => p.type === "text").map(p => p.text || "").join("\n") : "");
+}
+function toolArgumentError(reason,field) { return Object.assign(new Error("TOOL_ARGUMENTS_INVALID"),{code:"TOOL_ARGUMENTS_INVALID",reason,field}); }
+function normalizeVisibleCopy(value) {
+  if(Array.isArray(value)){
+    value=require('./poster-delivery').normalizeRows(value);
+    if(value.some(t=>!t||typeof t.text!=="string"))throw toolArgumentError("TEXT_ENTRY_INVALID","structured.text["+value.findIndex(t=>!t||typeof t.text!=="string")+"].text");
+    return value;
+  }
+  if (!value || Array.isArray(value) || typeof value !== "object") return value;
+  const grouped = ['products', 'items', 'labels', 'bodies', 'craft', 'member', 'points', 'features', 'selling_points', 'services'].some(key => Array.isArray(value[key]));
+  if (grouped) return require('./poster-delivery').copyOf({ text: value });
+  // Legacy LLMs sometimes emit a field dictionary, which the shipped Swift
+  // TextItem.parse cannot read. Convert at the tool boundary without losing copy.
+  return Object.entries(value).map(([key, entry]) => {
+    const item = typeof entry === "string" ? { text: entry } : entry;
+    if (!item || typeof item.text !== "string") throw toolArgumentError("TEXT_ENTRY_INVALID","structured.text");
+    const role = ["title","subtitle","body","label","contact","footer"].includes(item.role) ? item.role
+      : /hotline|phone|email|contact|电话|热线/i.test(key) ? "contact"
+        : /subtitle|副标题/i.test(key) ? "subtitle"
+          : /main_title|^title$|主标题/i.test(key) ? "title"
+            : /head$|heading|栏目/i.test(key) ? "label" : "body";
+    return { ...item, key, role, text: item.text };
+  });
+}
+function sanitizeToolCall(call, userText, observe = () => {}) {
+  if (!call || !call.function || !IMAGE_TOOLS.has(call.function.name)) return call;
+  let args;
+  try { args = JSON.parse(call.function.arguments || "{}"); }
+  catch { throw toolArgumentError("JSON_SYNTAX","arguments"); }
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw toolArgumentError("ARGUMENTS_NOT_OBJECT","arguments");
+  if(args.prompt!=null&&typeof args.prompt!=="string")throw toolArgumentError("PROMPT_INVALID","prompt");
+  const normalized = args.structured && typeof args.structured === "object" && !Array.isArray(args.structured)
+    ? { ...args, structured: { ...args.structured, text: normalizeVisibleCopy(args.structured.text) } } : args;
+  const result = cleanImageRequest(normalized, userText);
+  args.prompt = result.prompt;
+  args.structured = fitTextScene(result.structured);
+  args.structured.routing = { reason: imageQualityReason(userText, args.quality_reason),
+    preference: modelPreference(userText),
+    user_quality: requestsQuality(userText) ? "high" : "auto" };
+  // Resolve user attachment numbering before the App moves the base to slot 1.
+  const indices = args.source_indexes;
+  if (Array.isArray(indices) && indices.length > 1) {
+    const roles = indices.map((_, i) => String((args.reference_roles || [])[i] || (i === 0 ? "底图" : "素材" + i)));
+    const number = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6 };
+    args.prompt = args.prompt.replace(/第([一二三四五六1-6])张(?:图片|照片|图)?|图([一二三四五六1-6])/g, (full, a, b) => {
+      const n = number[a || b] || Number(a || b), slot = indices.indexOf(n);
+      return slot < 0 ? full : roles[slot];
+    });
+  }
+  // Derive whole-artwork reflow from the real latest user turn, not an
+  // invented model plan. Existing shipped clients preserve structured keys.
+  args=require('./poster-reformat').mark(args,userText);
+  if (result.removed) observe({ removed: result.removed, tool: call.function.name });
+  return { ...call, function: { ...call.function, arguments: JSON.stringify(args) } };
+}
+function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => calls) {
+  if (!data || !Array.isArray(data.choices)) return data;
+  return { ...data, choices: data.choices.map(choice => {
+    const message = choice.message;
+    if (!message || !Array.isArray(message.tool_calls)) return choice;
+    return { ...choice, message: { ...message, tool_calls: finalizeCalls(message.tool_calls.map(call => sanitizeToolCall(call, userText, observe))) } };
+  }) };
+}
+class ToolCallStreamGuard {
+  constructor(userText, observe, finalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; }
+  flush(index) {
+    const calls = this.pending.get(index);
+    if (!calls) return [];
+    this.pending.delete(index);
+    const output=this.finalizeCalls([...calls.values()].map(call => sanitizeToolCall(call, this.userText, this.observe)));
+    this.releasedCalls=(this.releasedCalls||0)+output.length;
+    return output;
+  }
+  pushLine(line) {
+    if (!line.trim().startsWith("data:")) return line;
+    const raw = line.trim().slice(5).trim();
+    if (!raw) return line;
+    if (raw === "[DONE]") {
+      const frames = [...this.pending.keys()].map(index => "data: " + JSON.stringify({ choices: [{ index, delta: { tool_calls: this.flush(index) } }] }));
+      this.terminal = true;
+      return [...frames, line].join("\n\n");
+    }
+    let obj;
+    try { obj = JSON.parse(raw); } catch { return line; }
+    if (obj.error) throw Object.assign(new Error("UPSTREAM_STREAM_ERROR"), { code: "UPSTREAM_STREAM_ERROR" });
+    if (!Array.isArray(obj.choices)) return line;
+    for (const choice of obj.choices) {
+      if (choice.finish_reason === "length") throw Object.assign(new Error("OUTPUT_LIMIT"), { code: "OUTPUT_LIMIT" });
+      if (choice.finish_reason === "content_filter") throw Object.assign(new Error("CONTENT_FILTER"), { code: "CONTENT_FILTER" });
+      if (choice.finish_reason) this.terminal = true;
+      const index = choice.index || 0, delta = choice.delta;
+      if (delta && Array.isArray(delta.tool_calls)) {
+        let calls = this.pending.get(index);
+        if (!calls) this.pending.set(index, calls = new Map());
+        for (const fragment of delta.tool_calls) {
+          const slot = fragment.index || 0;
+          let call = calls.get(slot);
+          if (!call) calls.set(slot, call = { index: slot, type: "function", function: { name: "", arguments: "" } });
+          if (fragment.id) call.id = fragment.id;
+          if (fragment.function) {
+            call.function.name += fragment.function.name || "";
+            call.function.arguments += fragment.function.arguments || "";
+            this.bytes += Buffer.byteLength(fragment.function.arguments || "");
+            if (this.bytes > 2 * 1024 * 1024) throw new Error("TOOL_ARGUMENTS_TOO_LARGE");
+          }
+        }
+        delete delta.tool_calls;
+      }
+      if (choice.finish_reason && this.pending.has(index)) {
+        choice.delta = { ...(delta || {}), tool_calls: this.flush(index) };
+      }
+    }
+    return "data: " + JSON.stringify(obj);
+  }
+  end() {
+    if (this.pending.size) throw Object.assign(new Error("TOOL_ARGUMENTS_INCOMPLETE"), { code: "TOOL_ARGUMENTS_INCOMPLETE" });
+    if (!this.terminal) throw Object.assign(new Error("UPSTREAM_STREAM_INCOMPLETE"), { code: "UPSTREAM_STREAM_INCOMPLETE" });
+  }
+}
+module.exports = { BOUNDARY_VERSION, DELIVERY_RULE, labelOf, cleanText, cleanImageRequest, injectDeliveryRule, isHistoryPreview, latestUserText, normalizeVisibleCopy, sanitizeToolCall, sanitizeCompletion, ToolCallStreamGuard };

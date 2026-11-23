@@ -1516,6 +1516,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const cleanedPrompt = cleanImageRequest({ prompt, structured });
   const rawPrompt = String(cleanedPrompt.prompt || "").trim();
   structured = cleanedPrompt.structured;
+  const posterDelivery = require('./shared/poster-delivery');
+  const nativePoster = !repairNativeCopy && posterDelivery.modeFor({ structured, prompt:rawPrompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel });
   if (cleanedPrompt.removed > 0) {
     logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
   }
@@ -1532,7 +1534,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     catch(e){logStage("protected_asset_preflight_failed",{code:e?.code||"ASSET_UNAVAILABLE"});return {ok:false,code:422,error:"IMAGE_ASSET_UNAVAILABLE",msg:"这次需要的原始素材尚未完整读取，尚未生成或扣费，请重新选择原图后再试。"};}
   }
   let composition=null;
-  if(accountId && !workflowPlan?.native && !reformat && !repairNativeCopy){
+  if(accountId && !workflowPlan?.native && !reformat && !repairNativeCopy && !nativePoster){
     try{const input={prompt,structured,renderIntent,taskKind,textMode,layerDecomposition,accountId,resolvedSize:resolveSize(size,aspectRatio)};
       composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(input,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(input,RT.IMAGE_COMPOSITION_POLICY);}
     catch(e){
@@ -1546,14 +1548,14 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const effectiveTextMode=composition?"overlay":textMode;
   const structPrompt = assembleStructured(structured, !overlayMode);
   // 新契约中 prompt 是唯一视觉指令；structured 只在旧客户端未提供 prompt 时兜底。
-  let basePrompt = rawPrompt || structPrompt;
+  let basePrompt = rawPrompt || (nativePoster ? '商业海报。' : structPrompt);
   if(require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)){
     const styleDirective=require("./shared/image-style-reference").compileStyleReference(structured?.style_reference,referenceRoles);
     if(styleDirective)basePrompt+="\n"+styleDirective;
   }
   const designBrief = require("./shared/image-design-brief").compileDesignBrief(structured && structured.design_brief, { taskKind, textMode:effectiveTextMode,
     visualExecution:require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),items:structured?.text||[] });
-  if (designBrief&&!composition) basePrompt += "\n\n" + designBrief;
+  if (designBrief&&!composition&&!nativePoster) basePrompt += "\n\n" + designBrief;
   if(composition)basePrompt=composition.engine==="overlay"?composition.prompt:composition.designEngine==="product_v2"?
     "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
     require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork);
@@ -1564,7 +1566,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 10-26：overlay 模式下底图必须是"无字"的，文案由客户端排版层绘制。
   // 旧实现会把 missingCopy 追加回 prompt，导致底图出现模型画的乱码小字，排版层再叠一遍。
   // exact visible copy may be omitted from prompt by contract; append only missing copy values.
-  if (rawPrompt && !overlayMode && !(designBrief && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId) && structured?.design_brief?.visual_map)) {
+  if (rawPrompt && !overlayMode && !nativePoster && !(designBrief && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId) && structured?.design_brief?.visual_map)) {
     const typedCopy = require("./shared/image-design-brief").compileNativeCopy(structured && structured.text, { taskKind, textMode,
       literalLines:/^doubao-seedream-5-5-/.test(selectedModel)||require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),
       compact:/^doubao-seedream-5-5-/.test(selectedModel)&&!structured?.design_brief?.visual_map });
@@ -1577,6 +1579,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     }
   }
 
+  if(nativePoster)basePrompt=posterDelivery.compile({visual:basePrompt,structured,density:nativePoster});
   // 只应用 Agent 明确提供的输出形态；不得再按“名片/海报”等关键词套模板。
   const intentRule = RENDER_INTENT_RULES[String(renderIntent || "")] || "";
   if (intentRule) basePrompt = basePrompt + "\n\n" + intentRule;
@@ -1594,6 +1597,30 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const finalPrompt = reformat?reformat.prompt:multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
       "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
+
+  // Preserve the previous fallback for routes outside the new poster compiler.
+  if (!nativePoster) {
+    try {
+      // 模型给的 structured 有四种形态：text 数组、text 字符串、对象（title/labels/bodies）、
+      // 顶层 products。只判断 structured.text 会漏掉后两种——实测就是这样漏的，
+      // 结果一次标题写错、两次零文字。统一交给 normalizeCopy 解析。
+      const pc = require("./prompt-contract");
+      const copyBlocks = pc.normalizeCopy(undefined, finalPrompt, structured);
+      if (copyBlocks && copyBlocks.length >= 2 && !/逐字照写/.test(finalPrompt)) {
+        finalPrompt = pc.augment(finalPrompt, {
+          aspectRatio,
+          blocks: copyBlocks,
+          structured,
+          roles: referenceRoles || null,
+        });
+        logStage("prompt_contract_fallback", { chars: finalPrompt.length, blocks: copyBlocks.length });
+      } else if (!/逐字照写/.test(finalPrompt)) {
+        logStage("prompt_contract_fallback_skipped", { blocks: copyBlocks ? copyBlocks.length : 0, hasStructured: !!structured });
+      }
+    } catch (e) {
+      logStage("prompt_contract_fallback_failed", { reason: String((e && e.message) || "").slice(0, 80) });
+    }
+  }
 
   // 2026-11-22：客户端没给 aspect_ratio 时，过去只传「2K」，画布由上游自己挑——
   // 实测同一段烘焙需求出过 1280x3200（0.4）、1664x2496（0.667）、1776x2368（0.75）三种，

@@ -3464,10 +3464,24 @@ async function handleChat(req, res) {
       // 缓冲里是工具调用标签：解析成标准 tool_calls 补发；解析不了就降级成纯文本，绝不吐标签
       if (holdingTag && heldTag) {
         const parsedTag = tagParser.parseTaggedToolCall(textOut || heldTag);
-        if (parsedTag) {
+        if (toolGuard.releasedCalls) {
+          // A normal tool call may have arrived while the tag was buffered.
+          // Deliver that already-finalized call once, without the stray content.
+          for (const line of heldTag.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            let frame;
+            try { frame = JSON.parse(payload); } catch { continue; }
+            if (frame.choices?.some(choice => choice.delta?.tool_calls?.length)) res.write(line + "\n\n");
+          }
+        } else if (parsedTag) {
           const synthetic = [{ id: "call_" + Date.now().toString(36), type: "function",
             function: { name: parsedTag.name, arguments: JSON.stringify(parsedTag.arguments) } }];
-          const calls = (await reviewImageCalls(synthetic)).map((call, index) => ({ ...call, index }));
+          const recovered = sanitizeCompletion({ choices: [{ message: { tool_calls: synthetic } }] },
+            imageUserText, observeImageBoundary, finalizeImageCalls, singleReferences.normalize);
+          const calls = (await reviewImageCalls(recovered.choices[0].message.tool_calls))
+            .map((call, index) => ({ ...call, index }));
           res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: calls }, finish_reason: "tool_calls" }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
           logSafe({ tag: "tool_tag_converted", requestId: currentRequestId(), format: parsedTag.format, tool: parsedTag.name });
         } else {
@@ -3475,6 +3489,7 @@ async function handleChat(req, res) {
           if (plain) res.write("data: " + JSON.stringify({ choices: [{ index: 0, delta: { content: plain } }], model: MODEL_MASK || upstreamBody.model }) + "\n\n");
           logSafe({ tag: "tool_tag_unparsed", requestId: currentRequestId(), len: heldTag.length });
         }
+        res.write("data: [DONE]\n\n");
       }
       streamCompleted = true;
     }
