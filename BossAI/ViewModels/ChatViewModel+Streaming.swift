@@ -648,7 +648,7 @@ extension ChatViewModel {
                                 renderIntent: renderIntent,
                                 structured: structuredArgs,
                                 layerDecomposition: toolName == "image_decompose",
-                                targetSize: serverExecution ? nil : plan.targetSize,
+                                targetSize: plan.targetSize,
                                 referenceRoles: requestedRoles.count == refs.count ? requestedRoles : [])
                             DiagnosticQueue.shared.record(domain:"image",stage:"quality_route",code:qualityDecision?.reason ?? "SERVER_EXECUTION",
                                 requestId:imageCtx.requestId,fields:["sourceCount":String(refs.count),"ratio":planAspect])

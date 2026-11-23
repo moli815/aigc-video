@@ -69,7 +69,14 @@ for function in ('bf-api', 'bf-image'):
             files['tool-tag-parser.js'] = local('tool-tag-parser.js')
             files['index.js'] = api_index(archived('index.js'), local('index.js'))
             files['domains/foundation.js'] = local('domains/foundation.js')
-            files['settings-schema.js'] = local('settings-schema.js')
+            settings = archived('settings-schema.js')
+            section = '    "APP_STREAM_RETRY", "APP_IMAGE_RETRY", "APP_IMAGE_VERIFY",'
+            fields = '  APP_IMAGE_VERIFY: { title:'
+            additions = local('settings-schema.js').split('  APP_IMAGE_SERVER_EXECUTION: ', 1)[1].split(fields, 1)[0]
+            assert settings.count(section) == settings.count(fields) == 1
+            settings = settings.replace(section, section + ' "APP_IMAGE_SERVER_EXECUTION", "APP_IMAGE_ATTACHMENT_LIMIT",')
+            settings = settings.replace(fields, '  APP_IMAGE_SERVER_EXECUTION: ' + additions + fields)
+            files['settings-schema.js'] = settings
             files['image-series-reference-guidance.js'] = local('image-series-reference-guidance.js')
             source = archived('shared/image-delivery.js')
             normalizer = local('shared/image-delivery.js')
