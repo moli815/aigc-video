@@ -57,7 +57,7 @@ test("only pixel edits receive edit boundaries; pixel similarity is diagnostic o
   assert.match(imageFunction, /const isPixelEdit = !!image && String\(taskKind \|\| ""\) === "edit"/);
   // 10-26：finalPrompt 多了"底图无字"这一层；10-28 又在最前面加了多图编号契约。
   // 三段拼接顺序固定：多图编号 → 用户 prompt → 无字约束 → 任务边界。EDIT_CONSTRAINTS 仍只给像素编辑。
-  assert.match(imageFunction, /const finalPrompt = reformat\?reformat.prompt:multiImageContract\(image, referenceRoles, taskKind, workflowPlan, !!scopedReference\)\s*\n\s*\+ basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
+  assert.match(imageFunction, /const finalPrompt = verbatim \?\? \(reformat\?reformat.prompt:multiImageContract\(image, referenceRoles, taskKind, workflowPlan, !!scopedReference\)\s*\n\s*\+ basePrompt \+ \(needsNoText \? NO_TEXT_CONSTRAINTS : ""\) \+ taskPolicy/);
   const expression=imageFunction.match(/const taskPolicy = ([\s\S]*?);/)[1];
   const evaluate=new Function("composition","workflowPlan","isPixelEdit","image","taskKind","EDIT_CONSTRAINTS","REFERENCE_CONSTRAINTS",'scopedReference=""',"return ("+expression+");");
   assert.equal(evaluate(null,null,false,["source"],"reference","EDIT","REF","SCOPED"),"SCOPED");

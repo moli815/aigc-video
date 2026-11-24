@@ -370,9 +370,8 @@ final class ChatViewModel: ObservableObject {
             + ResponsePolicy.prompt(reply: identity.replyStyle, answer: answerStyle)
             + Self.capabilityPrompt()
         var volatileSystem = ""
-        if Self.mentionsImageGenerationOrEdit(latestRequest) {
-            let serverDesign = HostedAccount.cachedImageServerExecution && HostedAccount.behaviorBool("posterDesignByServer", default: false)
-            volatileSystem += ImageDesignGuidance.instructions(for: latestRequest, serverDesign: serverDesign) + "\n"
+        if !HostedAccount.isHostedActive && Self.mentionsImageGenerationOrEdit(latestRequest) {
+            volatileSystem += ImageDesignGuidance.instructions(for: latestRequest) + "\n"
         }
         if !conv.rollingSummary.isEmpty {
             volatileSystem += "【前情摘要】本会话较早部分的要点：\n" + conv.rollingSummary + "\n\n"

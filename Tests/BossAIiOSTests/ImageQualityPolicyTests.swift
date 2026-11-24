@@ -39,13 +39,13 @@ final class ImageQualityPolicyTests: XCTestCase {
         XCTAssertLessThanOrEqual(ImageDesignGuidance.suggestions(for:"水墨国风").count,4)
         XCTAssertFalse(ImageDesignGuidance.suggestions(for:"不要动漫，要水墨").contains{$0.id=="anime-story"})
     }
-    func testHostedDesignDelegatesDefaultsAndKeepsAssetContract() {
-        let instructions = ImageDesignGuidance.instructions(for: "只换原有 logo", serverDesign: true)
-        XCTAssertTrue(instructions.contains("structured.preserve_assets"))
-        XCTAssertTrue(instructions.contains("reference_index"))
-        XCTAssertFalse(instructions.contains("【设计参考词典】"))
-        XCTAssertFalse(instructions.contains("structured.layout"))
-        XCTAssertTrue(ImageDesignGuidance.instructions(for: "商业海报").contains("【设计参考词典】"))
+    func testMemberImageToolRoundTripsServerAuthoredPrompt() throws {
+        let original = "4:3 朱红与靛蓝。\n只写「山城徒步夜」。"
+        let fields: [String: Any] = ["prompt": "本轮作图", "source": "none",
+                                     "structured": ["verbatim_prompt": original]]
+        let raw = String(decoding: try JSONSerialization.data(withJSONObject: fields), as: UTF8.self)
+        let decoded = try ImageToolArguments.decode(raw, toolName: "image_generate", userText: "原样生图")
+        XCTAssertEqual((decoded["structured"] as? [String: Any])?["verbatim_prompt"] as? String, original)
     }
 
     func testLogoReplacementCannotFallThroughToGenerativeRedrawing() {

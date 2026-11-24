@@ -2855,6 +2855,7 @@ async function handleChat(req, res) {
   messages = injectDeliveryRule(messages);
   const workflow = require("./shared/image-workflow");
   const posterDelivery=require('./shared/poster-delivery');
+  const verbatimPrompt = require('./shared/verbatim-image-prompt').extract(imageUserText);
   const inferredPoster=isCommercialTask(messages,imageUserText)&&
     posterDelivery.posterRequested('',latestUserText(messages.filter(m=>m?.role==='user').slice(0,-1)));
   const posterPlanner=Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')&&
@@ -2862,7 +2863,7 @@ async function handleChat(req, res) {
   const workflowActive = workflow.enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
   const nativeCopyActive=require('./shared/native-copy-policy').enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
   const nativeCommercialActive = (!workflowActive||nativeCopyActive) && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
-  messages = nativeCopyActive && isCommercialTask(messages,imageUserText)
+  messages = verbatimPrompt ? messages : nativeCopyActive && isCommercialTask(messages,imageUserText)
     ? workflow.injectNativeContract(require('./shared/commercial-generation-mode').injectNativeCommercialGuidance(messages))
     : workflowActive && isCommercialTask(messages,imageUserText)
     ? require("./image-design-policy").injectImageDesignPolicy(workflow.inject(messages,body.tools,RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub),imageUserText)
@@ -2884,7 +2885,9 @@ async function handleChat(req, res) {
       ownedPosterBrand=await posterBrand.preparePosterBrand({db,owner:auth.sub,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,
         referenceStore:imageReferenceStore,text:imageUserText,hasCurrentImages:require('./reference-text').currentImageParts(body.messages).length>0});
     }catch(e){logSafe({tag:"poster_brand_lookup_unavailable",requestId:currentRequestId()});}
-    if(posterPlanner){
+    if(verbatimPrompt){
+      messages=[...messages,{role:"system",content:"本轮用户提供了原样生图的成稿。只确定工具、画布和实际素材，不重新创作文案或设计，不向用户复述。服务端会把成稿原文交给图片模型。"}];
+    }else if(posterPlanner){
       messages=[...messages,{role:"system",content:posterDelivery.PLANNER_GUIDANCE+(ownedPosterBrand?"\n公司确认的Logo原件由服务端放入成品。留一个与构图协调、对比清晰、不挡正文的品牌区，不重画Logo。":"")}];
     }
   }
@@ -2918,6 +2921,7 @@ async function handleChat(req, res) {
   } catch (e) { /* 静默 */ }
   const memoryTexts = await loadMemoryTexts(auth.sub);
   const intent = intentContract.resolve({ messages, memories: memoryTexts });
+  intent.verbatim = verbatimPrompt;
   if (referenceLines.length) intent.referenceLines = referenceLines;
   // 交付要求：自动识别附件角色，把「不许拉伸/不许占位/不许重复/Logo 用原件」等写成约束
   const rg = require("./requirement-guard");
@@ -2928,7 +2932,7 @@ async function handleChat(req, res) {
   intent.roles = roles;
   if (roles && (roles.logo || roles.poster || roles.photo)) logSafe({ tag: "attachment_roles", requestId: currentRequestId(),
     logo: roles.logo ? roles.logo.index : 0, poster: roles.poster ? roles.poster.index : 0, photo: roles.photo ? roles.photo.index : 0 });
-  const intentNote = intentContract.guidance(intent);
+  const intentNote = !verbatimPrompt && intentContract.guidance(intent);
   if (intentNote) messages = messages.concat([{ role: "system", content: intentNote }]);
   if (intent.hasAny) logSafe({ tag: "intent_resolved", requestId: currentRequestId(),
     orientation: intent.orientation || "", ratio: intent.ratio ? intent.ratio.label : "", contact: intent.contact || "" });
@@ -2958,7 +2962,7 @@ async function handleChat(req, res) {
     const code = String((error && (error.code || error.message)) || "");
     if (!REFERENCE_CONTRACT_CODES.has(code)) throw error;
     const requiredAsset = /都用上|全部使用|全部用上|历史原图|之前上传|前面发|原件|第[一二三四五六七八九十0-9]+张/.test(imageUserText);
-    if (requiredAsset) {
+    if (requiredAsset || verbatimPrompt) {
       throw Object.assign(Error("TOOL_ARGUMENTS_INVALID"), {
         code:"TOOL_ARGUMENTS_INVALID",
         reason:code === "IMAGE_REFERENCE_NOT_ISSUED" ? "HISTORY_REQUIRED_MISSING" : "REFERENCE_REQUIRED_MISSING",
@@ -3062,7 +3066,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner });
+  if (upstreamBody.tools) upstreamBody.tools = verbatimPrompt ? singleReferences.tools : withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner });
   if (nativeCommercialActive && upstreamBody.tools?.some(t=>["image_generate","image_edit"].includes(t?.function?.name))) upstreamBody.parallel_tool_calls = false;
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;

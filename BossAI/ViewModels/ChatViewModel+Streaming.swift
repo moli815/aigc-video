@@ -486,7 +486,7 @@ extension ChatViewModel {
                                let session = CloudSession.capture() {
                                 lastGeneratedImage = try await CloudAssetHydrator.image(message, session: session)
                             }
-                            let sourceOverride = ImageReferenceResolver.sourceOverride(
+                            let sourceOverride = HostedAccount.isHostedActive && requestedSource != nil ? nil : ImageReferenceResolver.sourceOverride(
                                 requested: requestedSource,
                                 userText: userText,
                                 hasAttachedImage: !attachedCandidates.isEmpty,
@@ -577,9 +577,7 @@ extension ChatViewModel {
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""
                             let qualityTier = (args?["quality_tier"] as? String) ?? (args?["qualityTier"] as? String) ?? ""
-                            let serverExecution = HostedAccount.isHostedActive && HostedAccount.cachedImageServerExecution &&
-                                toolName == "image_generate" && !PreservedAssetWorkflow.keepsExistingCanvas(structuredArgs)
-                            let serverPlansImage = serverExecution && HostedAccount.behaviorBool("posterDesignByServer", default: false)
+                            let serverExecution = HostedAccount.isHostedActive
                             let qualityDecision = serverExecution ? nil : ImageQualityPolicy.decide(userText:userText,tool:toolName,
                                 referenceCount:refs.count,modelTier:qualityTier,
                                 modelReason:args?["quality_reason"] as? String,structured:structuredArgs)
@@ -591,7 +589,7 @@ extension ChatViewModel {
                             // 旧实现完全不看原图，编辑任务没指定比例时落到默认 1:1，
                             // 横版照片只能被中心裁切——这才是"P 图被切边"的根因。
                             let sourceSize = refs.first.flatMap { ImageGeometry.pixelSize(of: $0) }
-                            let plan = serverPlansImage ? nil : ImageTaskPlanner.plan(
+                            let plan = serverExecution ? nil : ImageTaskPlanner.plan(
                                 userText: prompt,
                                 referenceCount: refs.count,
                                 requestedCount: requestedCount > 0 ? requestedCount : nil,
@@ -613,7 +611,7 @@ extension ChatViewModel {
                                 case "image_series": return "series"
                                 default:
                                     guard !refs.isEmpty else { return "generate" }
-                                    guard let plan else { return "reference" }
+                                    guard let plan else { return toolName == "image_edit" ? "edit" : "reference" }
                                     return ImageService.taskKind(for: plan.taskType)
                                 }
                             }()
@@ -624,9 +622,11 @@ extension ChatViewModel {
                                 continue
                             }
                             let planPrompt = [serverExecution ? prompt : (plan?.prompt ?? prompt), catalogContext].compactMap { $0 }.joined(separator: "\n")
-                            let planAspect = serverExecution ? aspectRatio : (plan?.aspectRatio ?? aspectRatio)
+                            let sourceAspect = sourceSize.map { "\($0.width):\($0.height)" }
+                            let planAspect = serverExecution && toolName == "image_edit" && aspectRatio.isEmpty
+                                ? (sourceAspect ?? "") : (plan?.aspectRatio ?? aspectRatio)
                             let planTier = serverExecution ? "" : (plan?.qualityTier ?? qualityTier)
-                            let planCount = plan?.outputCount ?? 1
+                            let planCount = plan?.outputCount ?? max(1, requestedCount)
                             // 等待文案按**真实任务类型**分流（plan 已就绪；不用定时器伪造阶段）
                             imageWait = ImageWaitState(kind: waitKindForTool(toolName, plan: plan))
                             // ── 10-25 fail-closed：编辑任务读不到原图真实像素 → 直接失败，不调模型 ──

@@ -55,8 +55,8 @@ function ratioValue(text) {
  * @param {{messages:Array, memories:Array<string>}} input
  */
 function resolve({ messages = [], memories = [] } = {}) {
-  const users = messages.filter(m => m && m.role === "user");
-  const recent = users.slice(-3).map(textOf).filter(Boolean);
+  const users = messages.filter(m => m?.role === "user" && !require("./shared/image-delivery").isHistoryPreview(m));
+  const recent = users.slice(-3).map(textOf);
   const latest = recent[recent.length - 1] || "";
   const memoryText = memories.filter(t => typeof t === "string" && t).join("\n");
 
@@ -99,6 +99,7 @@ function resolve({ messages = [], memories = [] } = {}) {
     // 用户本轮原话：判断「是不是海报任务」时以用户说法为准，
     // 不依赖模型自己在 tool 参数里填 render_intent（实测它经常不填）。
     userText: latest,
+    verbatim: require("./shared/verbatim-image-prompt").extract(textOf(users.at(-1))),
     currentImageCount: (() => {
       const user = [...messages].reverse().find(m => m?.role === 'user' && !require('./shared/image-delivery').isHistoryPreview(m));
       return Array.isArray(user?.content) ? user.content.filter(part => part?.type === 'image_url').length : 0;
@@ -179,7 +180,7 @@ function blocksOf(args) {
   // 实测：模型经常把全部文案写成「多行字符串」而不是对象数组。
   // 旧实现只认数组，字符串一律当空，导致文案被兜底逻辑吃掉，只剩公司名和电话。
   if (typeof t === "string" && t.trim()) {
-    try { return require("./prompt-contract").parseTextString(t); } catch { return null; }
+    return posterDelivery.copyOf(args.structured);
   }
   return null;
 }
@@ -218,19 +219,6 @@ function apply(calls, intent, observe) {
       return call;
     }
 
-    const referenceRedesign=args.source==='attached'&&intent.currentImageCount===1
-      &&require('./reference-text').restylesReference(intent.userText);
-    const referenceDesign=referenceRedesign&&(refLines?.length>=2||posterDelivery.copyOf(args.structured).length>=2);
-    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceDesign});
-    const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
-    let blocks = nativePoster ? posterDelivery.copyOf(args.structured) : blocksOf(args);
-    if(nativePoster && referenceRedesign && refLines?.length){
-      blocks=require('./reference-text').keepSourceLines(blocks,refLines);
-    }
-    if (nativePoster && !blocks.some(row => typeof row?.text === 'string' && row.text.trim())) {
-      throw Object.assign(Error('TOOL_ARGUMENTS_INVALID'), { code: 'TOOL_ARGUMENTS_INVALID', reason: 'TEXT_ARRAY_INVALID', field: 'structured.text' });
-    }
-    if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     let changed = null;
     const count = intent.currentImageCount;
     if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6
@@ -246,6 +234,33 @@ function apply(calls, intent, observe) {
       args.reference_roles = args.source_indexes.map(index => roles.get(index) || ('本轮素材' + index));
       changed = { completeCurrentReferences: count };
     }
+    // Binding happens after membership/reference finalization, using only this user turn.
+    if (intent.verbatim && fn.name !== 'image_series') {
+      const { image_references, preserve_assets, preserve_outside, image_plan, routing } = args.structured || {};
+      args.structured = { verbatim_prompt: intent.verbatim, routing, image_references, preserve_assets, preserve_outside };
+      if (image_plan?.protected_references?.length) args.structured.image_plan = image_plan;
+      // Older iPads may add catalogue text to prompt. The structured original survives the round trip.
+      args.prompt = intent.verbatim.length <= 1400 ? intent.verbatim : '使用本轮用户提供的完整作图提示词。';
+      delete args.text_mode;
+      const ratio = ratioValue(intent.verbatim);
+      if (ratio) args.aspect_ratio = ratio.label;
+      else delete args.aspect_ratio;
+      touched.push({tool: fn.name, verbatim: true});
+      return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };
+    }
+    const referenceRedesign=args.source==='attached'&&intent.currentImageCount===1
+      &&require('./reference-text').restylesReference(intent.userText);
+    const referenceDesign=referenceRedesign&&(refLines?.length>=2||posterDelivery.copyOf(args.structured).length>=2);
+    const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceDesign});
+    const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
+    let blocks = nativePoster ? posterDelivery.copyOf(args.structured) : blocksOf(args);
+    if(nativePoster && referenceRedesign && refLines?.length){
+      blocks=require('./reference-text').keepSourceLines(blocks,refLines);
+    }
+    if (nativePoster && !blocks.some(row => typeof row?.text === 'string' && row.text.trim())) {
+      throw Object.assign(Error('TOOL_ARGUMENTS_INVALID'), { code: 'TOOL_ARGUMENTS_INVALID', reason: 'TEXT_ARRAY_INVALID', field: 'structured.text' });
+    }
+    if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     if (nativePoster) {
       args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign});
       changed = { posterDelivery: true, copyRows: blocks.length };
@@ -301,6 +316,13 @@ function apply(calls, intent, observe) {
       changed.aspect_ratio = { from: current ? current.label : "(未给)", to, why: wrongDirection ? "方向与要求相反" : "未给比例" };
     }
 
+    if (fn.name === 'image_edit') {
+      const requestedAspect = require('./shared/poster-reformat').ratioOf(normalizeDirection(intent.userText));
+      if (requestedAspect) args.aspect_ratio = requestedAspect;
+      else delete args.aspect_ratio; // the transport supplies the real source dimensions
+      changed = { ...changed, editCanvas: requestedAspect || 'source' };
+    }
+
     const originalCanvas=intent.roles?.poster?.size;
     if(referenceRedesign && originalCanvas
         && !ratioValue(intent.userText)
@@ -308,19 +330,6 @@ function apply(calls, intent, observe) {
         && !ORIENT.landscape.test(normalizeDirection(intent.userText))){
       args.aspect_ratio=originalCanvas.w+":"+originalCanvas.h;
       changed={...changed,canvas:{to:args.aspect_ratio,why:"仅改整图风格，保留原画布比例"}};
-    }
-
-    // ①.8 海报画布规范化（2026-11-22）
-    // 模型会自己挑比例：同一段烘焙需求出过 2:3、4:5、3:4 三种。客户端按请求比例做几何校验，
-    // 一不一致就判「画布比例与要求不同」并把整张图丢掉——用户白等 40 秒还看不到图。
-    // 用户没明确要求比例时，海报统一锁 3:4（门店海报通行比例），减少这类误杀。
-    if (!nativePoster && !referenceRedesign && !explicit && !intent.orientation && wantsPosterLayout(args, blocks, intent)) {
-      const cur = ratioValue(String(args.aspect_ratio || ""));
-      if (!cur || Math.abs(cur.value - 0.75) / 0.75 > 0.02) {
-        args.aspect_ratio = "3:4";
-        changed = changed || {};
-        changed.canvas = { from: cur ? cur.label : "(未给)", to: "3:4", why: "海报画布规范化" };
-      }
     }
 
     // ①.5 术语校正：模型把逐字稿里的词写歪了，就改回逐字稿的写法
@@ -351,32 +360,6 @@ function apply(calls, intent, observe) {
       changed.contact = { added: intent.contact };
     }
 
-    // 提示词契约：按官方指南补「用途 / 参考图角色 / 版式关系 / 引号文字」，版式仍由模型自己排
-    // 只对「海报/宣传物料」类请求追加排版契约。
-    // 旧实现在有任何 prompt 时都追加，会把「画一只猫」改成商业海报并塞进一堆
-    // 版式与文字要求，严重破坏普通配图——上线前必须按意图分流。
-    if (observe && args.prompt) observe({ tag: "intent_apply_decision", tool: fn.name, want: wantsPosterLayout(args, blocks, intent) });
-    if (!nativePoster && !referenceRedesign && args.prompt && wantsPosterLayout(args, blocks, intent)) {
-      // fail-open：排版契约只是锦上添花，任何异常都不能让整条回复流中断
-      //（历史事故：一个未定义的函数就让客户端看到「输出尚未完成」）。
-      try {
-        args.prompt = require("./prompt-contract").augment(args.prompt, {
-          roles: intent.roles,
-          aspectRatio: args.aspect_ratio,
-          texts: (blocks || []).map(b => String((b && b.text) || "")).filter(Boolean),
-          blocks: blocks || [],
-          structured: args.structured,
-          company: intent.enforceSpec && intent.enforceSpec.company,
-          contact: intent.enforceSpec && intent.enforceSpec.contact,
-        });
-        changed = changed || {};
-        changed.promptContract = { augmented: true, chars: args.prompt.length };
-      } catch (e) {
-        if (typeof observe === "function") {
-          try { observe({ tag: "prompt_contract_failed", code: String((e && (e.code || e.message)) || "UNKNOWN").slice(0, 120) }); } catch { /* ignore */ }
-        }
-      }
-    }
     if (!changed) return call;
     touched.push({ tool: fn.name, ...changed });
     return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };

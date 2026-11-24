@@ -93,7 +93,8 @@ test("IMG-05 显式尺寸一路透传到请求体，且优先于 aspect_ratio", 
   assert.match(COMPILER, /else if let aspectRatio[\s\S]{0,100}body\["aspect_ratio"\]/,
     "仅在没有显式尺寸时才允许发送 aspect_ratio");
   assert.match(STREAM, /targetSize: plan\?\.targetSize/, "旧路径需要保留显式尺寸，新服务端路径允许由服务端决定");
-  assert.match(STREAM, /serverPlansImage \? nil : ImageTaskPlanner\.plan\(/);
+  assert.match(VM, /if !HostedAccount\.isHostedActive && Self\.mentionsImageGenerationOrEdit/);
+  assert.match(STREAM, /serverExecution \? nil : ImageTaskPlanner\.plan\(/);
 });
 
 test("IMG-06 极端原图比例 fail closed，不再补边生成后裁回", () => {

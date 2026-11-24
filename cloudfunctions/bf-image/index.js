@@ -1513,6 +1513,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   }
 
   // 交付物边界兜底：把"数据来源/未核实/仅供参考"这类核对说明从画面文案里剔掉
+  const verbatim = require("./shared/verbatim-image-prompt").original(structured);
   const cleanedPrompt = cleanImageRequest({ prompt, structured });
   const rawPrompt = String(cleanedPrompt.prompt || "").trim();
   structured = cleanedPrompt.structured;
@@ -1546,7 +1547,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     catch(e){logStage("protected_asset_preflight_failed",{code:e?.code||"ASSET_UNAVAILABLE"});return {ok:false,code:422,error:"IMAGE_ASSET_UNAVAILABLE",msg:"这次需要的原始素材尚未完整读取，尚未生成或扣费，请重新选择原图后再试。"};}
   }
   let composition=null;
-  if(accountId && !workflowPlan?.native && !reformat && !repairNativeCopy && !nativePoster){
+  if(!verbatim && accountId && !workflowPlan?.native && !reformat && !repairNativeCopy && !nativePoster){
     try{const input={prompt,structured,renderIntent,taskKind,textMode,layerDecomposition,accountId,resolvedSize:resolveSize(size,aspectRatio)};
       composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(input,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(input,RT.IMAGE_COMPOSITION_POLICY);}
     catch(e){
@@ -1608,48 +1609,19 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
-  const finalPrompt = reformat?reformat.prompt:multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
+  const finalPrompt = verbatim ?? (reformat?reformat.prompt:multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
-      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : "");
-
-  // The old fallback may write onto the output only when the supplier is
-  // drawing the finished image. A background or edit has its own copy rules.
-  if (!nativePoster && !composition && !reformat && !overlayMode && !layerDecomposition && !isPixelEdit) {
-    try {
-      // 模型给的 structured 有四种形态：text 数组、text 字符串、对象（title/labels/bodies）、
-      // 顶层 products。只判断 structured.text 会漏掉后两种——实测就是这样漏的，
-      // 结果一次标题写错、两次零文字。统一交给 normalizeCopy 解析。
-      const pc = require("./prompt-contract");
-      const copyBlocks = pc.normalizeCopy(undefined, finalPrompt, structured);
-      if (copyBlocks && copyBlocks.length >= 2 && !/逐字照写/.test(finalPrompt)) {
-        finalPrompt = pc.augment(finalPrompt, {
-          aspectRatio,
-          blocks: copyBlocks,
-          structured,
-          roles: referenceRoles || null,
-        });
-        logStage("prompt_contract_fallback", { chars: finalPrompt.length, blocks: copyBlocks.length });
-      } else if (!/逐字照写/.test(finalPrompt)) {
-        logStage("prompt_contract_fallback_skipped", { blocks: copyBlocks ? copyBlocks.length : 0, hasStructured: !!structured });
-      }
-    } catch (e) {
-      logStage("prompt_contract_fallback_failed", { reason: String((e && e.message) || "").slice(0, 80) });
-    }
-  }
+      "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : ""));
 
   // 2026-11-22：客户端没给 aspect_ratio 时，过去只传「2K」，画布由上游自己挑——
   // 实测同一段烘焙需求出过 1280x3200（0.4）、1664x2496（0.667）、1776x2368（0.75）三种，
   // 客户端几何校验会直接判「比例不符」并把图丢掉。这里从提示词里把构图意图读出来再定尺寸。
   function inferAspectFromPrompt(text) {
     const t = String(text || "");
-    if (/9\s*[:：]\s*16|竖屏|手机壁纸/.test(t)) return "9:16";
-    if (/16\s*[:：]\s*9|横版|横幅|banner/i.test(t)) return "16:9";
-    if (/4\s*[:：]\s*3/.test(t)) return "4:3";
-    if (/1\s*[:：]\s*1|方图/.test(t)) return "1:1";
-    if (/3\s*[:：]\s*4|竖版|海报|易拉宝|展架|门店贴/.test(t)) return "3:4";
-    return "";
+    return require("./shared/poster-reformat").ratioOf(t) ||
+      (/手机壁纸/.test(t) ? "9:16" : /横幅|banner/i.test(t) ? "16:9" : "");
   }
-  const aspectForSize = aspectRatio || inferAspectFromPrompt(finalPrompt);
+  const aspectForSize = aspectRatio || inferAspectFromPrompt(verbatim || rawPrompt);
   const resolvedSize = layerDecomposition === true ? 'auto' : resolveSize(size, aspectForSize);
   if (!resolvedSize) {
     logStage("image_size_unsupported", { taskKind, aspectRatio: String(aspectRatio || "") });
@@ -1678,7 +1650,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 10-24 参数兼容修复：只有 Pro / 4.0 支持 fast 提示词优化。
   // Flash / Lite 只支持 standard，此前无条件传 fast 会被上游拒绝或行为不符预期。
   // 未知模型走保守默认（不传），保持官方 standard 语义。
-  if (caps.fastPromptMode && !image) {
+  if (!verbatim && caps.fastPromptMode && !image) {
     payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
   }
   if (image) payload.image = image;
@@ -1725,7 +1697,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
           // idempotency claim and total deadline. Never retry an uncertain result.
           payload.model = selectedModel;
           delete payload.optimize_prompt_options;
-          if (caps.fastPromptMode && !image) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
+          if (!verbatim && caps.fastPromptMode && !image) payload.optimize_prompt_options = providerPromptOptions(selectedModel, RT.IMAGE_ROUTING_MODE, RT.IMAGE_FAST_MODE);
           route.reason = "auto:capability-rejection-pro";
           logStage("image_route_upgrade", { from: previous, model: selectedModel, reason: route.reason, status: r.status });
           continue;
@@ -2546,7 +2518,7 @@ const server = http.createServer(async (req, res) => {
                   structAudit.missing.push({ kind: "numbering", value: dupCodes.join("、"), dup: dupCodes.length });
                 }
               } catch {}
-              if (structAudit.missing.length) {
+              if (structAudit.missing.length && !require("./shared/verbatim-image-prompt").original(body.structured)) {
                 logStage("poster_struct_audit", { missing: structAudit.missing.map(m => m.kind), detail: structAudit.missing.slice(0, 3) });
                 // 只重跑一次：硬伤命中的比例不高，多跑一次的收益远大于让用户拿到废图。
                 const hint = "【必填项】上一版漏掉了下面这些内容，这一版必须全部出现、不许省略：" +

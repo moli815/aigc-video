@@ -34,12 +34,7 @@ enum ImageDesignGuidance {
         let diverseDefaults = ["swiss", "flat-illustration", "art-deco", "anime-story", "editorial-photo", "printmaking"]
         return diverseDefaults.compactMap { id in references.first { $0.id == id } }
     }
-    static func instructions(for request: String, serverDesign: Bool = false) -> String {
-        if serverDesign {
-            return baseInstructions.components(separatedBy: "\n").filter { line in
-                (8...13).contains { line.hasPrefix("\($0). ") } || line.hasPrefix("原素材替换的执行契约")
-            }.joined(separator: "\n")
-        }
+    static func instructions(for request: String) -> String {
         let examples = suggestions(for: request).map { reference in
             "\(reference.name)：\(reference.principles) 可参考 layout=\(reference.layout)、fontStyle=\(reference.font)。"
         }.joined(separator: "\n")

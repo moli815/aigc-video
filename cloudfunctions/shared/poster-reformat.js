@@ -38,7 +38,7 @@ function mark(args,userText){
  return out;
 }
 function normalize(body){
- if(excluded(body))return body;
+ if(excluded(body)||require('./verbatim-image-prompt').original(body.structured))return body;
  const kind=body.task_kind||body.taskKind||'',hasImage=Array.isArray(body.image)?body.image.length>0:!!body.image;
  // A finalized new poster may mention attachment slots and aspect in the
  // visual brief. Only a real user-derived reflow marker can override it.
