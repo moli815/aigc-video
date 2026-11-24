@@ -40,7 +40,10 @@ function mark(args,userText){
 function normalize(body){
  if(excluded(body))return body;
  const kind=body.task_kind||body.taskKind||'',hasImage=Array.isArray(body.image)?body.image.length>0:!!body.image;
- const intent=metadata(body.structured?.poster_reformat,body)||(hasImage&&['edit','reference','generate',''].includes(kind)?derive(body.prompt,body):null);
+ // A finalized new poster may mention attachment slots and aspect in the
+ // visual brief. Only a real user-derived reflow marker can override it.
+ const allowLegacyInference=body.structured?.poster_delivery?.version!==1;
+ const intent=metadata(body.structured?.poster_reformat,body)||(allowLegacyInference&&hasImage&&['edit','reference','generate',''].includes(kind)?derive(body.prompt,body):null);
  if(!intent)return body;
  // Pixel size may describe the input or a stale client canvas. Preserve its
  // resolution budget, but resolve the newly requested aspect on the server.

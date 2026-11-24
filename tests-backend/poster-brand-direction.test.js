@@ -128,6 +128,17 @@ test('native poster planning leaves the legacy background asset brief optional',
   assert.ok(schema({}).required.includes('artwork_prompt'));
 });
 
+test('text-free decoration does not route a titled poster to the legacy template',()=>{
+  const { apply }=require('../cloudfunctions/bf-api/intent-contract');
+  const args={prompt:'图1是产品图册，横版设备协作海报',source:'attached',source_indexes:[1,2],render_intent:'flat_artwork',structured:{text:[{key:'title',role:'title',text:'让设备运维有据可查'}]}};
+  const user='用本轮附件做一张设备海报，保留标题与原字，右侧补接线特写以及设备记录的无字图形。';
+  const [call]=apply([{function:{name:'image_generate',arguments:JSON.stringify(args)}}],{userText:user,currentImageCount:2});
+  const next=JSON.parse(call.function.arguments);
+  assert.equal(next.structured.poster_delivery.version,1);
+  assert.doesNotMatch(next.prompt,/六张卡|价格大号/);
+  assert.equal(poster.nativePoster(args,'帮我生成一张无字底图'),false);
+});
+
 
 const layout=require('../cloudfunctions/shared/image-layout-protocol');
 test('only the explicit single Logo path can ask for placement without copy analysis',()=>{
