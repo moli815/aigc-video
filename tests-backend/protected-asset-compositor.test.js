@@ -37,7 +37,7 @@ test("logo position avoids actual occupied words and never accepts no-safe-space
  assert.throws(()=>m.logoBox({canvas,aspect:2,occupied:[[0,0,1,1]]}),/NO_SAFE_LOGO_SLOT/);
 });
 
-test("opted-in logo backing appears on a low contrast region without recoloring the asset",async()=>{
+test("a fixed dark placement gets feathered contrast without recoloring the logo",async()=>{
  const source=raster(66,18,[20,27,48]),bytes=png(source),placement={role:"logo",bytes,sha256:sha(bytes),preparedRaster:source,ensureContrast:true};
  const dark=await m.compose({canvas:png(raster(480,320,[12,20,35])),placements:[placement]});
  const light=await m.compose({canvas:png(raster(480,320,[238,242,244])),placements:[placement]});
@@ -47,5 +47,32 @@ test("opted-in logo backing appears on a low contrast region without recoloring 
  const i=(Math.floor((q[0][1]+q[2][1])/2*result.height)*result.width+Math.floor((q[0][0]+q[2][0])/2*result.width))*4;
  assert.deepEqual([...result.data.subarray(i,i+4)],[20,27,48,255]);
  assert.deepEqual([...result.data.subarray(0,4)],[12,20,35,255]);
+});
+
+test("automatic logo placement prefers a naturally readable free corner",async()=>{
+ const source=raster(66,18,[20,27,48]),bytes=png(source),placement={role:"logo",bytes,sha256:sha(bytes),preparedRaster:source,ensureContrast:true};
+ const base=raster(480,320,[12,20,35]);
+ for(let y=0;y<base.height;y++)for(let x=240;x<base.width;x++)base.data.fill(235,(y*base.width+x)*4,(y*base.width+x)*4+3);
+ const free=await m.compose({canvas:png(base),placements:[placement]});
+ assert.ok(free.manifest.placements[0].quad[0][0]>.5);
+ assert.equal(free.manifest.placements[0].backing,undefined);
+ const fixed=await m.compose({canvas:png(base),placements:[{...placement,anchor:"top_left"}]});
+ assert.ok(fixed.manifest.placements[0].quad[0][0]<.5);
+ assert.equal(fixed.manifest.placements[0].backing,true);
+});
+
+test("transparent logo gaps retain the original backdrop and only the ink contour gains contrast",async()=>{
+ const base=raster(800,600,[18,28,46]);
+ const source=raster(80,30,[22,29,43,0]);
+ for(let y=6;y<24;y++)for(let x=8;x<72;x++)if(x<30||x>=50)source.data[(y*80+x)*4+3]=255;
+ const bytes=png(source);
+ const result=await m.compose({canvas:png(base),placements:[{role:"logo",anchor:"top_left",bytes,sha256:sha(bytes),preparedRaster:source,ensureContrast:true}]});
+ const q=result.manifest.placements[0].quad,r=m.decode(result.png);
+ const at=(x,y)=>r.data[(Math.round(y*600)*800+Math.round(x*800))*4];
+ const x=(q[0][0]+q[2][0])/2,y=(q[0][1]+q[2][1])/2;
+ const beforeInk=q[0][0]+(q[2][0]-q[0][0])*8/79-.0015;
+ assert.ok(at(beforeInk,y)>18);
+ assert.equal(at(x,y),18);
+ assert.equal(at(x,q[0][1]-.01),18);
 });
 

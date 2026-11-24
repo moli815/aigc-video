@@ -101,15 +101,21 @@ function quadOf(raw,width,height){
 }
 function boxQuad(b){return [[b[0],b[1]],[b[0]+b[2],b[1]],[b[0]+b[2],b[1]+b[3]],[b[0],b[1]+b[3]]];}
 function intersects(a,b){return a[0]<b[0]+b[2]&&b[0]<a[0]+a[2]&&a[1]<b[1]+b[3]&&b[1]<a[1]+a[3];}
-function logoBox({canvas,aspect,occupied=[],anchor="auto"}){
+const LOGO_CLEARANCE=.008;
+function logoBox({canvas,aspect,occupied=[],anchor="auto",acceptBox}){
  const short=Math.min(canvas.width,canvas.height),w=Math.min(canvas.width*.3,Math.max(short*.16,short*.055*aspect))/canvas.width,h=w*canvas.width/aspect/canvas.height;
  const mx=Math.min(canvas.width,canvas.height)*.055/canvas.width,my=Math.min(canvas.width,canvas.height)*.055/canvas.height;
  if(h>.3)fail("ASSET_LOGO_ASPECT_UNSUPPORTED");
  const candidates=[[mx,my],[1-mx-w,my],[mx,1-my-h],[1-mx-w,1-my-h],[(1-w)/2,my],[(1-w)/2,1-my-h]];
  const order={top_left:0,top_right:1,bottom_left:2,bottom_right:3};if(Object.hasOwn(order,anchor))candidates.unshift(candidates[order[anchor]]);
+ let fallback;
  for(const [x,y]of candidates){const b=[x,y,w,h];if(x<0||y<0||x+w>1||y+h>1)continue;
-  const pad=[x-.008,y-.008,w+.016,h+.016];if(!occupied.some(o=>intersects(pad,o)))return b;
+  const pad=[x-LOGO_CLEARANCE,y-LOGO_CLEARANCE,w+2*LOGO_CLEARANCE,h+2*LOGO_CLEARANCE];
+  if(occupied.some(o=>intersects(pad,o)))continue;
+  if(anchor!=="auto"||!acceptBox||acceptBox(b))return b;
+  fallback??=b;
  }
+ if(fallback)return fallback;
  fail("ASSET_NO_SAFE_LOGO_SLOT");
 }
 function luminance(data,index){
@@ -117,35 +123,39 @@ function luminance(data,index){
  return .2126*linear(data[index])+.7152*linear(data[index+1])+.0722*linear(data[index+2]);
 }
 function contrastRatio(a,b){return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);}
-function placeLogoBacking(canvas,source,box){
- let sum=0,count=0;
- const step=Math.max(1,Math.floor(source.width*source.height/4096));
- for(let pixel=0;pixel<source.width*source.height;pixel+=step){
-  const i=pixel*4;
-  if(source.data[i+3]>=220){sum+=luminance(source.data,i);count++;}
- }
- if(!count)return false;
- const foreground=sum/count;
+function logoContrastFill(canvas,source,box){
  const [x,y,w,h]=box;
- let need=0;
- for(let row=0;row<5;row++)for(let col=0;col<9;col++){
-  const px=Math.floor((x+w*(col+.5)/9)*canvas.width);
-  const py=Math.floor((y+h*(row+.5)/5)*canvas.height);
-  if(contrastRatio(foreground,luminance(canvas.data,(py*canvas.width+px)*4))<3)need++;
+ let inks=0,low=0,lighten=0;
+ const step=Math.max(1,Math.floor(Math.sqrt(source.width*source.height/4096)));
+ for(let row=0;row<source.height;row+=step)for(let col=0;col<source.width;col+=step){
+  const i=(row*source.width+col)*4;
+  if(source.data[i+3]<220)continue;
+  inks++;
+  const px=Math.floor((x+w*(col+.5)/source.width)*canvas.width);
+  const py=Math.floor((y+h*(row+.5)/source.height)*canvas.height);
+  const ink=luminance(source.data,i);
+  if(contrastRatio(ink,luminance(canvas.data,(py*canvas.width+px)*4))>=3)continue;
+  low++;
+  if(contrastRatio(ink,1)>contrastRatio(ink,0))lighten++;
  }
- if(need<13)return false;
- const fill=contrastRatio(foreground,1)>contrastRatio(foreground,0)?250:15;
- const left=Math.max(0,Math.ceil((x-.006)*canvas.width)),right=Math.min(canvas.width,Math.floor((x+w+.006)*canvas.width));
- const top=Math.max(0,Math.ceil((y-.006)*canvas.height)),bottom=Math.min(canvas.height,Math.floor((y+h+.006)*canvas.height));
- const radius=Math.max(1,Math.floor((bottom-top)*.13));
- for(let py=top;py<bottom;py++)for(let px=left;px<right;px++){
-  const dx=Math.max(left+radius-px,px-(right-radius-1),0);
-  const dy=Math.max(top+radius-py,py-(bottom-radius-1),0);
-  if(dx*dx+dy*dy>radius*radius)continue;
-  const i=(py*canvas.width+px)*4;
-  canvas.data[i]=fill;canvas.data[i+1]=fill;canvas.data[i+2]=fill;canvas.data[i+3]=255;
+ return low&&low/inks>=.3?(lighten>=low/2?255:0):null;
+}
+function applyLogoContrast(cv,canvas,warped,bounds,fill,keep){
+ const radius=Math.max(1,Math.min(3,Math.round(Math.min(canvas.width,canvas.height)*.0017)));
+ const {l,r,t,b}=bounds,alpha=keep(new cv.Mat(b-t,r-l,cv.CV_8UC1));
+ const matte=alpha.data,ink=warped.data;
+ for(let y=t;y<b;y++)for(let x=l;x<r;x++)matte[(y-t)*(r-l)+x-l]=ink[(y*canvas.width+x)*4+3];
+ const shape=keep(cv.getStructuringElement(cv.MORPH_ELLIPSE,new cv.Size(2*radius+1,2*radius+1)));
+ const expanded=keep(new cv.Mat()),soft=keep(new cv.Mat());
+ cv.dilate(alpha,expanded,shape);
+ cv.GaussianBlur(expanded,soft,new cv.Size(3,3),0);
+ const halo=soft.data;
+ for(let y=t;y<b;y++)for(let x=l;x<r;x++){
+  const j=(y-t)*(r-l)+x-l;
+  const strength=.73*halo[j]/255;
+  const i=(y*canvas.width+x)*4;
+  for(let c=0;c<3;c++)canvas.data[i+c]=Math.round(canvas.data[i+c]+(fill-canvas.data[i+c])*strength);
  }
- return true;
 }
 async function compose({canvas:bytes,placements}){
  const start=Date.now(),canvas=decode(bytes),{cv}=await engine(),manifest=[],placedLogos=[];
@@ -157,10 +167,11 @@ async function compose({canvas:bytes,placements}){
   let source=item.preparedRaster||cropRaster(decode(item.bytes),item.crop),method=item.method||"original-pixels";
   if(!Buffer.isBuffer(source.data)||source.width*source.height>5e6||source.data.length!==source.width*source.height*4)fail("ASSET_PIXEL_LIMIT");
   if(item.role==="logo"&&!item.preparedRaster){const c=await cutout(source);source=c.raster;method=c.method;}
-  let quad=item.quad,backing=false;
+  let quad=item.quad,contrastFill=null;
   if(item.role==="logo"&&!quad){
-   const box=logoBox({canvas,aspect:source.width/source.height,occupied:[...(item.occupied||[]),...placedLogos],anchor:item.anchor});
-   if(item.ensureContrast===true)backing=placeLogoBacking(canvas,source,box);
+   const contrast=item.ensureContrast===true?box=>logoContrastFill(canvas,source,box):null;
+   const box=logoBox({canvas,aspect:source.width/source.height,occupied:[...(item.occupied||[]),...placedLogos],anchor:item.anchor,acceptBox:contrast?box=>contrast(box)===null:null});
+   contrastFill=contrast?contrast(box):null;
    quad=boxQuad(box);placedLogos.push(box);
   }
   const points=quadOf(quad,canvas.width,canvas.height),owned=[],keep=x=>(owned.push(x),x);
@@ -170,13 +181,16 @@ async function compose({canvas:bytes,placements}){
    const from=keep(cv.matFromArray(4,1,cv.CV_32FC2,[0,0,source.width-1,0,source.width-1,source.height-1,0,source.height-1]));
    const to=keep(cv.matFromArray(4,1,cv.CV_32FC2,points)),matrix=keep(cv.getPerspectiveTransform(from,to)),warped=keep(new cv.Mat());
    cv.warpPerspective(src,warped,matrix,new cv.Size(canvas.width,canvas.height),cv.INTER_LINEAR,cv.BORDER_CONSTANT,new cv.Scalar(0,0,0,0));
-   const xs=quad.map(p=>p[0]),ys=quad.map(p=>p[1]),l=Math.max(0,Math.floor(Math.min(...xs)*canvas.width)-1),r=Math.min(canvas.width,Math.ceil(Math.max(...xs)*canvas.width)+1),t=Math.max(0,Math.floor(Math.min(...ys)*canvas.height)-1),b=Math.min(canvas.height,Math.ceil(Math.max(...ys)*canvas.height)+1);
+   const xs=quad.map(p=>p[0]),ys=quad.map(p=>p[1]);
+   const pad=contrastFill==null?1:Math.min(5,Math.max(1,Math.floor(LOGO_CLEARANCE*Math.min(canvas.width,canvas.height))));
+   const l=Math.max(0,Math.floor(Math.min(...xs)*canvas.width)-pad),r=Math.min(canvas.width,Math.ceil(Math.max(...xs)*canvas.width)+pad),t=Math.max(0,Math.floor(Math.min(...ys)*canvas.height)-pad),b=Math.min(canvas.height,Math.ceil(Math.max(...ys)*canvas.height)+pad);
+   if(contrastFill!=null)applyLogoContrast(cv,canvas,warped,{l,r,t,b},contrastFill,keep);
    for(let y=t;y<b;y++)for(let x=l;x<r;x++){
     const i=(y*canvas.width+x)*4,a=warped.data[i+3]/255;if(!a)continue;const da=canvas.data[i+3]/255,oa=a+da*(1-a);
     for(let c=0;c<3;c++)canvas.data[i+c]=Math.max(0,Math.min(255,Math.round((warped.data[i+c]+canvas.data[i+c]*da*(1-a))/oa)));
     canvas.data[i+3]=Math.round(oa*255);
    }
-   manifest.push({role:item.role,sourceSha256:sourceHash,method,quad,sourceWidth:source.width,sourceHeight:source.height,...(backing?{backing:true}:{})});
+   manifest.push({role:item.role,sourceSha256:sourceHash,method,quad,sourceWidth:source.width,sourceHeight:source.height,...(contrastFill!=null?{backing:true}:{})});
   }finally{for(const mat of owned.reverse())mat.delete();}
  }
  const png=PNG.sync.write(canvas);
