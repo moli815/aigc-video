@@ -84,6 +84,22 @@ test('default production remains rich when asked not to be minimal, and exact lo
   assert.equal(poster.mark({},'这次做一张极简海报').poster_delivery.density,'sparse');
 });
 
+test('delegating style keeps the content-led visual defaults without overriding actual direction',()=>{
+  const text=[{key:'title',role:'title',text:'园区设备运营协作指南'},{key:'body',role:'body',text:'逐项保留现场记录'}];
+  const user='按刚才说的做一张海报。每段原样上图，版式你自己定。';
+  const ordinary=poster.mark({text},user);
+  assert.equal(ordinary.poster_delivery.user_direction,undefined);
+  for(const structured of [ordinary,{...ordinary,poster_delivery:{...ordinary.poster_delivery,user_direction:user}}]){
+    const p=poster.compile({visual:'清楚的园区场景',structured,density:'dense'});
+    assert.match(p,/把标题融入主视觉.*关键分区.*延续到大块空底/);
+    for(const row of text) assert.equal(p.split(JSON.stringify(row.text)).length,2);
+  }
+  const explicit=poster.mark({text},'版式你自己定，但纯白背景，不加装饰。');
+  const p=poster.compile({visual:'保留足够对比度',structured:explicit,density:explicit.poster_delivery.density});
+  assert.match(p,/不加装饰/);
+  assert.doesNotMatch(p,/延续到大块空底/);
+});
+
 test('an explicit all-current-assets turn restores missing selections without overriding local or historical bindings',()=>{
   const {apply}=require('../cloudfunctions/bf-api/intent-contract');
   const row={key:'title',role:'title',text:'设备协作'};

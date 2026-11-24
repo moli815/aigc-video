@@ -5,12 +5,13 @@ const LOCAL_CHANGE = /只(?:需|要)?(?:改|加|换|删)(?:动|修|除)?(?:其�
 const SPARSE = /极简|少字|只(?:写|印|放)(?:一个)?(?:主)?标题|大面积留白|纯(?:白|黑|色)(?:底|背景)/;
 const NO_COPY = /不要(?:任何)?(?:文字|文案)|无字(?:底图|海报)?|不(?:写|印|要)(?:任何)?字/;
 const DESIGN_WORDS = /风格|版式|布局|构图|画风|配色|色调|插画|手绘|水彩|极简|留白|复古|摄影|杂志|色(?:底|背景)|(?:不要|别|不用|不加|禁用|不做).{0,8}(?:图标|卡片|文字|装饰|渐变|照片|纯色|背景)/;
+const DELEGATED_DESIGN = /^(?:(?:画面)?(?:的)?(?:风格|版式|排版|布局|构图|配色|色调)[与和、及]?)+(?:由你|交给你|让你|你)?(?:来|自己|自行|自由|随意|看着|灵活|按内容|根据内容)*(?:决定|定|设计|选择|选|安排|发挥|调整|来)?(?:就好|即可|就行)?$/;
 const ROLES = new Set(['title', 'subtitle', 'label', 'body', 'contact', 'footer']);
 const LEGACY_COMPILED = /(?:^|\n)以下文字逐字照写、不得改动；画面不出现其它文字、伪字或乱码：/;
 const PLANNER_GUIDANCE = [
   '【海报设计简报】按本轮要交付的成品、受众、主题及已确认事实构思。优先执行用户明确指定的媒介、色彩、构图、留白、信息量与禁止项；其次是本轮选定的风格参考，同项目确认过的偏好仅补空缺。品牌和参考原件按用途绑定。',
-  '默认商业海报先确定一个主视觉，再按真实的信息关系组织分区。把关键内容变成能读懂的实景、细节或关系图，让配图也传达信息；资料充足时保留必要解释，避免段落或同款卡片铺满。色彩、媒介、背景、装饰和栏数由本轮内容与构图决定。极简、留白、无配图和纯摄影按用户当前要求执行。',
-  'prompt 写简短自然的视觉委托，交代主体、场景、表现手法及必要约束，视觉说明尽量不超过约300字；已有图片只说明编号和作用，省去逐件复述。structured.text 保留完整定稿。仅有真实先后关系时画流程，并列内容不补步骤编号。没有依据的名称、数字与承诺不补。整图改款保留原稿主体和用户未要求改变的内容关系。',
+  '默认商业海报以主视觉统领整页。标题与主题场景、插画或材质呼应；挑适合可视化的栏目，给它们各自相关的业务细节。让同一场景或图形语言延续到边缘和区块间，文字底下保持高对比。这些视觉内容和选用的媒介写进简报。不要因字多自行禁用照片或配图、留大片空底，也不强制固定栏数或同款卡片。用户要求的极简、留白、无配图和纯摄影照做。',
+  'prompt 写简短自然的视觉委托，交代主体、场景、表现手法及必要约束，约300字以内；已提供的图片只说明编号与作用。定稿全部放 structured.text，视觉简报不再重列标签、编号和文案，也不单独重排同一栏目。仅有真实先后关系时画流程。整图改款保留原稿主体、定稿和用户未要求改变的内容关系。',
 ].join('\n');
 
 function sparseRequested(request) {
@@ -19,14 +20,18 @@ function sparseRequested(request) {
 }
 
 function userDesignOf(request) {
-  if (request.length<=300) return DESIGN_WORDS.test(request)?request:'';
+  const hasDirection=clause=>clause.split(/[，,。！？；\n]+/).some(part=>{
+    const text=part.trim();
+    return DESIGN_WORDS.test(text)&&!DELEGATED_DESIGN.test(text);
+  });
+  if (request.length<=300) return hasDirection(request)?request:'';
   // A long turn often includes a handoff or literal copy before the actual
   // design direction. Carry its short visual clauses, not its entire text.
   const clauses=request.split(/[。！？；\n]+/).map(clause=>clause.trim());
   const selected=new Set();
   let remaining=300;
   for (const clause of clauses.reverse()) {
-    if (!clause || clause.length>remaining || selected.has(clause) || !DESIGN_WORDS.test(clause)) continue;
+    if (!clause || clause.length>remaining || selected.has(clause) || !hasDirection(clause)) continue;
     selected.add(clause);
     remaining-=clause.length+1;
   }
@@ -130,13 +135,13 @@ function compile({ visual, structured, density }) {
   const brief = typeof structured.design_brief?.visual_approach === 'string' ? structured.design_brief.visual_approach.trim() : '';
   const copy = rows.map(row => `${roles[row.role] || roles.body}：${row.text.split(/\r?\n/).map(line => JSON.stringify(line)).join('\n')}`);
   const userDirection=structured?.poster_delivery?.user_direction;
-  const explicit=typeof userDirection==='string' && userDirection.trim() && userDirection.length<=300;
+  const explicit=typeof userDirection==='string' && userDirection.length<=300 && userDesignOf(userDirection);
   const priority=explicit
     ? '最高优先级是本轮用户明确的风格、元素和版式要求，原话：'+JSON.stringify(userDirection)
     : '当前明确要求优先，其次使用本轮选定的参考；同品牌已确认偏好才用于补默认。布局与美术由你决定。';
   const design = density === 'sparse' ? '按用户要求留白，保持文字清晰。' : explicit
     ? '按指定视觉要求呈现全部定稿；视觉解释只用用户允许的形式。'
-    : '确立一个主视觉，让实物、环境细节或图解帮助读懂内容关系。按信息自然组织分区与阅读节奏，背景与主体有层次。完整呈现定稿，配色、媒介和布局按主题自由设计。';
+    : '做成主题鲜明的商业图文成品。把标题融入主视觉，用呼应主题的画面、纹理或形状带出标题层次；让关键分区各自用相关实景、物件细节或图解帮助读懂内容。把场景细节或无字装饰延续到大块空底和分区之间，保持正文区域清楚。配色、媒介、构图由你按内容决定。';
   const polished=visual.replace(/(?:不要|不)(?:出现|绘制|添加)(?:任何)?(?:文字|文案)[。.!！]?(?=$|\s)/g,'').trim();
   const reference=structured?.poster_delivery?.reference_redesign
     ? '图1是需要换风格的原稿。保留原图主标题、主体、关系和全部栏目，以本轮确认的改动为准。未经确认不新增电话、地址、网址、二维码、价格、品牌或宣传承诺。' : '';
@@ -144,7 +149,7 @@ function compile({ visual, structured, density }) {
   // The planner's invented aesthetic restrictions must not overrule it.
   const direction=reference?reference:polished||brief;
   return [priority, design, direction,
-    '以下为全部印刷文字。原样印刷，每项只出现一次，保持与所属图解或分区对应。原稿主标题只放一个主标题位。不得另加清单外的词、数字或占位文字。', ...copy]
+    '以下为全部印刷文字。每个栏目标题和它的说明合在唯一一处，逐字印刷一次。末栏若有行动信息就在该栏呈现，不另抄到底栏。装饰、图示和非原件小插画仅用无字图形，不加清单外的编号、词句、数字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
 }
 
