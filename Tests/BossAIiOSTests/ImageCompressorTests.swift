@@ -73,4 +73,17 @@ final class ImageCompressorTests: XCTestCase {
         XCTAssertEqual(out[0], 0xFF)
         XCTAssertEqual(out[1], 0xD8)
     }
+    func testPlanningLabelsStayOffPrintedProductSheets() throws {
+        let photo = makeImageData(width: 240, height: 180)
+        let products = Array(repeating: photo, count: 13)
+        let planning = try XCTUnwrap(ImageCompressor.referenceSheets(products))
+        let printed = try XCTUnwrap(ImageCompressor.referenceSheets(products, numbered: false))
+        XCTAssertEqual(printed.count, 2)
+        XCTAssertEqual(planning.count, printed.count)
+        for (preview, product) in zip(planning, printed) {
+            XCTAssertNotEqual(preview, product)
+            XCTAssertEqual(UIImage(data: preview)?.size, UIImage(data: product)?.size)
+        }
+        XCTAssertNil(ImageCompressor.referenceSheets([photo, Data()], numbered: false))
+    }
 }

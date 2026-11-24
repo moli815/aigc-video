@@ -482,11 +482,14 @@ final class ChatViewModel: ObservableObject {
                 }
             }
 
-            if imageURLs.isEmpty {
+            // Keep the member's own words and imported attachment text in distinct
+            // standard content parts so the server can pass the original brief verbatim.
+            let separateAttachmentText = isLatestUserMessage && HostedAccount.isHostedActive
+            if imageURLs.isEmpty && !separateAttachmentText {
                 messages.append(["role": m.role, "content": textParts.joined(separator: "\n\n")])
             } else {
-                var content: [[String: Any]] = []
-                content.append(["type": "text", "text": textParts.joined(separator: "\n\n")])
+                let texts = separateAttachmentText ? textParts : [textParts.joined(separator: "\n\n")]
+                var content: [[String: Any]] = texts.map { ["type": "text", "text": $0] }
                 for url in imageURLs {
                     content.append(["type": "image_url", "image_url": ["url": url]])
                 }

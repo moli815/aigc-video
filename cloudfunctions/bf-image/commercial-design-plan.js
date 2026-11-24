@@ -7,7 +7,7 @@ function kindOf(section){
  const label=section.items.filter(t=>t.role!=="body").map(t=>t.text).join(" ");
  const body=section.items.filter(t=>t.role==="body").map(t=>t.text).join("\n");
  if(/路线|走访优先|优先级.*理由/.test(label))return "route";
- if(/三天行动|六周|每周|交付步骤|合作流程|六步/.test(label)&&body.split("\n").filter(Boolean).length>=3)return "timeline";
+ if(/三天行动|六周|每周|交付步骤|从.{1,10}到交付|合作流程|六步/.test(label)&&body.split("\n").filter(Boolean).length>=3)return "timeline";
  if(/目标|亮点|指标/.test(label)&&body.split("\n").filter(t=>/\d/.test(t)).length>=2&&body.length<650)return "metrics";
  if(/验收|核验|必问|清单|边界/.test(label))return "checklist";
  if(/服务|诊断|梳理|培训|复盘|落地/.test(label))return "services";
@@ -19,7 +19,11 @@ function planOf({structured,prompt,width,height,content}){
  const purpose=structured?.design_brief?.purpose||"";
  const labels=content.sections.map(textOf).join("\n");
  const hints=[structured?.design_brief?.visual_approach,prompt].filter(Boolean).join(" ").split(/[。；;\n]/).filter(s=>!/(不要|避免|禁止|不使用|不用)/.test(s)).join(" ");
- let styleId=Object.hasOwn(library.styles,request.style_id)?request.style_id:/暖|手绘|插画|森林绿|木刻|纸感/.test(hints)?"organic-craft":purpose==="advertisement"?"hyperreal-product":"data-editorial";
+ const photographic = /摄影|实拍|写实产品/.test(hints);
+ const handmade = /手绘|插画|森林绿|木刻|纸感|暖色手作/.test(hints);
+ const styleId = Object.hasOwn(library.styles,request.style_id) ? request.style_id :
+   photographic ? "hyperreal-product" : handmade ? "organic-craft" :
+   purpose==="advertisement" ? "hyperreal-product" : "data-editorial";
  let layoutId=content.matrix?"product-shelf":width/height>=2.4?"triptych":Object.hasOwn(library.layouts,request.layout_id)&&request.layout_id!=="product-shelf"?request.layout_id:
    /走访|参展|攻略|三天行动|六周/.test(labels)?"timeline-sequence":/01|经营诊断|六项服务|六个模块/.test(labels)?"modular-grid":purpose==="advertisement"||purpose==="product_explainer"?"split-vertical":"editorial-column";
  if(layoutId==="triptych"&&width/height<2.4)layoutId="editorial-column";

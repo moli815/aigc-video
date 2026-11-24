@@ -30,6 +30,16 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
   ],{"data-copy-key":item.key});
  })));
  tree.push(node("div",{position:"absolute",...box(bodyZone),display:"flex",gap},bodyGroups));
+ const sheets=assets.filter(a=>a.role==="catalog");
+ if(sheets.length){
+   const region=box(art),slotWidth=(region.width-gap*(sheets.length-1))/sheets.length;
+   for(const [i,sheet] of sheets.entries()){
+     const w=Math.min(slotWidth,region.height*sheet.aspect),h=w/sheet.aspect;
+     const x=region.left+i*(slotWidth+gap)+(slotWidth-w)/2,y=region.top+(region.height-h)/2;
+     tree.push(node("img",{position:"absolute",left:x,top:y,width:w,height:h,objectFit:"contain"},undefined,{src:sheet.src}));
+     assetZones.push({role:"catalog",index:sheet.index,sourceSha256:sheet.sha256,box:[x/width,y/height,w/width,h/height]});
+   }
+ } else {
  const uis=assets.filter(a=>a.role==="ui");if(uis.length!==1)throw Object.assign(Error("PRODUCT_UI_REQUIRED"),{code:"PRODUCT_UI_REQUIRED"});
  const source=uis[0],outer=box(art),screenWidth=Math.min(outer.width,outer.height*source.aspect),screenHeight=screenWidth/source.aspect,x=outer.left+(outer.width-screenWidth)/2,y=outer.top+(outer.height-screenHeight)/2;
  const bezel=short*.009;
@@ -38,6 +48,7 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
  ]));
  assetZones.push({role:"ui",index:source.index,sourceSha256:source.sha256,box:[x/width,y/height,screenWidth/width,screenHeight/height]});
  tree.push(node("div",{position:"absolute",left:x+screenWidth*.42,top:y+screenHeight+bezel,width:screenWidth*.16,height:Math.min(short*.028,height*.85-y-screenHeight),backgroundImage:"linear-gradient(90deg,#162C3D,#638089,#162C3D)"}));
+ }
  const logos=assets.filter(a=>a.role==="logo");if(logos.length>3)throw Error("PRODUCT_LOGO_LIMIT");
  // Original dark brand ink remains unchanged. A continuous light wash behind
  // the brand area keeps it legible without pasting a white image rectangle.

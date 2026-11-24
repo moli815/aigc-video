@@ -13,8 +13,33 @@ function extract(input) {
   if (!body.trim()) return null;
   return body;
 }
+// Shipped iPads combined generated attachment notes with the user's text. New
+// transports keep each note separate, preserving even quoted marker text.
+const attachmentNote = /^【(?:本轮附件图册】共有 \d+ 张独立图片。REF 番号|本轮附件图册未生成】部分图片未正确读取|图片附件：[^\n】]+】(?:$|\n)|图片文字OCR（辅助，可能有误差）：[^\n】]+】\n|用户上传的文件：[^\n】]+】\n)/u;
+function authoredText(messages) {
+  const { isHistoryPreview } = require('./image-delivery');
+  const user = [...messages].reverse().find(m => m?.role === 'user' && !isHistoryPreview(m));
+  if (!user) return '';
+  const parts = Array.isArray(user.content) ? user.content : [{ type: 'text', text: user.content }];
+  let texts = parts.filter(p => p?.type === 'text' && typeof p.text === 'string').map(p => p.text);
+  if (texts[0]?.startsWith('【本次编辑前生成图预览】') && parts[1]?.type === 'image_url'
+      && texts[1] === '【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】') texts = texts.slice(2);
+  else if (texts[0]?.startsWith('【本次生成图预览未读取】不能据此声称已看清编辑位置')) texts = texts.slice(1);
+  const boundary = texts.findIndex(t => attachmentNote.test(t));
+  if (boundary >= 0) return texts.slice(0, boundary).join('\n');
+  let source = texts.join('\n');
+  if (texts.length === 1 && parts.some(p => p?.type === 'image_url')) {
+    const paragraphs = source.split('\n\n');
+    const note = paragraphs.findIndex(p => attachmentNote.test(p));
+    if (note >= 0) source = paragraphs.slice(0, note).join('\n\n');
+  }
+  return source;
+}
+function fromMessages(messages) {
+  return extract(authoredText(messages));
+}
 function original(structured) {
   const text = structured?.verbatim_prompt;
   return typeof text === 'string' && text.trim() ? text : null;
 }
-module.exports = { extract, original };
+module.exports = { extract, authoredText, fromMessages, original };

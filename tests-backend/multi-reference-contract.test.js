@@ -87,7 +87,7 @@ test("request contract carries reference_roles to the server", () => {
 test("server annotates multi-image input before the user prompt", () => {
   assert.match(imageFunction, /function multiImageContract\(image, referenceRoles, taskKind, workflowPlan, scopedReference = false\)/,
     "缺少多图编号契约");
-  assert.match(imageFunction, /const finalPrompt = verbatim \?\? \(reformat\?reformat.prompt:multiImageContract\(image, referenceRoles, taskKind, workflowPlan, !!scopedReference\)/,
+  assert.match(imageFunction, /const finalPrompt = preparedPrompt \?\? \(multiImageContract\(image, referenceRoles, taskKind, workflowPlan, !!scopedReference\)/,
     "多图契约没有被拼进 finalPrompt");
   const contract = imageFunction.slice(imageFunction.indexOf("function multiImageContract"));
   const vm=require("node:vm"),start=imageFunction.indexOf("function multiImageContract"),end=imageFunction.indexOf("\nconst REFERENCE_CONSTRAINTS",start),fn=vm.runInNewContext(imageFunction.slice(start,end)+"\nmultiImageContract");

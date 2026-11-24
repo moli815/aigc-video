@@ -26,6 +26,13 @@ const RATIO = /(\d{1,2}(?:\.\d+)?)\s*[:：]\s*(\d{1,2}(?:\.\d+)?)/g;
 const CONTACT = /(?:400|800)[-\s]?\d{3,4}[-\s]?\d{3,4}|0\d{2,3}[-\s]?\d{7,8}|1[3-9]\d{9}/;
 
 /** 把「不要横版」这类否定说法先规范化，避免竖/横互相抵消 */
+function wantsAllAttachments(request) {
+  // “仅用已有素材” limits provenance, while “仅用第二张” limits selection.
+  const text = String(request || '').replace(/(?:仅用|只用)(?:我(?:发的|上传的)?|本轮|已有|已给|现有|提供的|上传的)(?:的)?(?:素材|附件|产品图|图片)/g,'');
+  return /都用上|全部使用|全部用上|每张都|所有产品图|所有附件|全部产品图/.test(text)
+    && !/只用|仅用|不要用|别用|不使用|不要全|别全|不用全|不必全|不需要全/.test(text);
+}
+
 function normalizeDirection(src) {
   return String(src || "").replace(
     /(?:不要|别|不是|拒绝|无需|不用)[^，。；\n]{0,4}?(横版|横向|横屏|横图|竖版|竖向|竖屏|竖图)/g,
@@ -98,11 +105,18 @@ function resolve({ messages = [], memories = [] } = {}) {
     redesign, additive,
     // 用户本轮原话：判断「是不是海报任务」时以用户说法为准，
     // 不依赖模型自己在 tool 参数里填 render_intent（实测它经常不填）。
-    userText: latest,
-    verbatim: require("./shared/verbatim-image-prompt").extract(textOf(users.at(-1))),
+    userText: require("./shared/verbatim-image-prompt").authoredText(messages),
+    verbatim: require("./shared/verbatim-image-prompt").fromMessages(messages),
     currentImageCount: (() => {
       const user = [...messages].reverse().find(m => m?.role === 'user' && !require('./shared/image-delivery').isHistoryPreview(m));
-      return Array.isArray(user?.content) ? user.content.filter(part => part?.type === 'image_url').length : 0;
+      if (!Array.isArray(user?.content)) return 0;
+      const previews = user.content.filter(part => part?.type === 'image_url').length;
+      if (!previews) return 0;
+      // The iPad packs large sets into preview sheets but keeps original slot numbers.
+      const catalog = user.content.filter(part => part?.type === 'text')
+        .map(part => /(?:^|\n\n)【本轮附件图册】共有 (\d{1,3}) 张独立图片。REF 番号就是原附件序号；上面只是规划用预览。/u.exec(part.text))
+        .find(Boolean);
+      return catalog && Number(catalog[1]) > 6 && Number(catalog[1]) <= 16 ? Number(catalog[1]) : previews;
     })(),
     hasAny: !!(orientation || contact || company),
   };
@@ -221,11 +235,22 @@ function apply(calls, intent, observe) {
 
     let changed = null;
     const count = intent.currentImageCount;
+    // The iPad converts large selections into sheets; the server owns the choice.
+    const allAttachments = wantsAllAttachments(intent.userText);
+    if (fn.name === 'image_generate' && count > 0) {
+      args.use_entire_catalog = allAttachments;
+      args.print_catalog_originals = count > 6 && allAttachments && !intent.verbatim
+        && !args.structured?.preserve_assets?.length && !args.structured?.image_references
+        && !args.structured?.poster_reformat && args.text_mode !== 'overlay'
+        && !['both','last'].includes(args.source) && /海报|图册|宣传图/u.test(intent.userText)
+        && /(?:型号|产品编号|货号|每件产品|产品原图|产品原件)/u.test(intent.userText)
+        && !/重画产品|重新设计产品|重绘产品|不要原图|不用原图/u.test(intent.userText);
+      changed = {catalogSelection: allAttachments};
+    }
     if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6
         && !args.library_refs?.length && !args.structured?.image_references && !args.structured?.image_plan
         && !args.structured?.preserve_assets?.length && !args.structured?.poster_reformat
-        && /都用上|全部使用|全部用上|每张都|所有产品图|所有附件|全部产品图/.test(intent.userText)
-        && !/只用|仅用|不要用|别用|不使用/.test(intent.userText)) {
+        && allAttachments) {
       const oldIndices = args.source_indexes || [args.source_index || 1];
       const roles = new Map(oldIndices.map((index, slot) => [index, args.reference_roles?.[slot]]));
       args.source = 'attached';
@@ -236,9 +261,10 @@ function apply(calls, intent, observe) {
     }
     // Binding happens after membership/reference finalization, using only this user turn.
     if (intent.verbatim && fn.name !== 'image_series') {
-      const { image_references, preserve_assets, preserve_outside, image_plan, routing } = args.structured || {};
+      const { image_references, preserve_assets, preserve_outside, routing } = args.structured || {};
       args.structured = { verbatim_prompt: intent.verbatim, routing, image_references, preserve_assets, preserve_outside };
-      if (image_plan?.protected_references?.length) args.structured.image_plan = image_plan;
+      // The planner may invent a protection/layout plan even for a verbatim brief.
+      // Keep source authorization and binding, without rerouting its numbered images.
       // Older iPads may add catalogue text to prompt. The structured original survives the round trip.
       args.prompt = intent.verbatim.length <= 1400 ? intent.verbatim : '使用本轮用户提供的完整作图提示词。';
       delete args.text_mode;

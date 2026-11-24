@@ -1518,7 +1518,14 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const rawPrompt = String(cleanedPrompt.prompt || "").trim();
   structured = cleanedPrompt.structured;
   const posterDelivery = require('./shared/poster-delivery');
-  const nativePoster = !repairNativeCopy && posterDelivery.modeFor({ structured, prompt:rawPrompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel });
+  // The active font policy can deliver approved long copy without asking
+  // the image model to reproduce its glyphs. Preserve native reference edits.
+  const printInput = { prompt, structured, renderIntent, taskKind, textMode, layerDecomposition, accountId,
+    resolvedSize:resolveSize(size,aspectRatio), image, generationPolicy:RT.IMAGE_COMPOSITION_POLICY };
+  const composer = require("./commercial-composer");
+  const exactPrint = !image && !verbatim && structured?.poster_delivery?.exact_copy === true
+    && composer.eligible(printInput,composer.policyOf(RT.IMAGE_COMPOSITION_POLICY));
+  const nativePoster = !repairNativeCopy && !exactPrint && posterDelivery.modeFor({ structured, prompt:rawPrompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel });
   if (cleanedPrompt.removed > 0) {
     logStage("meta_copy_stripped", { removed: cleanedPrompt.removed, taskKind: String(taskKind || "") });
   }
@@ -1527,7 +1534,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   catch(e){return {ok:false,code:422,error:'IMAGE_REFERENCE_UNAVAILABLE',msg:'改版需要读取原海报，这次尚未生成或扣费，请重新选择原图。'};}
   if(reformat)logStage('poster_reformat_native',{aspectRatio:reformat.intent.target_aspect_ratio,inputImages:Array.isArray(image)?image.length:1,model:selectedModel});
   let workflowPlan;
-  try{workflowPlan=reformat?null:require("./shared/image-workflow").compile({structured,image,taskKind,textMode,policy:RT.IMAGE_COMPOSITION_POLICY,owner:accountId});}
+  try{workflowPlan=structured?.print_catalog ? require("./catalog-print").plan(structured,image,taskKind,textMode,layerDecomposition) : reformat?null:require("./shared/image-workflow").compile({structured,image,taskKind,textMode,policy:RT.IMAGE_COMPOSITION_POLICY,owner:accountId});}
   catch(e){logStage("image_plan_rejected",{reason:e.code});return {ok:false,code:422,error:e.code,msg:"作图方案的素材或文字模式不一致，尚未开始生成，请重新选择素材后重试。"};}
   const brand=structured?.poster_brand;
   const brandRefs=structured?.image_references;
@@ -1542,14 +1549,13 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
       protected_references:[{index:1,role:"logo",anchor:brand.anchor}]};
   }
   let protection;
-  if((workflowPlan?.native||workflowPlan?.protectUI)&&workflowPlan.protected_references.some(r=>["ui","logo"].includes(r.role))){
+  if((workflowPlan?.native||workflowPlan?.protectUI)&&workflowPlan.protected_references.some(r=>["ui","logo","catalog"].includes(r.role))){
     try{protection=await protectedAssetCompositionOf().prepare({plan:workflowPlan,image,owner:accountId,structured,authorization:reqStore.getStore()?.memberAuthorization,deferGarbledText:repairNativeCopy});}
     catch(e){logStage("protected_asset_preflight_failed",{code:e?.code||"ASSET_UNAVAILABLE"});return {ok:false,code:422,error:"IMAGE_ASSET_UNAVAILABLE",msg:"这次需要的原始素材尚未完整读取，尚未生成或扣费，请重新选择原图后再试。"};}
   }
   let composition=null;
-  if(!verbatim && accountId && !workflowPlan?.native && !reformat && !repairNativeCopy && !nativePoster){
-    try{const input={prompt,structured,renderIntent,taskKind,textMode,layerDecomposition,accountId,resolvedSize:resolveSize(size,aspectRatio)};
-      composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(input,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(input,RT.IMAGE_COMPOSITION_POLICY);}
+  if(!verbatim && accountId && (!workflowPlan?.native || exactPrint) && !reformat && !repairNativeCopy && (!nativePoster || workflowPlan?.catalog)){
+    try{composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(printInput,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(printInput,RT.IMAGE_COMPOSITION_POLICY);}
     catch(e){
       logStage("image_composition_preflight_failed",{reason:e?.code||"COMPOSITION_UNAVAILABLE"});
       if(e?.code==="COMPOSITION_CONTENT_OVERFLOW"||e?.code==="COMPOSITION_COPY_LIMIT")return {ok:false,code:422,error:"COMPOSITION_CONTENT_TOO_DENSE",msg:"这张画布无法清晰放下全部内容，请增加画布高度或拆成多张；尚未开始生成，也未产生作图费用。"};
@@ -1570,8 +1576,8 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     visualExecution:require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),items:structured?.text||[] });
   if (designBrief&&!composition&&!nativePoster) basePrompt += "\n\n" + designBrief;
   if(composition)basePrompt=composition.engine==="overlay"?composition.prompt:composition.designEngine==="product_v2"?
-    "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
-    require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork);
+    "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||(workflowPlan?.catalog ? rawPrompt : "")||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
+    require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork,exactPrint ? rawPrompt : undefined);
   if(composition&&composition.engine==="overlay"){image=[composition.sketch];logStage("overlay_sketch_dispatch",{cols:composition.layout.grid.cols,rows:composition.layout.grid.rows});}
   // Reference redesign and local edit both send image input, but their task policies differ.
   const isPixelEdit = !!image && String(taskKind || "") === "edit";
@@ -1592,16 +1598,16 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     }
   }
 
-  if(nativePoster)basePrompt=posterDelivery.compile({visual:basePrompt,structured,density:nativePoster});
+  if(nativePoster&&!composition)basePrompt=posterDelivery.compile({visual:basePrompt,structured,density:nativePoster});
   // 只应用 Agent 明确提供的输出形态；不得再按“名片/海报”等关键词套模板。
   const intentRule = RENDER_INTENT_RULES[String(renderIntent || "")] || "";
-  if (intentRule) basePrompt = basePrompt + "\n\n" + intentRule;
+  if (intentRule && !exactPrint && !workflowPlan?.catalog) basePrompt = basePrompt + "\n\n" + intentRule;
   const providerInput=workflowPlan?require("./shared/image-workflow").providerInput(workflowPlan,image,referenceRoles,basePrompt):null;
   if(providerInput){image=providerInput.image;referenceRoles=providerInput.referenceRoles;basePrompt=providerInput.prompt;
     logStage("protected_reference_dispatch",{originalCount:providerInput.originalCount,providerCount:providerInput.providerCount,serverLogoCount:providerInput.excludedLogos.length});}
   const brandCorner={top_left:"左上角",top_right:"右上角",bottom_left:"左下角",bottom_right:"右下角"};
   const brandPolicy=workflowPlan?.posterBrand?"\n公司Logo使用用户原件合成，"+(brandCorner[brand.anchor]?"在"+brandCorner[brand.anchor]+"留出品牌区。":"在符合本轮构图的安全位置留出品牌区。")+"为Logo原件保留合适的底色对比度，不挡正文和主体。不画替代徽章、字标或占位字。":"";
-  const scopedReference = brandPolicy || (!workflowPlan && !composition && taskKind==="reference" && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
+  const scopedReference = workflowPlan?.catalog ? "使用本轮视觉简报绘制主题场景。产品图册与 Logo 将由原图合成，不重复绘制产品、图册或标签。" : brandPolicy || (!workflowPlan && !composition && taskKind==="reference" && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
     ? require("./shared/image-design-brief").compileNativeReferenceConstraints(referenceRoles,image):"");
   const taskPolicy = scopedReference || (composition?.designEngine==="product_v2"?"":workflowPlan ? require("./shared/image-workflow").constraints(workflowPlan,providerInput) : isPixelEdit
     ? EDIT_CONSTRAINTS
@@ -1609,7 +1615,9 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   // 由明确的文字模式决定；不能因“平面稿”就否定旧客户端 prompt 里的原生文字需求。
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
-  const finalPrompt = verbatim ?? (reformat?reformat.prompt:multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
+  const visualOnly = composition && (exactPrint || workflowPlan?.catalog);
+  const preparedPrompt = verbatim ?? (visualOnly ? basePrompt : reformat?.prompt);
+  const finalPrompt = preparedPrompt ?? (multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
       "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : ""));
 
@@ -2177,7 +2185,7 @@ const server = http.createServer(async (req, res) => {
     if (!body) return send(400, { ok: false, code: 400, error: "BAD_REQUEST", msg: "请求体解析失败" });
     body=require('./shared/poster-reformat').normalize(body);
     body.requestId=normalizeRid(body.requestId);
-    const copyEnabled=require('./shared/native-copy-policy').eligible(RT.IMAGE_COMPOSITION_POLICY,auth.sub,body);
+    const copyEnabled=!body.structured?.print_catalog && require('./shared/native-copy-policy').eligible(RT.IMAGE_COMPOSITION_POLICY,auth.sub,body);
     if(copyEnabled&&reqStore.getStore())reqStore.getStore().excludedReservationId=require('./native-copy-budget').keyOf(auth.sub,body.requestId);
     const gate = await paidImageGate(req);
     if (!gate.ok) return send(gate.denial.status, gate.denial.body);
@@ -2203,8 +2211,18 @@ const server = http.createServer(async (req, res) => {
     // 10-24 P1-4：rid 在这里生成一次，后续 finish/abort/记账全部复用同一个值。
     const rid = normalizeRid(body.requestId);
     if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
+    let catalogFingerprint;
+    if(body.structured?.print_catalog){
+      try{
+        require("./catalog-print").plan(body.structured,body.image,body.task_kind||body.taskKind,body.text_mode,body.layer_decomposition);
+        const sources=await require("./shared/image-reference-merge").currentItems({owner:auth.sub,image:body.image,
+          readAsset:async(owner,id)=>require("./shared/document-store").documentOf(await getDb().collection("bf_assets").doc(id).get())});
+        catalogFingerprint=require("./shared/image-reference-merge").bindReferenceRequest(
+          crypto.createHash("sha256").update(JSON.stringify(sources.map(s=>s.id))).digest("hex"),body);
+      }catch(e){return send(422,{ok:false,error:"IMAGE_REFERENCE_UNAVAILABLE",msg:"本次产品图册或品牌原件无法核对，请重新选择素材。本次未开始生成。"});}
+    }
     const copyFingerprint=copyEnabled?nativeCopyFingerprint(body,mixedInput?.referenceFingerprint):undefined;
-    const claim = await claimIdem(rid, auth.sub, mixedInput?.referenceFingerprint,copyFingerprint);
+    const claim = await claimIdem(rid, auth.sub, catalogFingerprint || mixedInput?.referenceFingerprint,copyFingerprint);
     if(claim.state==='conflict')return send(409,{ok:false,error:'IMAGE_REFERENCE_CONFLICT',msg:'这次任务使用的素材已确定，请新建任务来更换素材。'});
     if (claim.state === "done") {
       if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
@@ -2478,7 +2496,7 @@ const server = http.createServer(async (req, res) => {
         const structItems = structMode === "off" ? null : sa.structuralOf(sources);
         if (!auditTokens.length) logStage("poster_number_audit_skipped", { reason: "no_tokens", promptLen: String(body.prompt || "").length });
 
-        if (auditTokens.length || structItems) {
+        if (!out.composition?.copyHash && (auditTokens.length || structItems)) {
           // nativeVisionConfig 读 bf_config/runtime（视觉模型只配在 bf-api）；
           // bf-image 侧补了同名环境变量，这里回退一次，避免校验因配置位置不同而永久跳过。
           let visionCfg = null;
@@ -2518,7 +2536,7 @@ const server = http.createServer(async (req, res) => {
                   structAudit.missing.push({ kind: "numbering", value: dupCodes.join("、"), dup: dupCodes.length });
                 }
               } catch {}
-              if (structAudit.missing.length && !require("./shared/verbatim-image-prompt").original(body.structured)) {
+              if (structAudit.missing.length && !out.composition && !require("./shared/verbatim-image-prompt").original(body.structured)) {
                 logStage("poster_struct_audit", { missing: structAudit.missing.map(m => m.kind), detail: structAudit.missing.slice(0, 3) });
                 // 只重跑一次：硬伤命中的比例不高，多跑一次的收益远大于让用户拿到废图。
                 const hint = "【必填项】上一版漏掉了下面这些内容，这一版必须全部出现、不许省略：" +

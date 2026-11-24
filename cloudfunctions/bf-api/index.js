@@ -2855,7 +2855,7 @@ async function handleChat(req, res) {
   messages = injectDeliveryRule(messages);
   const workflow = require("./shared/image-workflow");
   const posterDelivery=require('./shared/poster-delivery');
-  const verbatimPrompt = require('./shared/verbatim-image-prompt').extract(imageUserText);
+  const verbatimPrompt = require('./shared/verbatim-image-prompt').fromMessages(body.messages);
   const inferredPoster=isCommercialTask(messages,imageUserText)&&
     posterDelivery.posterRequested('',latestUserText(messages.filter(m=>m?.role==='user').slice(0,-1)));
   const posterPlanner=Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')&&

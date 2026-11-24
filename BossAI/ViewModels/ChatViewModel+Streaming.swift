@@ -493,15 +493,21 @@ extension ChatViewModel {
                                 hasLastGeneratedImage: lastGeneratedImage != nil)
                             let resolvedToolSource = sourceOverride ?? requestedSource
                             var catalogContext: String?
+                            var printCatalog: [String: Any]?
                             do {
                                 let wantsCatalog = toolName == "image_generate" && currentImages.count > ImageReferenceResolver.maxReferences &&
-                                    ImageReferenceResolver.usesEntireCatalog(userText)
+                                    ((HostedAccount.isHostedActive ? args?["use_entire_catalog"] as? Bool : nil)
+                                        ?? ImageReferenceResolver.usesEntireCatalog(userText))
                                 if wantsCatalog && memoryFiles.isEmpty && resolvedToolSource != "last" && resolvedToolSource != "both" {
                                     let logoIndex = zip(sourceIndices, requestedRoles).first { entry in
                                         ["logo", "标志", "徽标", "商标"].contains { entry.1.lowercased().contains($0) }
                                     }?.0 ?? currentImages.firstIndex { $0.name.localizedCaseInsensitiveContains("logo") }.map { $0 + 1 }
+                                    let preserveProducts = HostedAccount.isHostedActive && (args?["print_catalog_originals"] as? Bool) == true
+                                    let sheetInputs = attachedCandidates.enumerated().compactMap { index, data in
+                                        preserveProducts && index + 1 == logoIndex ? nil : data
+                                    }
                                     guard let sheets = await Task.detached(priority: .userInitiated, operation: {
-                                        ImageCompressor.referenceSheets(attachedCandidates)
+                                        ImageCompressor.referenceSheets(sheetInputs, numbered: !preserveProducts)
                                     }).value else {
                                         throw ImageReferenceResolver.ResolutionError.attachmentUnavailable(1)
                                     }
@@ -511,7 +517,12 @@ extension ChatViewModel {
                                         refs.append(attachedCandidates[logoIndex - 1])
                                         requestedRoles.append("Logo 原件")
                                     }
-                                    catalogContext = "按图册 REF 1 至 \(currentImages.count) 逐张取用所有原始附件中的产品；图册的编号只用于定位。"
+                                    if preserveProducts {
+                                        printCatalog = ["version": 1, "sheets": sheets.count,
+                                                        "logo": refs.count > sheets.count]
+                                    } else {
+                                        catalogContext = "按图册 REF 1 至 \(currentImages.count) 逐张取用所有原始附件中的产品；图册的编号只用于定位。"
+                                    }
                                 } else if !memoryFiles.isEmpty {
                                     refs = try await ImageMemory.bytes(memoryFiles, session: CloudSession.capture())
                                 } else if toolName == "image_edit" {
@@ -572,7 +583,13 @@ extension ChatViewModel {
                                 continue
                             }
                             // 10-21 结构化字段（有则优先，服务端按模板拼装）
-                            let structuredArgs = args?["structured"] as? [String: Any]
+                            var structuredArgs = args?["structured"] as? [String: Any]
+                            structuredArgs?.removeValue(forKey: "print_catalog")
+                            if let printCatalog {
+                                var transport = structuredArgs ?? [:]
+                                transport["print_catalog"] = printCatalog
+                                structuredArgs = transport
+                            }
                             // 10-23 出图意图：flat_artwork 直接出可印刷平面稿，避免名片/海报被画成"白底展示稿"
                             let renderIntent = (args?["render_intent"] as? String) ?? (args?["renderIntent"] as? String) ?? ""
                             let aspectRatio = (args?["aspect_ratio"] as? String) ?? (args?["aspectRatio"] as? String) ?? ""

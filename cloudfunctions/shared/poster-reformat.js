@@ -2,7 +2,7 @@
 // Explicit whole-artwork reflow is different from generating an illustration
 // and from crop/outpaint. This contract travels through existing structured.
 const VERSION=1;
-function excluded(a){return a.layer_decomposition===true||Number(a.requested_count||a.requestedCount||1)>1||['series','decompose'].includes(a.task_kind||a.taskKind)||a.text_mode==='overlay'||a.structured?.preserve_assets?.length||['mockup'].includes(a.render_intent||a.renderIntent);}
+function excluded(a){return !!a.structured?.print_catalog||a.layer_decomposition===true||Number(a.requested_count||a.requestedCount||1)>1||['series','decompose'].includes(a.task_kind||a.taskKind)||a.text_mode==='overlay'||a.structured?.preserve_assets?.length||['mockup'].includes(a.render_intent||a.renderIntent);}
 function ratioOf(text,current){
  const direction=[...text.matchAll(/竖(?:版|向|屏|图)|横(?:版|向|屏|图)/g)].at(-1)?.[0];
  const portrait=direction?.startsWith('竖'),landscape=direction?.startsWith('横');

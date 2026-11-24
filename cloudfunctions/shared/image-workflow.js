@@ -29,9 +29,9 @@ function compile({structured,image,taskKind,textMode,policy,owner}){
  return Object.freeze({...p,protected_references:Object.freeze(p.protected_references.map(a=>Object.freeze({...a,...(a.crop?{crop:Object.freeze([...a.crop])}:{})}))),protectUI:p.protected_references.some(a=>a.role==="ui"),native:p.typography==="native"});
 }
 function providerInput(plan,image,referenceRoles,prompt){
- const refs=Array.isArray(image)?image:image?[image]:[],serverAssets=plan?.protected_references.filter(r=>r.role==="logo"||!plan.native&&plan.protectUI&&r.role==="ui")||[],excluded=new Set(serverAssets.map(r=>r.index)),slots=new Map();
+ const refs=Array.isArray(image)?image:image?[image]:[],serverAssets=plan?.protected_references.filter(r=>r.role==="logo"||r.role==="catalog"||!plan.native&&plan.protectUI&&r.role==="ui")||[],excluded=new Set(serverAssets.map(r=>r.index)),slots=new Map();
  const selected=[];for(const [i,v]of refs.entries())if(!excluded.has(i+1)){selected.push(v);slots.set(i+1,selected.length);}
- const rebind=s=>typeof s==="string"?s.replace(/图([1-6])(?!\d)/g,(all,n)=>slots.has(+n)?"图"+slots.get(+n):excluded.has(+n)?"由服务器保管的"+(serverAssets.find(r=>r.index===+n).role==="logo"?"Logo":"UI")+"原件":all):s;
+ const rebind=s=>typeof s==="string"?s.replace(/图([1-6])(?!\d)/g,(all,n)=>slots.has(+n)?"图"+slots.get(+n):excluded.has(+n)?"由服务器保管的"+({logo:"Logo",catalog:"产品图册",ui:"UI"}[serverAssets.find(r=>r.index===+n).role])+"原件":all):s;
  return {image:selected.length?selected:undefined,referenceRoles:Array.isArray(referenceRoles)?referenceRoles.filter((_,i)=>!excluded.has(i+1)):undefined,prompt:rebind(prompt),slots,originalCount:refs.length,providerCount:selected.length,excludedLogos:serverAssets.filter(r=>r.role==="logo").map(r=>r.index),serverAssets:serverAssets.map(r=>({index:r.index,role:r.role}))};
 }
 function constraints(plan,input){if(!plan)return "";

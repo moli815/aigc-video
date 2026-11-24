@@ -73,7 +73,7 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
   const featured=full&&["metrics","route","timeline"].includes(section.kind);
   const backgroundColor=featured&&section.kind==="metrics"?hero:section.kind==="checklist"?tint:p.paper;
   const headingNodes=headings.map(item=>{
-   const number=section.kind==="services"?item.text.match(/^(\d{1,2})([\s\S]+)$/):null;
+   const number=item.text.match(/^(\d{1,2})(\s+[\s\S]+)$/);
    if(number)return mark(item,[el("div",{display:"flex",fontSize:fontSize*2.5,lineHeight:1,color:p.accent,fontWeight:700,marginRight:gap*.65},number[1]),el("div",{display:"flex",fontSize:fontSize*1.35,lineHeight:1.3,fontWeight:700,alignSelf:"center"},number[2])],{flexDirection:"row",paddingBottom:gap*.65});
    const size=fontSize*1.55;
    return el('div',{display:'flex',gap:gap*.5,alignItems:'center',paddingBottom:gap*.6,marginBottom:gap*.4},[icon(section.kind,size),copy(item,1.24,{fontWeight:700,color:goodInk(backgroundColor),lineHeight:1.3,flexShrink:1})]);
@@ -84,15 +84,18 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
   ]);
  }
  const children=[];
- const heroH=Math.round(Math.min(height*(plan.layoutId==="split-vertical"?.28:plan.layoutId==="modular-grid"?.17:.18),width*.52));
  const split=plan.artwork.placement==="split";
- const hasArt=background&&plan.artwork.placement!=="none";
+ const photoLead=split && plan.styleId==="hyperreal-product" && height>width;
+ const heightShare=photoLead?.33:plan.layoutId==="split-vertical"?.28:plan.layoutId==="modular-grid"?.17:.18;
+ const heroH=Math.round(Math.min(height*heightShare,width*(photoLead?.82:.52)));
+ const hasArt=!!background && plan.artwork.placement!=="none";
  const headerW=split?inner*.51:inner*.66;
- const photo=hasArt?el("img",{position:"absolute",top:0,right:0,width:split?width*.48:width,height:heroH,objectFit:split?"contain":"cover",opacity:split?1:.9},undefined,{src:background}):null;
+ const photo=hasArt?el("img",{position:"absolute",top:0,right:0,width:photoLead?width*.85:split?width*.48:width,height:heroH,
+   objectFit:split&&!photoLead?"contain":"cover",opacity:split?1:.9},undefined,{src:background}):null;
  children.push(el("div",{display:"flex",position:"relative",minHeight:heroH,flexDirection:"column",backgroundColor:hero,padding:margin,color:heroInk,flexShrink:0,borderBottom:"7px solid "+p.accent},[
    ...(photo?[photo]:[]),
-   ...(hasArt&&!split?[el("div",{position:"absolute",top:0,left:0,width,height:heroH,backgroundImage:"linear-gradient(90deg,"+hero+"F5 0%,"+hero+"D9 35%,"+hero+"40 75%,"+hero+"00 100%)"})]:[]),
-   el("div",{display:"flex",position:"relative",flexDirection:"column",width:headerW,gap:gap*.6,paddingTop:gap,flexShrink:0},plan.header.map(t=>copy(t,t.role==="title"?2.8:.98,{fontWeight:t.role==="title"?700:400,lineHeight:t.role==="title"?1.15:1.45,color:t.role==="label"?accentOnDark:heroInk})))
+   ...(hasArt&&(!split||photoLead)?[el("div",{position:"absolute",top:0,left:0,width,height:heroH,backgroundImage:"linear-gradient(90deg,"+hero+"F5 0%,"+hero+"D9 35%,"+hero+"40 75%,"+hero+"00 100%)"})]:[]),
+   el("div",{display:"flex",position:"relative",flexDirection:"column",width:headerW,gap:gap*.6,paddingTop:gap,flexShrink:0},plan.header.map(t=>copy(t,t.role==="title"?2.8:.98,{fontWeight:t.role==="title"?700:400,lineHeight:t.role==="title"?1.15:1.45,color:t.role==="label" && contrast(accentOnDark,hero)>=4.5 ? accentOnDark : heroInk})))
  ]));
  const body=[];
  const sections=[...plan.sections];
@@ -110,6 +113,10 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
  let pending=[];
  function flush(){if(!pending.length)return;const columns=width/height>=2.4?3:2;
   if(plan.layoutId==="modular-grid"){
+   const numbered=section=>section.items.some(t=>t.role!=="body" && /^\d{1,2}\s/.test(t.text));
+   if(pending.length>2 && !numbered(pending[0]) && pending.slice(1).every(numbered)){
+     body.push(block(pending.shift(),inner,true));
+   }
    const colW=(inner-gap*(columns-1))/columns;
    for(let i=0;i<pending.length;i+=columns)body.push(el("div",{display:"flex",width:inner,flexDirection:"row",gap,alignItems:"stretch",flexShrink:0},pending.slice(i,i+columns).map(s=>block(s,colW))));
   }else{

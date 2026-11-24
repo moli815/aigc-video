@@ -61,7 +61,7 @@ async function preview(bytes){
 function createProtectionRuntime({assetStore,readAsset,locate,fetcher=fetch,log=()=>{}}){
  return {
   async prepare({plan,image,owner,structured,authorization,deferGarbledText=false}){
-   const protectedRefs=plan?.protected_references.filter(r=>["ui","logo"].includes(r.role))||[];
+   const protectedRefs=plan?.protected_references.filter(r=>["ui","logo","catalog"].includes(r.role))||[];
    if(!(plan?.native||plan?.protectUI)||!protectedRefs.length)return null;
    if(!authorization)fail("ASSET_LAYOUT_AUTH_REQUIRED");
    const current=await currentItems({owner,image,readAsset});

@@ -43,7 +43,7 @@ enum ImageCompressor {
     }
 
     /// Combine ordered previews into numbered sheets while keeping the stored attachments intact.
-    static func referenceSheets(_ inputs: [Data]) -> [Data]? {
+    static func referenceSheets(_ inputs: [Data], numbered: Bool = true) -> [Data]? {
         guard !inputs.isEmpty, inputs.count <= ImageReferenceResolver.maxAttachments else { return nil }
         let previews = inputs.compactMap { input -> UIImage? in
             guard let jpeg = compressedData(from: input) else { return nil }
@@ -68,6 +68,7 @@ enum ImageCompressor {
                     let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
                     image.draw(in: CGRect(x: x + (cell.width - target.width) / 2, y: y + 30,
                                           width: target.width, height: target.height))
+                    guard numbered else { continue }
                     NSString(string: "REF \(start + index + 1)").draw(at: CGPoint(x: x + 12, y: y + 7),
                         withAttributes: [.font: UIFont.monospacedDigitSystemFont(ofSize: 18, weight: .semibold),
                                          .foregroundColor: UIColor.black])

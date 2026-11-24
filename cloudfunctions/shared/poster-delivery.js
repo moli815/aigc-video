@@ -110,11 +110,18 @@ function copyOf(structured) {
   return rows;
 }
 
+function exactCopyRequested(request) {
+  return String(request || '').split(/[，。；,;！？\n]/u).some(clause =>
+    !/(?:不用|不必|无需|不要|不要求).{0,6}(?:逐字|原样|一字不差)/u.test(clause)
+    && /(?:逐字|一字不差|原样)(?:照写|印刷|照印|排印|印上|上图|呈现|保留(?:全部|所有)?(?:文案|文字))|(?:文案|正文|文字)(?:必须|需要|要求)?一字不差/u.test(clause));
+}
+
 function mark(structured, userText, { referenceRedesign = false } = {}) {
   const request=String(userText||'').trim();
   const userDirection=userDesignOf(request);
   return { ...structured, poster_delivery: { version: 1, density: sparseRequested(request) ? 'sparse' : 'dense',
     ...(userDirection ? {user_direction:userDirection}: {}),
+    ...(exactCopyRequested(request) ? {exact_copy:true}: {}),
     ...(referenceRedesign ? {reference_redesign:true}: {}) } };
 }
 
