@@ -2940,38 +2940,11 @@ async function handleChat(req, res) {
     require("./image-task-readiness").deferDependentImageCalls(
       legacyBrandActive ? guardBrandCalls(calls, observeBrand, imageUserText) : calls,
       {enabled:nativeCommercialActive,canvasEnabled:nativeCommercialActive,userText:imageUserText,messages,observe:fields=>logSafe({tag:"image_readiness",requestId:currentRequestId(),...fields})})));
-  // 2026-11-22：参考契约冲突不再允许中断整条回复。
-  // 线上实例：finalize 抛 IMAGE_REFERENCE_CONFLICT → 冒到最外层 catch → SSE 结束，
-  // 用户看到「输出尚未完成」，一张图都没有。契约只该约束素材编排，不该决定这轮回复的生死。
-  // 收敛：冲突时剥掉参考字段（保留本轮附件）重跑一次；仍失败就原样放行，让工具层报错、
-  // 让模型在同一轮里自己重试，用户至少能拿到回复。
-  const REFERENCE_CONTRACT_CODES = new Set(["IMAGE_REFERENCE_CONFLICT","IMAGE_REFERENCE_NOT_ISSUED","TOOL_CONTRACT_INVALID"]);
-  const stripReferenceContract = calls => (Array.isArray(calls) ? calls : []).map(call => {
-    const name = call && call.function && call.function.name;
-    if (!["image_generate","image_edit","image_series"].includes(name)) return call;
-    let args; try { args = JSON.parse(call.function.arguments); } catch { return call; }
-    if (!args || typeof args !== "object") return call;
-    delete args.library_refs; delete args.reference_roles; delete args.source_indexes; delete args.source_index;
-    if (args.structured && typeof args.structured === "object") {
-      const structured = { ...args.structured }; delete structured.image_references;
-      args.structured = structured;
-    }
-    return { ...call, function: { ...call.function, arguments: JSON.stringify(args) } };
-  });
   const recoverReferenceContract = (calls, error, stage) => {
-    const code = String((error && (error.code || error.message)) || "");
-    if (!REFERENCE_CONTRACT_CODES.has(code)) throw error;
-    const requiredAsset = /都用上|全部使用|全部用上|历史原图|之前上传|前面发|原件|第[一二三四五六七八九十0-9]+张/.test(imageUserText);
-    if (requiredAsset || verbatimPrompt) {
-      throw Object.assign(Error("TOOL_ARGUMENTS_INVALID"), {
-        code:"TOOL_ARGUMENTS_INVALID",
-        reason:code === "IMAGE_REFERENCE_NOT_ISSUED" ? "HISTORY_REQUIRED_MISSING" : "REFERENCE_REQUIRED_MISSING",
-        field:"source_indexes",
-      });
-    }
-    logSafe({ tag: "image_contract_recovered", requestId: currentRequestId(), code, stage: stage || "finalize" });
-    const safe = stripReferenceContract(calls);
-    try { return finalizeImageCallsRaw(safe); } catch { return safe; }
+    const required = !!verbatimPrompt || /都用上|全部使用|全部用上|历史原图|之前上传|前面发|原件|第[一二三四五六七八九十0-9]+张/.test(imageUserText);
+    const result = require("./image-tool-repair").recoverImageReferences(calls,error,{required,finalize:finalizeImageCallsRaw});
+    logSafe({tag:"image_contract_recovered",requestId:currentRequestId(),code:error.code||error.message,stage});
+    return result;
   };
   const finalizeImageCallsBase = calls => {
     try { return finalizeImageCallsRaw(calls); }

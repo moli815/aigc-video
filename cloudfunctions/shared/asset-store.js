@@ -11,7 +11,10 @@ function hash(data) { return crypto.createHash("sha256").update(data).digest("he
 function assetKey(owner, sha) { return hash(owner + ":" + sha).slice(0, 40); }
 function assetSpec(raw) {
   if (!raw || !/^[a-f0-9]{64}$/.test(raw.sha256 || "")) throw new Error("INVALID_ASSET_HASH");
-  if (!Number.isSafeInteger(raw.byteCount) || raw.byteCount < 1 || raw.byteCount > MAX_ASSET_BYTES) throw new Error("ASSET_SIZE_LIMIT");
+  if (!Number.isSafeInteger(raw.byteCount) || raw.byteCount < 1 || raw.byteCount > MAX_ASSET_BYTES) {
+    throw Object.assign(Error("ASSET_SIZE_LIMIT"), {limitBytes: MAX_ASSET_BYTES,
+      actualBytes: Number.isSafeInteger(raw.byteCount) && raw.byteCount > 0 ? raw.byteCount : undefined});
+  }
   if (!MIME_EXT[raw.mime]) throw new Error("ASSET_TYPE_UNSUPPORTED");
   return { sha256: raw.sha256, byteCount: raw.byteCount, mime: raw.mime };
 }

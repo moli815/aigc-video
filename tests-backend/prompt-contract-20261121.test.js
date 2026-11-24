@@ -1,13 +1,9 @@
 "use strict";
-/**
- * 提示词契约 + 意图分流 单测（2026-11-21 第三版：极简 + 逐行）
- * 覆盖：四种文案形态解析、逐行排版、行数预算、普通配图不被污染、电话不丢。
- */
+// Verify the shipped bakery scenario against the current delivery modules.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const pc = require("../worktree/bf-api-final/prompt-contract");
-const ic = require("../worktree/bf-api-final/intent-contract");
-
+const poster = require("../cloudfunctions/shared/poster-delivery");
+const intent = require("../cloudfunctions/bf-api/intent-contract");
 const PRODUCTS = [
   ["栗子奶油欧包", "北海道小麦粉 · 栗子泥 40 克", "¥18"],
   ["栗香麻薯", "一盒六个 · 冷藏更好吃", "¥12"],
@@ -30,82 +26,33 @@ function blockList() {
   return items;
 }
 
-test("四种文案形态都能解析出文字清单", () => {
-  const shapes = {
-    数组: { text: blockList() },
-    字符串: { text: "栗香上市\n\n燕山板栗 · 慢火熬煮 4 小时\n\n栗子奶油欧包\n北海道小麦粉 · 栗子泥 40 克\n¥18" },
-    对象: { text: { title: "开业大吉", subtitle: "全场第二杯半价", contact: "400-123-4567" } },
-    顶层对象: { title: "开业大吉", subtitle: "全场第二杯半价", contact: "400-123-4567" },
-  };
-  for (const [name, structured] of Object.entries(shapes)) {
-    // 真实链路里 intent-contract 会先解析出 blocks 再传进来；两种入口都要能出清单
-    const viaBlocks = pc.augment("暖色调海报，木质台面，文字区留白", { aspectRatio: "3:4", blocks: blockList() });
-    assert.ok(viaBlocks.includes("逐字照写"), `${name} blocks 入口未生成文字清单`);
-    const viaStructured = pc.augment("暖色调海报，木质台面，文字区留白", { aspectRatio: "3:4", structured });
-    assert.ok(viaStructured.includes("逐字照写"), `${name} structured 入口未生成文字清单`);
+test("旧包的四种文案格式可进入当前海报链路", () => {
+  const fields={title:"栗香上市",contact:"400-826-7718"};
+  for(const structured of [{text:blockList()},{text:"栗香上市\n400-826-7718"},{text:fields},fields]){
+    const rows=poster.copyOf(structured);
+    assert.ok(rows.some(row=>row.text.includes("栗香上市")));
+    assert.ok(rows.some(row=>row.text.includes("400-826-7718")));
   }
 });
-
-test("产品卡：价格粘在名称块里、说明同行且都带引号", () => {
-  const g = pc.groupCopy(blockList(), []);
-  const lines = pc.copyLines(g);
-  const row = lines.find(l => l.includes("栗子奶油欧包")) || "";
-  // 价格必须和名称在同一个「」块内（2026-11-22：拆成两个引导块时报价会被整体省略）
-  assert.ok(/「栗子奶油欧包\s*¥18」/.test(row), "价格没粘在名称块里，实际：" + row);
-  assert.ok(row.includes("「北海道小麦粉"), "说明没跟名称同一行");
-  assert.ok(lines.some(l => l.includes("栗子可颂") && l.includes("32 层黄油起酥")), "说明里的数字应原样保留");
-});
-
-test("每条文案都带引号（官方 5.5 指南的硬要求）", () => {
-  const lines = pc.copyLines(pc.groupCopy(blockList(), []));
-  const copy = lines.filter(l => !/[：:]$/.test(l));   // 分组说明行以冒号结尾，不算文案
-  assert.ok(copy.length >= 8, "文案行过少: " + copy.length);
-  for (const l of copy) {
-    assert.ok(l.includes("「") && l.includes("」"), `文案未加引号: ${l}`);
+test("六种产品的名称、说明和价格按原顺序完整印一次",()=>{
+  const structured=poster.mark({text:blockList()},"做张暖色烘焙海报，表面要有栗子的质感");
+  const prompt=poster.compile({visual:"店内木台上的点心",structured,density:"dense"});
+  let last=-1;
+  for(const item of blockList()){
+    const literal=JSON.stringify(item.text);
+    const index=prompt.indexOf(literal);
+    assert.ok(index>last,item.text);assert.equal(prompt.indexOf(literal,index+literal.length),-1,item.text);last=index;
   }
 });
-
-test("行数受预算约束，不无限堆", () => {
-  const lines = pc.copyLines(pc.groupCopy(blockList(), []));
-  assert.ok(lines.length <= 18, `行数超限: ${lines.length}`);
+test("长说明不因行数限制而截断",()=>{
+  const long="面团先在四摄氏度冷库醒发十八小时，次日清晨五点进炉。".repeat(12);
+  const structured={text:[...blockList(),{role:"body",text:long}]};
+  assert.ok(poster.compile({visual:"烘焙柜台",structured,density:"dense"}).includes(JSON.stringify(long)));
 });
-
-test("电话与署名不会被字数预算挤掉", () => {
-  const lines = pc.copyLines(pc.groupCopy(blockList(), []));
-  assert.ok(lines.some(l => l.includes("400-826-7718")), "电话丢了");
-});
-
-test("提示词总长不超过上限", () => {
-  const out = pc.augment("暖色调海报，木质台面，晨光，文字区留白干净", { aspectRatio: "3:4", structured: { text: blockList() } });
-  assert.ok(out.length <= pc.MAX_LEN, `超长: ${out.length}`);
-  assert.ok(out.includes("风格："), "缺风格约束");
-});
-
-test("长段落展开成短句，不产生半截词", () => {
-  const long = "麦禾堂始于2015年。坚持当日现磨、当日烘烤、不卖隔夜，把面团放进4摄氏度冷库醒发18小时，次日清晨5点进炉。";
-  const g = pc.groupCopy([{ role: "body", text: long }], []);
-  for (const c of g.cards) {
-    if (!c.body) continue;
-    assert.ok(!/^[·，。、]/.test(c.body), `开头是分隔符: ${c.body}`);
-    assert.ok(!/[·，。、]$/.test(c.body), `结尾是分隔符: ${c.body}`);
+test("普通摄影、插画和局部改图保留作者表达",()=>{
+  for(const prompt of ["一只橘猫趴在窗台晒太阳，写实摄影","扁平风咖啡杯插画，莫兰迪色系","把背景换成海边"]){
+    const call={function:{name:"image_generate",arguments:JSON.stringify({prompt})}};
+    const [out]=intent.apply([call],intent.resolve({messages:[{role:"user",content:prompt}]}));
+    const args=JSON.parse(out.function.arguments);assert.equal(args.prompt,prompt);assert.equal(args.structured?.poster_delivery,undefined);
   }
-});
-
-// ── 意图分流：普通配图绝不能被加上海报契约 ──
-function applyOnce(args) {
-  const calls = [{ id: "t", type: "function", function: { name: "image_generate", arguments: JSON.stringify(args) } }];
-  const out = ic.apply(calls, { hasAny: false, roles: null, ratio: null, enforceSpec: null });
-  return JSON.parse(out[0].function.arguments);
-}
-
-test("普通配图与插画不追加海报契约", () => {
-  for (const p of ["一只橘猫趴在窗台晒太阳，写实摄影", "扁平风咖啡杯插画，莫兰迪色系", "把背景换成海边"]) {
-    const a = applyOnce({ prompt: p });
-    assert.equal(a.prompt, p, `被污染: ${a.prompt}`);
-  }
-});
-
-test("海报类请求追加契约", () => {
-  const a = applyOnce({ prompt: "做一张咖啡店开业海报，标题「开业大吉」", render_intent: "poster" });
-  assert.ok(/逐字照写|风格：/.test(a.prompt), "海报未追加契约");
 });

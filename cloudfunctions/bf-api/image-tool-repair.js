@@ -33,4 +33,36 @@ async function repairImageCompletion({error,body,released=false,request,sanitize
     observe({event:"recovered",...info});return data;
   } catch(e) { observe({event:"failed",...diagnostic(e),failure:["AbortError","TimeoutError"].includes(e?.name)?"TIMEOUT":["REPAIR_INCOMPLETE","REPAIR_NO_IMAGE_TOOL","REPAIR_UPSTREAM_UNAVAILABLE"].includes(e?.message)?e.message:"CONTRACT_OR_TRANSPORT"});return null; }
 }
-module.exports={diagnostic,repairImageCompletion};
+// A planning error in one image call must not remove the source order or roles of a sibling call.
+const referenceErrors = new Set(["IMAGE_REFERENCE_CONFLICT", "IMAGE_REFERENCE_NOT_ISSUED", "TOOL_CONTRACT_INVALID"]);
+function recoverImageReferences(calls, cause, {required, finalize}) {
+  const codeOf = error => error?.code || error?.message;
+  const missing = code => Object.assign(Error("TOOL_ARGUMENTS_INVALID"), {
+    code: "TOOL_ARGUMENTS_INVALID", field: "source_indexes",
+    reason: code === "IMAGE_REFERENCE_NOT_ISSUED" ? "HISTORY_REQUIRED_MISSING" : "REFERENCE_REQUIRED_MISSING"
+  });
+  if (!referenceErrors.has(codeOf(cause))) throw cause;
+  if (required || !Array.isArray(calls)) throw missing(codeOf(cause));
+
+  let recovered = false;
+  const result = calls.flatMap(call => {
+    try { return finalize([call]); }
+    catch (error) {
+      const code = codeOf(error);
+      if (!referenceErrors.has(code)) throw error;
+      if (!["image_generate","image_edit","image_series"].includes(call?.function?.name)) throw error;
+      let args;
+      try { args = JSON.parse(call.function.arguments); } catch { throw missing(code); }
+      if (!args || (!args.library_refs && !args.structured?.image_references) || ["both","last"].includes(args.source)) throw missing(code);
+      delete args.library_refs;
+      if (args.structured) delete args.structured.image_references;
+      if (!args.source_indexes && !args.source_index) delete args.reference_roles;
+      const repaired = {...call, function: {...call.function, arguments: JSON.stringify(args)}};
+      recovered = true;
+      return finalize([repaired]);
+    }
+  });
+  if (!recovered) throw missing(codeOf(cause));
+  return result;
+}
+module.exports={diagnostic,repairImageCompletion,recoverImageReferences};

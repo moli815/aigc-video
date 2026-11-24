@@ -7,9 +7,9 @@ const assert = require("node:assert/strict");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const SERIES = path.join(ROOT, "worktree/bf-api-stage2/image-series-reference-guidance.js");
-const STORE = path.join(ROOT, "worktree/bf-api-stage2/shared/asset-store.js");
-const FOUNDATION = path.join(ROOT, "worktree/bf-api-stage2/domains/foundation.js");
+const SERIES = path.join(ROOT, "cloudfunctions/bf-api/image-series-reference-guidance.js");
+const STORE = path.join(ROOT, "cloudfunctions/bf-api/shared/asset-store.js");
+const FOUNDATION = path.join(ROOT, "cloudfunctions/bf-api/domains/foundation.js");
 
 const IDS = [
   "AAAAAAAA-1111-4111-8111-111111111111",
@@ -53,7 +53,13 @@ function seriesArgs(over) {
 
 async function prep() {
   const { prepareSeriesReferenceGuidance } = require(SERIES);
-  return prepareSeriesReferenceGuidance({ messages: messagesWithRecall(), tools: TOOLS, owner: "acct", referenceStore });
+  const ctx = await prepareSeriesReferenceGuidance({messages: messagesWithRecall(), tools: TOOLS, owner:"acct", referenceStore});
+  const {recoverImageReferences} = require("../cloudfunctions/bf-api/image-tool-repair");
+  return {finalize(calls,required=false){
+    try {return ctx.finalize(calls);}
+    catch(error){return recoverImageReferences(calls,error,{required,finalize:ctx.finalize});}
+  }};
+
 }
 
 test("历史原图 + 本轮附件同时出现：收敛为「附件优先」，不抛错", async () => {
@@ -120,4 +126,15 @@ test("素材超限：接口层返回「约 32MB，超过 24MB」而不是笼统�
   assert.match(captured.message, /32MB/);
   assert.match(captured.message, /24MB/);
   assert.match(captured.message, /压缩/);
+});
+
+test("修复同批第一个冲突不能改变第二个合法历史原图",async()=>{
+  const ctx=await prep();
+  const call=(id,args)=>({id,type:"function",function:{name:"image_series",arguments:seriesArgs(args)}});
+  const bad=call("A",{source_indexes:[2],reference_roles:["当前底图"]});
+  const good=call("B",{source:"none",source_indexes:undefined});
+  const [first,second]=ctx.finalize([bad,good]).map(x=>JSON.parse(x.function.arguments));
+  assert.deepEqual(first.source_indexes,[2]);assert.deepEqual(first.reference_roles,["当前底图"]);
+  assert.equal(second.structured.image_references.items.length,4);
+  assert.throws(()=>ctx.finalize([bad,good],true),e=>e.reason==="REFERENCE_REQUIRED_MISSING");
 });
