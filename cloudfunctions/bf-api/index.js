@@ -2854,6 +2854,11 @@ async function handleChat(req, res) {
   // newer image-delivery policy, including user-requested disclosure exceptions.
   messages = injectDeliveryRule(messages);
   const workflow = require("./shared/image-workflow");
+  const posterDelivery=require('./shared/poster-delivery');
+  const inferredPoster=isCommercialTask(messages,imageUserText)&&
+    posterDelivery.posterRequested('',latestUserText(messages.filter(m=>m?.role==='user').slice(0,-1)));
+  const posterPlanner=Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')&&
+    (posterDelivery.nativePoster({},imageUserText,{referenceDesign:inferredPoster})||require('./reference-text').restylesReference(imageUserText));
   const workflowActive = workflow.enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
   const nativeCopyActive=require('./shared/native-copy-policy').enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
   const nativeCommercialActive = (!workflowActive||nativeCopyActive) && require("./shared/commercial-generation-mode").nativeCommercialEnabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
@@ -2863,7 +2868,7 @@ async function handleChat(req, res) {
     ? require("./image-design-policy").injectImageDesignPolicy(workflow.inject(messages,body.tools,RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub),imageUserText)
     : nativeCommercialActive && isCommercialTask(messages,imageUserText)
       ? require("./shared/commercial-generation-mode").injectNativeCommercialGuidance(messages)
-      : injectCommercialImageGuidance(messages, body.tools, imageUserText);
+      : posterPlanner ? messages : injectCommercialImageGuidance(messages, body.tools, imageUserText);
   const seriesReferences = await prepareSeriesReferenceGuidance({ messages, tools: body.tools,
     owner: auth.sub, referenceStore: imageReferenceStore });
   messages = seriesReferences.messages;
@@ -2879,8 +2884,8 @@ async function handleChat(req, res) {
       ownedPosterBrand=await posterBrand.preparePosterBrand({db,owner:auth.sub,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,
         referenceStore:imageReferenceStore,text:imageUserText,hasCurrentImages:require('./reference-text').currentImageParts(body.messages).length>0});
     }catch(e){logSafe({tag:"poster_brand_lookup_unavailable",requestId:currentRequestId()});}
-    if(require('./shared/poster-delivery').posterRequested('',imageUserText)||require('./reference-text').restylesReference(imageUserText)){
-      messages=[...messages,{role:"system",content:"【本轮海报设计】用户本轮指定的风格、元素、版式和禁止项优先。默认结合主题、产品、文字之间的关系及同品牌已确认的风格，选适合本次题材的视觉语言与装饰；参考历史海报只延续确立的品牌特征和仍有效的业务资料，不抄旧活动与旧模板。改款时识别原图是图解、旧海报还是实拍；旧稿保留主体、关系和有效栏目。当前用户没要求改变的定稿文案与素材不换。视觉提示简洁具体，固定布局只在用户指定时使用。"+(ownedPosterBrand?"公司确认的Logo原件由服务端放入成品。画面中留一个与构图协调、对比清晰、不挡正文的品牌区，Logo不交给模型重画。":"")}];
+    if(posterPlanner){
+      messages=[...messages,{role:"system",content:posterDelivery.PLANNER_GUIDANCE+(ownedPosterBrand?"\n公司确认的Logo原件由服务端放入成品。留一个与构图协调、对比清晰、不挡正文的品牌区，不重画Logo。":"")}];
     }
   }
   const beforeLegacyBrand = messages;
@@ -3057,7 +3062,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive });
+  if (upstreamBody.tools) upstreamBody.tools = withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner });
   if (nativeCommercialActive && upstreamBody.tools?.some(t=>["image_generate","image_edit"].includes(t?.function?.name))) upstreamBody.parallel_tool_calls = false;
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;

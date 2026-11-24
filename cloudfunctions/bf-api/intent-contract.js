@@ -233,13 +233,16 @@ function apply(calls, intent, observe) {
     if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     let changed = null;
     const count = intent.currentImageCount;
-    if (fn.name === 'image_generate' && args.source === 'attached' && count >= 2 && count <= 6
+    if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6
         && !args.library_refs?.length && !args.structured?.image_references && !args.structured?.image_plan
+        && !args.structured?.preserve_assets?.length && !args.structured?.poster_reformat
         && /都用上|全部使用|全部用上|每张都|所有产品图|所有附件|全部产品图/.test(intent.userText)
         && !/只用|仅用|不要用|别用|不使用/.test(intent.userText)) {
       const oldIndices = args.source_indexes || [args.source_index || 1];
       const roles = new Map(oldIndices.map((index, slot) => [index, args.reference_roles?.[slot]]));
+      args.source = 'attached';
       args.source_indexes = Array.from({ length: count }, (_, slot) => slot + 1);
+      delete args.source_index;
       args.reference_roles = args.source_indexes.map(index => roles.get(index) || ('本轮素材' + index));
       changed = { completeCurrentReferences: count };
     }
@@ -401,10 +404,8 @@ function guidance(intent) {
     "【照抄规则】参考图里已有的栏目名、接口名、型号、参数必须逐字照抄，不得换成近义术语（例如 PGM 接口不能写成 PWM/PoE，多防区接口不能写成多协议接口）；拿不准就保留原图文字。",
     "【禁占位】画面不得出现「品牌名称」「公司名称」「待补充」「XXX」「您好」这类占位或示例文字；已知信息直接写实，未知信息就留空不写字。",
     "【structured.text 要写全】新海报默认高信息密度。按已确认资料写全标题、分区标题、完整说明和联系信息，按阅读顺序逐项放入 structured.text。用户指定极简、少字或逐字全文时直接遵循。价格、日期、型号、联系方式只用已有依据。",
-    "【prompt 只写画面】prompt 只描述主体、场景、材质、光线、气质，≤180 字；不要把文案抄进 prompt，也不要写 1./2./3. 版式清单或坐标。",
+    "【prompt 只写画面】用简短自然语言说明本轮主体、场景、视觉表现和必要约束。定稿文案单独填写，不重复贴进 prompt。",
     "【长文】用栏目和自然句组织完整信息，显式全文要求保留原文。资料不足时只写确认内容，背景和图解承担视觉信息。",
-    "【风格贴合场景】按行业定视觉基调，并配上该行业的内容型元素：食品烘焙用暖色食欲感，配产品特写缩略图与原料/工艺插画；医疗用干净克制，配诊室实景与设备示意；教育培训用明亮亲和，配课堂场景与进阶路径图；工程安防用专业冷静，配城市剪影、设备特写与系统联动示意。不要所有行业都套同一种深色科技风，也不要只有配色没有元素。",
-    "【画面要有元素】不能是纯色底+文字块：用色带或圆角卡片分区、图标、场景缩略图、大数字、示意图承载信息，元素必须来自内容本身（烘焙用食材与工艺，安防用设备与联动节点，医疗用诊室与设备）。只挑用得上的，不要全堆。",
     "【直接执行】以上是执行约束，不要在回复里复述或列计划，直接调用工具。",
   ].filter(Boolean).join("\n");
 }

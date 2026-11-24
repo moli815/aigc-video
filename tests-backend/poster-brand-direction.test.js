@@ -63,6 +63,55 @@ test('brand compositing attaches one original only for eligible new company post
   assert.deepEqual(brand.addBrand([current],binding,text),[current]);
 });
 
+test('a long request keeps explicit art direction without copying its background notes to the image prompt',()=>{
+  const accepted='改成红白杂志风，右侧留白，不要图标，不加装饰';
+  const notes='本段项目资料供理解，成品只照定稿排版。'.repeat(25);
+  const text=[{key:'title',role:'title',text:'设备巡检与资料归档'}];
+  const s=poster.mark({text},notes+accepted,{referenceRedesign:true});
+  const p=poster.compile({visual:'给原图套金色发光卡片',structured:s,density:'dense'});
+  assert.ok(s.poster_delivery.user_direction.includes(accepted));
+  assert.match(p,/红白杂志风.*右侧留白.*不要图标.*不加装饰/);
+  assert.doesNotMatch(p,/金色发光卡片|本段项目资料|背景与主体有层次/);
+});
+
+test('default production remains rich when asked not to be minimal, and exact long copy is retained once',()=>{
+  const text=Array.from({length:18},(_,i)=>({key:'row'+i,role:'body',text:'能力'+(i+1)+'：登记设备位置、维修记录与现场照片，方便交接人员按点位复查。'}));
+  const s=poster.mark({text,design_brief:{visual_approach:'暖白卡片'},},'帮我做一张海报，别做成极简，按资料说全。');
+  assert.equal(s.poster_delivery.density,'dense');
+  const p=poster.compile({visual:'工业园区真实场景，设备柜作为主视觉。',structured:s,density:'dense'});
+  for (const row of text) assert.equal(p.split(JSON.stringify(row.text)).length,2);
+  assert.doesNotMatch(p,/暖白卡片/);
+  assert.equal(poster.mark({},'这次做一张极简海报').poster_delivery.density,'sparse');
+});
+
+test('an explicit all-current-assets turn restores missing selections without overriding local or historical bindings',()=>{
+  const {apply}=require('../cloudfunctions/bf-api/intent-contract');
+  const row={key:'title',role:'title',text:'设备协作'};
+  const intent={userText:'产品图和标志都用上，做一张招贴',currentImageCount:6};
+  const run=(rest={},request=intent)=>{
+    const args={prompt:'设备协作招贴，真实工业场景',structured:{text:[row]},source_index:1,reference_roles:['产品图'],...rest};
+    return JSON.parse(apply([{function:{name:'image_generate',arguments:JSON.stringify(args)}}],request)[0].function.arguments);
+  };
+  const full=run();
+  assert.equal(full.source,'attached');
+  assert.equal(full.source_index,undefined);
+  assert.deepEqual(full.source_indexes,[1,2,3,4,5,6]);
+  assert.equal(full.reference_roles[0],'产品图');
+  assert.equal(run({source:'both'}).source,'both');
+  assert.equal(run({library_refs:['existing']}).source_indexes,undefined);
+  assert.equal(run({structured:{text:[row],preserve_assets:[{role:'logo'}]}}).source_indexes,undefined);
+  assert.equal(run({}, {...intent,userText:'只用第一张，其他每张都不要用'}).source_indexes,undefined);
+});
+
+test('native poster planning leaves the legacy background asset brief optional',()=>{
+  const {withImageToolSchema}=require('../cloudfunctions/bf-api/image-tool-schema');
+  const tools=[{function:{name:'image_generate',parameters:{properties:{structured:{type:'object'}}}}}];
+  const schema=options=>withImageToolSchema(tools,{commercial:true,...options})[0].function.parameters.properties.structured;
+  assert.deepEqual(schema({posterPlanner:true}).required,['text']);
+  assert.equal(schema({posterPlanner:true}).properties.design_plan,undefined);
+  assert.ok(schema({}).required.includes('artwork_prompt'));
+});
+
 
 const layout=require('../cloudfunctions/shared/image-layout-protocol');
 test('only the explicit single Logo path can ask for placement without copy analysis',()=>{

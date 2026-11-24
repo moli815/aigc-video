@@ -100,3 +100,31 @@ GitHub [45211432583](https://github.com/moli815/aigc-video/actions/runs/45211432
 Seedream 5.5 可提取元素并生成 RGBA，也支持拆层后返回透明 PNG。拆层可作为照片里复杂背景标志的后续候选，须另外核验品牌字形和素材归属。当前问题用已有 OpenCV.js 在原 Logo 的透明边缘处理即可解决。对比采样使用可见笔画位置，自动选位优先找安全且可读的区域。指定位置仍以避让为前提，低对比时按合成分辨率沿边缘做 1–3 像素的局部柔边。无新增依赖或复制外部代码。 [Seedream 5.5 官方指南](https://docs.volcengine.com/docs/ark/seedream-5-5?lang=zh) · [OpenCV 形态学及滤波](https://docs.opencv.org/4.0.1/d4/d86/group__imgproc__filter.html)
 
 同一底稿、同一原件、同一个左上位置合成，1776×2368，Logo 周边 560×148 之外的像素逐个相同。深背景上放大可见细描边，字间保留原雪景。分别覆盖自动选亮位、指定位置和透明间隙三条行为，后端 996 项通过，0 次付费出图。`outputs/poster-brand-cleanup-20261124/` 内 `xiaoxue-logo-compare.png` 左旧右新，`xiaoxue-logo-soft.png` 为整图。验证范围限于本地合成阶段，重复角标与文案密度独立保留为待验。候选未部署。
+
+## 2026-11-24 10:22 北京时间｜内容驱动的默认美术与复杂回放
+
+### 先确认小雪截图的来源
+
+用户截图与 `xiaoxue-logo-soft.png` 对齐后，雪花、天际线、文字和描边 Logo 匹配。原始画面是按照客户原话和历史走会员 HTTP 链路隔离复测的 5.5 图，见 `outputs/customer-two-images-20261123/live-report.json`。本地又用原件处理 Logo 边缘并合成。截图是这张混合成品。实际测试不使用用户 iPad，也不能拿它证明发布版本已经启用新贴标。
+
+### 参考与源码取舍
+
+- ChatGPT Images 公开可证实的方式是通过对话自然语言指定创作和编辑，支持图像参考、逐轮修改、可见文字与透明背景；OpenAI Responses API 有公开 `revised_prompt` 字段。可借鉴的是前置重述、内容组织、关系和参考忠实性。公开手册没有一套可复制的私有审美提示词，也没有固定配色。 [ChatGPT Images 帮助](https://help.openai.com/en/articles/11084440-images-in-chatgpt) · [OpenAI 提示重述](https://developers.openai.com/api/docs/guides/tools-image-generation#revised-prompt) · [官方图片提示指南](https://developers.openai.com/api/docs/guides/image-prompting)
+- OpenAI 的开源 imagegen skill 按用途说明视觉和文字约束，逐张给参考图标角色。参考文档许可为 Apache-2.0，示例仅为示例。ComfyUI 的 Python/PyTorch `nodes_textgen.py` 有独立提示改写与保留强约束的做法，其示例实际为视频，且仓库为 GPL-3.0。只借鉴工作方式，不接入对方节点、模型、代码或固定模板。 [公开提示 skill](https://github.com/openai/skills/blob/main/skills/.system/imagegen/references/prompting.md) · [Skill 许可证](https://github.com/openai/skills/blob/main/skills/.system/imagegen/LICENSE.txt) · [ComfyUI 改写节点](https://github.com/Comfy-Org/ComfyUI/blob/master/comfy_extras/nodes_textgen.py) · [ComfyUI 许可证](https://github.com/Comfy-Org/ComfyUI/blob/master/LICENSE)
+- Seedream 5.5 支持单图/多图创作，独立参考最多 10 张，官方建议中文提示简洁。视觉说明尽量短，定稿文字逐项原样引号传入，客户明确要求的全文继续保留。当前 App 合并超量素材为图册，不能把 13 张产品加 Logo 计成 14 个 5.5 独立参考。 [火山图片 API](https://docs.volcengine.com/docs/ark/image-generation-api?lang=zh)
+- 实现使用已有前置模型，没有追加默认请求或微调权重。常规原生海报的工具 schema 不再强制无字底图简报或推固定坐标模板。明确指定少字、元素、风格与禁用项时优先执行，长指令从紧凑的设计句传到末端。默认用主题驱动的主视觉、与文字相关的实景或图解和足够内容。5.5 负责配色、细节、构图与成图，企业 Logo 仍走已有受保护原件能力。旧版兼容还要保留局部编辑、受保护资产、历史或叠字策略。
+
+### 压力结果
+
+实际走当前候选 API `/api/chat/completions` 和 `/image`，旧 App 工具合同，隔离会员，真实上游 DeepSeek Flash 与 Seedream 5.5。两个隔离账号均清理，线上部署和设置未写入。保存同题既有基准以避免重复付费，未操作物理 iPad。
+
+| 用例 | 通过的阶段 | 成品差距 |
+| --- | --- | --- |
+| 559 字逐字，17 项、八个栏目 | 前置结构化稿的 17 项均齐，5.5 返回 1776×2368，58.4 秒。 | 八个栏目可见，排版清爽，但把并列栏目画成 01–08 连线，加入原稿没给的编号。图文结合仍偏手册。文字仅人工检查，未做逐字 OCR。 |
+| 2193 字前序资料，13 张产品图与原 Logo | 首轮图册和 Logo 没同时选，文字清单有 10 项，无图片费用。修复后两素材正确绑定，5.5 台账记录 2 个真实输入，输出 2816×1584，59.0 秒。P01 至 P13 及三组说明可见。 | 对照图把产品按三组说明分配在同一阅读路径，App 把配件铺在主图底部并在右栏重复编号，空白偏大。图册内产品造型和 Logo 像素原样保留未通过证明。 |
+| 历史内容丰富、长当轮指定黑字白底、极简、右留白、禁图标/装饰 | 真实规划保持 sparse、明确风格和一个 6 字标题。 | 为控制费用只测工具回程，未生成此图。 |
+| 六当前附件、只用其中一张、历史及局部原件组合 | 离线覆盖补齐、保留顺序、显式排除和不改已绑定流程。 | 夹具验证传递契约，无真机或每件原件视觉保真结论。 |
+
+两张图及真实规划估计 ¥0.65，以本次隔离账号台账为准，非供应商结算单。第二组前置表现仍过度描述 13 件素材形状，已补充约 300 字的视觉简报目标和并列内容禁止伪流程说明。最后收紧仅完成回归，没有重复付费。合计 1000 项后端回归，`bundle-function-shared.js --check` 无差异。仍有视觉和品牌验收差距，本轮只提交候选。
+
+样张和输入输出在 `outputs/poster-adaptive-style-20261124/`。`live-report.json` 和 `multi-retest.json` 记录模型、文案完整度、耗时、用量与清理，`long-compare.jpg` 左为先前同题基准、右为候选。`run.cjs` 和 `retry-multi.cjs` 是隔离复测脚本，脚本已有防重复报告写入。默认启用前，继续用同一素材验收产品身份、Logo、文字和图文关系。

@@ -8,7 +8,7 @@ const designPlan={type:"object",description:"可执行构图元数据，可选�
  blocks:{type:"array",maxItems:40,items:{type:"object",properties:{text_keys:{type:"array",items:{type:"string"}},kind:{type:"string",enum:["body","metrics","route","timeline","services","checklist"]}},required:["text_keys","kind"]}}
 }};
 const printStyle={type:"object",description:"可选的准确排字配色，严格遵从用户风格；不改变已有composition字符串。",properties:{palette:{type:"object",properties:{background:{type:"string"},ink:{type:"string"},accent:{type:"string"}},required:["background","ink","accent"]}}};
-function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommercial=false}={}){
+function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommercial=false,posterPlanner=false}={}){
  if(!Array.isArray(tools))return tools;
  return tools.map(tool=>{
   const fn=tool?.function,properties=fn?.parameters?.properties;
@@ -21,8 +21,8 @@ function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommer
    },required:["purpose","audience","goal","reader_questions","visual_approach","information_density"]}
   }:{};
   const reinforced={...structured,type:"object",description:"准确文字及排版元数据，text为逐项数组，无文字填[]；不要用自定义字段替代text。",
-   required:[...new Set([...(structured.required||[]),"text",...Object.keys(designBrief)])],
-   properties:{...structured.properties,...designBrief,...(commercial?{design_plan:designPlan,print_style:printStyle}:{}),text:{type:"array",description:"画面定稿全文，不漏用户要求的信息。区分已确认事实与明确要求印刷的原文：背景解释、分类纠错、绘图指令不自动成为正文；先据资料写成自然通顺的商业文案，再逐项定稿。用户明确要求原文上图才逐字照录。",items:textItem}}
+   required:[...new Set([...(structured.required||[]),"text",...(posterPlanner?[]:Object.keys(designBrief))])],
+   properties:{...structured.properties,...designBrief,...(commercial&&!posterPlanner?{design_plan:designPlan,print_style:printStyle}:{}),text:{type:"array",description:"画面定稿全文，不漏用户要求的信息。区分已确认事实与明确要求印刷的原文：背景解释、分类纠错、绘图指令不自动成为正文；先据资料写成自然通顺的商业文案，再逐项定稿。用户明确要求原文上图才逐字照录。",items:textItem}}
   };
    if(nativeCommercial){delete reinforced.properties.design_plan;delete reinforced.properties.print_style;
     if(fn.name==="image_generate"){
