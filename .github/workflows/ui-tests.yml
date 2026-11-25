@@ -4,6 +4,11 @@ name: UI Keypath Tests
 # 10-23：删除遗留 overlay 下载（仓库已自包含），Xcode 统一到 26.3。
 on:
   workflow_dispatch:
+    inputs:
+      verify_upgrade:
+        description: "Also verify an in-place update from the November 23 iPad release"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +33,10 @@ jobs:
           else
             xcodegen --version
           fi
+
+      - name: Verify fresh login and persisted data across the last distributed update
+        if: inputs.verify_upgrade
+        run: bash qa/install-upgrade/check.sh
 
       - name: Generate Xcode project
         run: xcodegen generate
