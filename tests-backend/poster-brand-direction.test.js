@@ -125,6 +125,7 @@ test('native poster planning leaves the legacy background asset brief optional',
   const schema=options=>withImageToolSchema(tools,{commercial:true,...options})[0].function.parameters.properties.structured;
   assert.deepEqual(schema({posterPlanner:true}).required,['text']);
   assert.equal(schema({posterPlanner:true}).properties.design_plan,undefined);
+  assert.ok(schema({posterPlanner:true}).properties.design_brief.properties.visual_map);
   assert.ok(schema({}).required.includes('artwork_prompt'));
 });
 
@@ -157,3 +158,32 @@ test('only the explicit single Logo path can ask for placement without copy anal
  assert.throws(()=>layout.responseOf({confidence:0.9,occupied:[[0.2,0.2,0.2,0.2]]},layout.requestOf({...input,placement_only:undefined})),/IMAGE_LAYOUT_UNCERTAIN/);
 });
 
+
+test('native posters dispatch the planner’s visual expressions with each confirmed copy line once', () => {
+  const text = [
+    { key: 'title', role: 'title', text: '设备运营协作' },
+    { key: 'wires', role: 'label', text: '现场接入' },
+    { key: 'inspection', role: 'label', text: '状态巡检' },
+    { key: 'followup', role: 'body', text: '处理记录按项目交接' },
+  ];
+  const design_brief = {
+    purpose: 'product_explainer', audience: '园区运营人员', goal: '介绍设备协作',
+    information_density: 'dense', density_source: 'default', visual_approach: '暖色手绘插画',
+    visual_map: [
+      { form: '主视觉', text_keys: ['title'], expression: '远处厂房与近处设备形成前后层次' },
+      { form: '场景群像', text_keys: ['wires', 'inspection', 'followup'], expression: '接线端子特写和现场巡检动作呼应，背景延续厂区环境' },
+    ],
+  };
+  const user = '改成暖色手绘插画风，保留原文。';
+  const structured = poster.mark({ text, design_brief }, user);
+  const compile = spec => poster.compile({ visual: '园区设备协作', structured: spec, density: 'dense' });
+  const prompt = compile(structured);
+  assert.match(prompt, /最高优先级.*暖色手绘插画风/);
+  assert.match(prompt, /接线端子特写和现场巡检动作/);
+  assert.doesNotMatch(prompt, /分区标题：/);
+  for (const row of text) assert.equal(prompt.split(JSON.stringify(row.text)).length, 2);
+  const incomplete = { ...structured, design_brief: { ...design_brief, visual_map: design_brief.visual_map.slice(0, 1) } };
+  const fallback = compile(incomplete);
+  for (const row of text) assert.equal(fallback.split(JSON.stringify(row.text)).length, 2);
+  assert.doesNotMatch(fallback, /远处厂房与近处设备/);
+});

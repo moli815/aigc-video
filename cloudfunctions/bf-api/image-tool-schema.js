@@ -24,11 +24,11 @@ function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommer
    required:[...new Set([...(structured.required||[]),"text",...(posterPlanner?[]:Object.keys(designBrief))])],
    properties:{...structured.properties,...designBrief,...(commercial&&!posterPlanner?{design_plan:designPlan,print_style:printStyle}:{}),text:{type:"array",description:"画面定稿全文，不漏用户要求的信息。区分已确认事实与明确要求印刷的原文：背景解释、分类纠错、绘图指令不自动成为正文；先据资料写成自然通顺的商业文案，再逐项定稿。用户明确要求原文上图才逐字照录。",items:textItem}}
   };
-   if(nativeCommercial){delete reinforced.properties.design_plan;delete reinforced.properties.print_style;
-    if(fn.name==="image_generate"){
+   if (fn.name === "image_generate" && (nativeCommercial || posterPlanner)) {
      reinforced.properties.design_brief={type:"object",additionalProperties:false,description:"本轮可执行设计简报。未指定时默认内容充实、图文表达多样；明确极简/短文案等要求优先。按资料选择表达形式，不固定三栏、巨幅截图或某种色板。",properties:{purpose:{type:"string",enum:["action_guide","advertisement","product_explainer","brand_identity","illustration","other"]},audience:{type:"string",maxLength:200},goal:{type:"string",maxLength:400},visual_approach:{type:"string",maxLength:400},information_density:{type:"string",enum:["dense","balanced","sparse"]},density_source:{type:"string",enum:["current_user","context","default"]},visual_map:{type:"array",maxItems:16,items:{type:"object",additionalProperties:false,properties:{form:{type:"string",enum:require("./shared/image-design-brief").FORMS},text_keys:{type:"array",items:{type:"string"}},expression:{type:"string",maxLength:120}},required:["form","text_keys","expression"]}}},required:["purpose","audience","goal","visual_approach","information_density","density_source","visual_map"]};
-     reinforced.required=[...new Set([...reinforced.required,"design_brief"])];
-    }
+     if (nativeCommercial) reinforced.required=[...new Set([...reinforced.required,"design_brief"])];
+   }
+   if(nativeCommercial){delete reinforced.properties.design_plan;delete reinforced.properties.print_style;
     reinforced.properties.style_reference={type:"object",additionalProperties:false,description:"仅在用户提供参考图时填写。最新风格优先；visual_language分析真实视觉语言，information_structure只借信息组织不沿用旧颜色/字体/光效。reference_roles须有且仅有一张风格参考，产品原件角色不变。",properties:{scope:{type:"string",enum:["visual_language","information_structure"]},palette:{type:"array",minItems:2,maxItems:5,items:{type:"string",pattern:"^#[0-9A-Fa-f]{6}$"}},typography:{type:"string",maxLength:160},graphic_language:{type:"string",maxLength:160},image_integration:{type:"string",maxLength:160},density:{type:"string",maxLength:160}},required:["scope","density"]};}
    if(workflow){
     const w=require("./shared/image-workflow");

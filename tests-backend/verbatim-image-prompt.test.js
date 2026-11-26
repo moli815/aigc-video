@@ -87,6 +87,20 @@ test('exact lettering is distinct from a verbatim prompt or a creative poster',(
   assert.equal(mark({},'参考资料，整理成一张海报').poster_delivery.exact_copy,undefined);
 });
 
+test('the reported exact-print wording is recognized without changing quote copy', () => {
+  const { mark } = require('../cloudfunctions/shared/poster-delivery');
+  const entries = [
+    'AC-2000 双目球机 1280 元', 'AC-3100 枪机 1960 元', 'AC-4200 半球 980 元',
+    'AC-5300 人脸闸机 8600 元', 'AC-6100 NVR 4200 元', 'AC-7000 平台 28000 元',
+  ];
+  const user = '帮我们做一张产品报价海报，竖版。六款：' + entries.join('、') + '。价格必须原样印在图上。';
+  const text = entries.map((text, index) => ({ key: 'product_' + index, role: 'label', text }));
+  const structured = mark({ text }, user);
+  assert.equal(structured.poster_delivery.exact_copy, true);
+  assert.deepEqual(structured.text.map(row => row.text), entries);
+  assert.equal(mark({text}, '不用原样印在图上').poster_delivery.exact_copy, undefined);
+});
+
 test('two planning sheets preserve original attachment 14 as the logo', () => {
   const meta = '【本轮附件图册】共有 14 张独立图片。REF 番号就是原附件序号；上面只是规划用预览。';
   const parts = [{type:'text',text:'做张海报，所有产品图都用上，对应型号保留。'}, {type:'text',text:meta},

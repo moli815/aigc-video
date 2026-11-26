@@ -1,5 +1,7 @@
 "use strict";
 
+const { compileDesignBrief } = require('./image-design-brief');
+
 const POSTER = /海报|招贴|宣传图|活动展架|易拉宝|宣传单|价目表|\b(?:poster|flyer)\b/i;
 const LOCAL_CHANGE = /只(?:需|要)?(?:改|加|换|删)(?:动|修|除)?(?:其中|局部|一下|这个|那块)?(?:logo|标识|二维码|错字|电话|标题|背景|底色|文案|价格|水印|一处)|只改局部|其余.{0,6}(?:不变|别动)/i;
 const SPARSE = /极简|少字|只(?:写|印|放)(?:一个)?(?:主)?标题|大面积留白|纯(?:白|黑|色)(?:底|背景)/;
@@ -11,7 +13,7 @@ const LEGACY_COMPILED = /(?:^|\n)以下文字逐字照写、不得改动；画�
 const PLANNER_GUIDANCE = [
   '【海报设计简报】按本轮要交付的成品、受众、主题及已确认事实构思。优先执行用户明确指定的媒介、色彩、构图、留白、信息量与禁止项；其次是本轮选定的风格参考，同项目确认过的偏好仅补空缺。品牌和参考原件按用途绑定。',
   '默认商业海报以主视觉统领整页。标题与主题场景、插画或材质呼应；挑适合可视化的栏目，给它们各自相关的业务细节。让同一场景或图形语言延续到边缘和区块间，文字底下保持高对比。这些视觉内容和选用的媒介写进简报。不要因字多自行禁用照片或配图、留大片空底，也不强制固定栏数或同款卡片。用户要求的极简、留白、无配图和纯摄影照做。',
-  'prompt 写简短自然的视觉委托，交代主体、场景、表现手法及必要约束，约300字以内；已提供的图片只说明编号与作用。定稿全部放 structured.text，视觉简报不再重列标签、编号和文案，也不单独重排同一栏目。仅有真实先后关系时画流程。整图改款保留原稿主体、定稿和用户未要求改变的内容关系。',
+  'prompt 写简短自然的视觉委托，交代主体、场景、表现手法及必要约束，约300字以内；已提供的图片只说明编号与作用。定稿全部放 structured.text，视觉简报不再重列标签、编号和文案，也不单独重排同一栏目。仅有真实先后关系时画流程。在 design_brief.visual_map 里按正文 key 对应表现形式，用具体的主题场景、细节或图解说明怎么表达。整图改款保留原稿主体、定稿和用户未要求改变的内容关系。',
 ].join('\n');
 
 function sparseRequested(request) {
@@ -113,7 +115,7 @@ function copyOf(structured) {
 function exactCopyRequested(request) {
   return String(request || '').split(/[，。；,;！？\n]/u).some(clause =>
     !/(?:不用|不必|无需|不要|不要求).{0,6}(?:逐字|原样|一字不差)/u.test(clause)
-    && /(?:逐字|一字不差|原样)(?:照写|印刷|照印|排印|印上|上图|呈现|保留(?:全部|所有)?(?:文案|文字))|(?:文案|正文|文字)(?:必须|需要|要求)?一字不差/u.test(clause));
+    && /(?:逐字|一字不差|原样)(?:照写|印刷|照印|排印|印上|印在(?:海报|画面|图)上|上图|呈现|保留(?:全部|所有)?(?:文案|文字))|(?:文案|正文|文字)(?:必须|需要|要求)?一字不差/u.test(clause));
 }
 
 function mark(structured, userText, { referenceRedesign = false } = {}) {
@@ -155,6 +157,10 @@ function compile({ visual, structured, density }) {
   // For whole-artwork restyling, artwork is the authoritative visual input.
   // The planner's invented aesthetic restrictions must not overrule it.
   const direction=reference?reference:polished||brief;
+  const planned = density === 'dense' && !reference && Array.isArray(structured.design_brief?.visual_map)
+    ? compileDesignBrief(structured.design_brief, { visualExecution: true, items: rows })
+    : '';
+  if (planned) return [priority, design, polished, planned].filter(Boolean).join('\n');
   return [priority, design, direction,
     '以下为全部印刷文字。每个栏目标题和它的说明合在唯一一处，逐字印刷一次。末栏若有行动信息就在该栏呈现，不另抄到底栏。装饰、图示和非原件小插画仅用无字图形，不加清单外的编号、词句、数字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
