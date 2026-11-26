@@ -165,6 +165,14 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             -resultBundlePath TestResults.xcresult 2>&1 | tee /tmp/ios-tests.log | tail -120
 
+      - name: Verify iPhone compact navigation
+        run: |
+          PHONE_UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for k in sorted(d,reverse=True) for x in d[k] if x.get("isAvailable") and "iPhone" in x.get("name","")))')
+          xcodebuild test -project BossAI.xcodeproj -scheme BossAI -destination "id=$PHONE_UDID" \
+            -derivedDataPath build -parallel-testing-enabled NO \
+            -only-testing:BossAIUITests/AppWorkbenchUITests/testPhoneOpensExpertAndReturnsToMenu \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -resultBundlePath PhoneNavigation.xcresult
+
       # 10-25：失败时把失败用例名打出来。测试步骤只有 tail -120，失败名会被截掉，
       # 之前排查只能靠猜（白跑了两次 CI）。
       - name: Print failing tests

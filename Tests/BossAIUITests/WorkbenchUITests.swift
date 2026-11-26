@@ -20,6 +20,23 @@ final class AppWorkbenchUITests: XCTestCase {
         currentApp = app; return app
     }
 
+    func testPhoneOpensExpertAndReturnsToMenu() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else {
+            throw XCTSkip("Compact phone navigation")
+        }
+        XCUIDevice.shared.orientation = .portrait
+        let app = launch()
+        let menu = app.buttons["compact-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 20))
+        menu.tap()
+        let expert = app.buttons["sidebar-expert-general"]
+        XCTAssertTrue(expert.waitForExistence(timeout: 10))
+        expert.tap()
+        XCTAssertTrue(app.buttons["send-button"].waitForExistence(timeout: 15))
+        menu.tap()
+        XCTAssertTrue(app.buttons["new-task"].waitForExistence(timeout: 10))
+    }
+
     private func evidence(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)
         let description = app.debugDescription

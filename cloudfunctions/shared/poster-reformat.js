@@ -3,11 +3,21 @@
 // and from crop/outpaint. This contract travels through existing structured.
 const VERSION=1;
 function excluded(a){return !!a.structured?.print_catalog||a.layer_decomposition===true||Number(a.requested_count||a.requestedCount||1)>1||['series','decompose'].includes(a.task_kind||a.taskKind)||a.text_mode==='overlay'||a.structured?.preserve_assets?.length||['mockup'].includes(a.render_intent||a.renderIntent);}
+function normalizeDirection(text){
+ return String(text||"")
+  .replace(/(?:不要|别|避免|禁止|不用|勿|不能|不可)[^，。；、\n]{0,6}?(横版|横向|横屏|横图)/g,"竖版")
+  .replace(/(?:不要|别|避免|禁止|不用|勿|不能|不可)[^，。；、\n]{0,6}?(竖版|竖向|竖屏|竖图)/g,"横版");
+}
 function ratioOf(text,current){
- const direction=[...text.matchAll(/竖(?:版|向|屏|图)|横(?:版|向|屏|图)/g)].at(-1)?.[0];
+ const normalized=normalizeDirection(text);
+ // A target after “改成/转为” may follow a description of the input canvas.
+ const target=normalized.split(/(?:改成|改为|转成|转为|换成|调整为)\s*(?=[横竖0-9])/).at(-1);
+ // A horizontal footer is a layout detail, even on a portrait canvas.
+ const canvas=target.replace(/(?:横向|竖向)(?:的)?(?:服务保障条|条带|横条|线条|分隔线|时间线|进度条|排列|排布)/g,'');
+ const direction=[...canvas.matchAll(/竖(?:版|向|屏|图)|横(?:版|向|屏|图)/g)].at(-1)?.[0];
  const portrait=direction?.startsWith('竖'),landscape=direction?.startsWith('横');
  const valid=(w,h)=>w>0&&h>0&&w/h>=1/4&&w/h<=4&&(!portrait||h>w)&&(!landscape||w>h);
- const nums=[...text.matchAll(/(\d{1,4}(?:\.\d+)?)\s*(?:[:：×xX*]|比)\s*(\d{1,4}(?:\.\d+)?)/g)];
+ const nums=[...canvas.matchAll(/(\d{1,4}(?:\.\d+)?)\s*(?:[:：×xX*]|比)\s*(\d{1,4}(?:\.\d+)?)/g)];
  const n=nums.filter(m=>valid(+m[1],+m[2])).at(-1);
  if(n){const a=+n[1],b=+n[2],gcd=(x,y)=>y?gcd(y,x%y):x,g=gcd(Math.round(a*100),Math.round(b*100));return`${Math.round(a*100)/g}:${Math.round(b*100)/g}`;}
  const m=/^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(String(current||''));
@@ -64,4 +74,4 @@ function plan(input){
  const roles=images.length>1?'\n'+images.map((_,i)=>`图${i+1}：${String(input.referenceRoles?.[i]||(i===0?'待改版的原海报':'用户补充素材')).slice(0,120)}`).join('\n'):'';
  return{intent,prompt:`将输入原图完整重排为${intent.target_aspect_ratio}的平面宣传海报，设计填满目标画布。用户本轮要求：${JSON.stringify(intent.user_request)}。${roles}\n按用户要求重新安排各栏目位置、大小与阅读顺序，保留原图的全部业务内容、名称解释、流程、品牌Logo、联系方式和真实产品/大屏素材；用户明确更新的信息以本轮要求为准。未要求换风格时延续原图美术，要求换风格时遵循用户指定风格。不要整体缩小贴在空白画布，不裁掉栏目，不换成无关场景配图再套正文模板，不生成纸张或拍摄样机。原文准确清晰，不添加原图或用户未提供的口号、数据和承诺。${art}${copy}`};
 }
-module.exports={VERSION,derive,ratioOf,mark,normalize,metadata,plan};
+module.exports={VERSION,derive,ratioOf,normalizeDirection,mark,normalize,metadata,plan};

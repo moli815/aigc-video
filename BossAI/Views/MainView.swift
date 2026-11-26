@@ -42,6 +42,8 @@ struct MainView: View {
     @State private var draftResearchMode: ResearchMode?
     @State private var providerTask: Task<Void, Never>?
     @State private var showNewChat = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var compactColumn: NavigationSplitViewColumn = .detail
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var showPinEntry = false
     @State private var showHiddenSettings = false
@@ -51,12 +53,13 @@ struct MainView: View {
     @State private var updateChecked = false
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
             SidebarView(selectedConversationId: Binding(
                 get: { selectedConversationId },
                 set: { newValue in
                     selectedConversationId = newValue
                     if let id = newValue {
+                        compactColumn = .detail
                         containerKey = "conv-\(id.uuidString)"
                         showLibrary = false
                     }
@@ -70,6 +73,7 @@ struct MainView: View {
                 selectedConversationId = nil
                 containerKey = nil
                 showLibrary = true
+                compactColumn = .detail
             },
             onHiddenSettings: { showPinEntry = true },
             onOpenResearch: {
@@ -78,6 +82,17 @@ struct MainView: View {
             })
         } detail: {
             detailContent
+                .navigationBarBackButtonHidden(horizontalSizeClass == .compact)
+                .toolbar {
+                    if horizontalSizeClass == .compact {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button { compactColumn = .sidebar } label: {
+                                Label("打开菜单", systemImage: "sidebar.left")
+                            }
+                            .accessibilityIdentifier("compact-menu")
+                        }
+                    }
+                }
         }
         .navigationSplitViewStyle(.balanced)
         .environmentObject(credentials)
@@ -96,6 +111,7 @@ struct MainView: View {
                     showLibrary = false
                     selectedConversationId = conversation.id
                     containerKey = "conv-\(conversation.id.uuidString)"
+                    compactColumn = .detail
                 }
             )
         }
@@ -194,7 +210,12 @@ struct MainView: View {
         selectedConversationId = nil
         // Unique key preserves separate drafts; expert ID remains the prefix decoded by detailContent.
         containerKey = "draft-\(expert.id)~\(UUID().uuidString)"
-        columnVisibility = .detailOnly
+        showChatColumn()
+    }
+
+    private func showChatColumn() {
+        compactColumn = .detail
+        if horizontalSizeClass != .compact { columnVisibility = .detailOnly }
     }
 
     /// 点专家：已有该专家的对话就打开；没有就进草稿态（发第一条消息时才落库）
@@ -209,7 +230,7 @@ struct MainView: View {
             // 此前用固定 key "draft-\(expert.id)"，VM 被复用会把上一次任务模板/草稿残留进输入框。
             startNewDraft(expert)
         }
-        columnVisibility = .detailOnly
+        showChatColumn()
     }
 
     private func delete(_ conv: Conversation) {
@@ -325,6 +346,7 @@ struct SidebarView: View {
                                         .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityIdentifier("sidebar-expert-" + expert.id)
                             }
                         }
                         .padding(.horizontal, 10)

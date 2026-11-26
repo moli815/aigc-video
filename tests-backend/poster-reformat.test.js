@@ -14,3 +14,9 @@ test('orientation and input slots in the visual brief do not reinterpret a final
 });
 test('missing original fails before provider and all owned input slots survive planning',()=>{const structured={poster_reformat:R.derive(user)};assert.throws(()=>R.plan({structured}),{code:'REFORMAT_REFERENCE_REQUIRED'});const images=['a','b','c'],p=R.plan({structured,image:images,referenceRoles:['原海报','Logo','产品图']});assert.equal(images.length,3);for(const role of['图1：原海报','图2：Logo','图3：产品图'])assert.ok(p.prompt.includes(role));});
 test('reformat copy avoids an additional billable editorial rewrite',async()=>{const review=require('../cloudfunctions/bf-api/commercial-copy-review').reviewCommercialCalls,call={function:{name:'image_generate',arguments:JSON.stringify({source:'attached',structured:{poster_reformat:R.derive(user),text:[{role:'body',key:'b',text:'不能删改的原文'.repeat(80)}]}})}};let n=0;const out=await review([call],{messages:[{role:'user',content:user}],enabled:true,request:()=>{n++;throw Error('SHOULD_NOT_REWRITE');}});assert.deepEqual(out,[call]);assert.equal(n,0);});
+
+test('portrait target wins over the input canvas without letting local layout instructions change it',()=>{
+ assert.equal(R.derive('原图16:9，改成竖版',{aspect_ratio:'16:9'}).target_aspect_ratio,'9:16');
+ assert.equal(R.derive('把这张图改成3:4，不要横版',{aspect_ratio:'16:9'}).target_aspect_ratio,'3:4');
+ assert.equal(R.derive('这张图改成2:3竖版，底部有一条横向的服务保障条',{aspect_ratio:'16:9'}).target_aspect_ratio,'2:3');
+});
