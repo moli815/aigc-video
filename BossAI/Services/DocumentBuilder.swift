@@ -583,8 +583,9 @@ enum DocumentBuilder {
             for bullet in slide.bullets {
                 let characters = Array(bullet)
                 if characters.isEmpty { segments.append(""); continue }
-                for start in stride(from: 0, to: characters.count, by: 80) {
-                    segments.append(String(characters[start..<min(start + 80, characters.count)]))
+                let charsPerPage = 12 * 40
+                for start in stride(from: 0, to: characters.count, by: charsPerPage) {
+                    segments.append(String(characters[start..<min(start + charsPerPage, characters.count)]))
                 }
             }
             var page: [String] = []; var lines = 0; var number = 1
@@ -621,7 +622,15 @@ enum DocumentBuilder {
             slideRelsExtra += "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>"
 
         contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + (hasAuthoredPages ? 0 : 2), theme: theme))
+            let xml: String
+            if hasAuthoredPages, index == 0, slide.title.count <= 32, slide.bullets.count <= 1,
+               (slide.bullets.first?.count ?? 0) <= 44 {
+                let subtitle = slide.bullets.first ?? ""
+                xml = coverSlideXML(theme: theme, title: slide.title, subtitle: subtitle)
+            } else {
+                xml = slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + (hasAuthoredPages ? 0 : 2), theme: theme)
+            }
+            zip.add("ppt/slides/slide\(n).xml", xml)
             zip.add("ppt/slides/_rels/slide\(n).xml.rels", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(slideRelsExtra)</Relationships>
@@ -662,7 +671,7 @@ enum DocumentBuilder {
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>
         """
         if !hasAuthoredPages {
-            zip.add("ppt/slides/cover.xml", coverSlideXML(theme: theme, title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
+            zip.add("ppt/slides/cover.xml", coverSlideXML(theme: theme, title: title, subtitle: "中防AI · " + DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
             zip.add("ppt/slides/_rels/cover.xml.rels", slideLayoutRels)
             zip.add("ppt/slides/closing.xml", closingSlideXML(theme: theme))
             zip.add("ppt/slides/_rels/closing.xml.rels", slideLayoutRels)
@@ -815,10 +824,10 @@ enum DocumentBuilder {
     }
 
     /// 封面页：深蓝底 + 居中大标题 + 日期
-    private static func coverSlideXML(theme: DocTheme, title: String, dateLine: String) -> String {
+    private static func coverSlideXML(theme: DocTheme, title: String, subtitle: String) -> String {
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="封面标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2857500"/><a:ext cx="10515600" cy="1257300"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4400" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="装饰线"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5096000" y="2651760"/><a:ext cx="2000000" cy="50800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.secondary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4343400"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="\(theme.light)"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>中防AI · \(xmlEscape(dateLine))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
+        <p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="\(theme.primary)"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="封面标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="2857500"/><a:ext cx="10515600" cy="1257300"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="4400" b="1" dirty="0"><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(title))</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="装饰线"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="5096000" y="2651760"/><a:ext cx="2000000" cy="50800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="\(theme.secondary)"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="4" name="副标题"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="838200" y="4343400"/><a:ext cx="10515600" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="zh-CN" sz="1600" dirty="0"><a:solidFill><a:srgbClr val="\(theme.light)"/></a:solidFill><a:latin typeface="\(theme.bodyFont)"/><a:ea typeface="\(theme.bodyFont)"/></a:rPr><a:t>\(xmlEscape(subtitle))</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>
         """
     }
 

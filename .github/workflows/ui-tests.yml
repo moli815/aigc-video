@@ -9,6 +9,10 @@ on:
         description: 'Run the report export, citation and iPad checks'
         type: boolean
         default: false
+      export_only:
+        description: 'Rerun only the iPad Office export tests'
+        type: boolean
+        default: false
       verify_upgrade:
         description: "Also verify an in-place update from the November 23 iPad release"
         type: boolean
@@ -62,16 +66,18 @@ jobs:
           # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad（单行管道，避免破坏 YAML 块）
           UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];print(next(x["udid"] for k in sorted(d,reverse=True) for x in d[k] if x.get("isAvailable") and "iPad" in x.get("name","")))')
           echo "使用 iPad 模拟器: $UDID"
-          audit=()
+          audit=("-only-testing:BossAIUITests")
           if [ "${{ inputs.report_audit }}" = "true" ]; then
-            audit=("-only-testing:BossAITests/ExportAndPolicyTests" "-only-testing:BossAITests/AppPerformanceTests")
+            audit+=("-only-testing:BossAITests/ExportAndPolicyTests" "-only-testing:BossAITests/AppPerformanceTests")
+          fi
+          if [ "${{ inputs.export_only }}" = "true" ]; then
+            audit=("-only-testing:BossAITests/ExportAndPolicyTests")
           fi
           xcodebuild test \
             "${audit[@]}" \
             -project BossAI.xcodeproj \
             -scheme BossAI \
             -destination "id=$UDID" \
-            -only-testing:BossAIUITests \
             -derivedDataPath build \
             -showBuildTimingSummary \
             -resultBundlePath UITestResults.xcresult \

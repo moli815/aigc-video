@@ -80,6 +80,23 @@ final class ExportAndPolicyTests: XCTestCase {
         XCTAssertTrue(replaced.contains("见附图 1"))
     }
 
+    private final class SlideParagraphs: NSObject, XMLParserDelegate {
+        private var buffer = ""
+        private var reading = false
+        var text: [String] = []
+        func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
+            if elementName == "a:p" { buffer = "" }
+            if elementName == "a:t" { reading = true }
+        }
+        func parser(_ parser: XMLParser, foundCharacters string: String) {
+            if reading { buffer += string }
+        }
+        func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName: String?) {
+            if elementName == "a:t" { reading = false }
+            if elementName == "a:p" { text.append(buffer) }
+        }
+    }
+
     func testNumberedDeckKeepsEightPagesAndHidesProductionNotes() throws {
         let markdown = "# 智慧安消汇报（8 页）\n\n---\n\n" + (1...8).map {
             "### P\($0)｜第 \($0) 部分\n\n- 已确认的内容 \($0)\n\n**视觉建议**：仅给设计师\n\n**讲稿要点**：仅给演讲者"
@@ -89,7 +106,12 @@ final class ExportAndPolicyTests: XCTestCase {
         XCTAssertEqual(archive.components(separatedBy: "<p:sldId id=").count - 1, 8)
         XCTAssertFalse(archive.contains("仅给设计师"))
         XCTAssertFalse(archive.contains("仅给演讲者"))
-        XCTAssertTrue(archive.contains("已确认的内容 8"))
+        let slide = try ZipReader(data: data).data(for: "ppt/slides/slide8.xml")
+        let parser = XMLParser(data: slide)
+        let paragraphs = SlideParagraphs()
+        parser.delegate = paragraphs
+        XCTAssertTrue(parser.parse())
+        XCTAssertTrue(paragraphs.text.contains("已确认的内容 8"))
     }
 
     func testTableContinuationRepeatsHeaderInPptx() {

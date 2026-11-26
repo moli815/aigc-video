@@ -53,3 +53,11 @@ OpenAI 公开资料建议在提示中明确用途、层级、材质、光线和�
 - Node 1031 项通过，1 项历史图回归因缺现场素材跳过，Swift 6 份改动源码语法检查通过。本轮付费模型调用 0。iPad CI 走手动测试入口，真实模型、设备重签、生产发布和正式 IPA 需要对应证据。对于空响应保留原有调用计量，不自动再次向模型提交已发出的调用。
 - Office 用现有本机 OOXML 和 UIKit 渲染。可编辑部分按 Open XML 文档部件、关系、数字样式和筛选表达，无新增产品依赖。[Microsoft Open XML](https://learn.microsoft.com/en-us/office/open-xml/about-the-open-xml-sdk) · [Excel 筛选](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-tables)
 - 候选回退依据为父提交 `187538c2021977c187e97c88695d028a43311967`，生产还在已归档 11 月 26 日版本。报告样图、测试原始记录都在本机 outputs。
+
+## 23:41 iPad 回归与 PPT 可见内容复查
+
+首轮已完成。检索 20 项通过，iPad UI 16 项通过、1 项按设备跳过，覆盖横竖屏工作台、键盘、引用和滚动。离线性能 5 次启动平均 4.52 秒、滚动测试峰值均值约 71.6 MB，模拟器离散度较大，无同机器旧版对照。Word、Excel、PDF 和 PPT 续表头通过。8 页用例的页数及制作说明断言通过，末页文字断言因数字位于独立 OOXML 文字片段而失败。[首轮 CI](https://github.com/moli815/aigc-video/actions/runs/45846234233)
+
+按成熟 Office 实践在测试中打开对应幻灯片 XML，逐段合并文字片段。Windows PowerPoint 打开原报告的 8 页离线复刻后发现，旧的 80 字截断会让句尾成为新条目。本次只在整段超单页容量时分段，并在短封面复用现有主题。下轮 CI 只复跑 iPad 文件导出。回滚本次跟进使用父提交 `ba42bff759301f6fd73a6dac1e6b774cb88caf80`。[python-pptx 段落实现](https://github.com/scanny/python-pptx/blob/master/src/pptx/text/text.py) · [PptxGenJS 表头与分页](https://gitbrent.github.io/PptxGenJS/docs/api-tables.html)
+
+python-pptx 为 MIT 的 Python 库，PptxGenJS 为 MIT 的 JavaScript 库。本项目借鉴其数据结构和验收方式，仍由 Swift 在设备上生成文件。
