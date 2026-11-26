@@ -2,7 +2,11 @@
 # Run on a disposable macOS runner with XcodeGen and an available iPad simulator.
 set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
-prior=2c35b867879c9d728443bc781ec1fe01cc124666
+case "${1:-november}" in
+  november) prior=2c35b867879c9d728443bc781ec1fe01cc124666 ;;
+  october) prior=04cd082467663023f154cf27a08d18124ea0d09f ;;
+  *) echo "Unsupported baseline" >&2; exit 2 ;;
+esac
 scratch="$(mktemp -d)"
 udid="$(xcrun simctl list devices available -j | python3 -c 'import sys,json; print(next(d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if d.get("isAvailable") and "iPad" in d["name"]))')"
 xcrun simctl bootstatus "$udid" -b

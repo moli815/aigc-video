@@ -9,6 +9,11 @@ on:
         description: "Also verify an in-place update from the November 23 iPad release"
         type: boolean
         default: false
+      upgrade_baseline:
+        description: "Installed iPad version for the upgrade check"
+        type: choice
+        options: [november, october]
+        default: november
 
 permissions:
   contents: read
@@ -36,7 +41,9 @@ jobs:
 
       - name: Verify fresh login and persisted data across the last distributed update
         if: inputs.verify_upgrade
-        run: bash qa/install-upgrade/check.sh
+        env:
+          UPGRADE_BASELINE: ${{ inputs.upgrade_baseline }}
+        run: bash qa/install-upgrade/check.sh "$UPGRADE_BASELINE"
 
       - name: Generate Xcode project
         run: xcodegen generate
