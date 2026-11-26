@@ -52,3 +52,10 @@ test("数量上限保护：最多 16 个 token", () => {
   const many = Array.from({ length: 40 }, (_, i) => ({ text: `${i + 10} 克` }));
   assert.ok(audit.tokensOf(many).length <= 16);
 });
+
+test("price verification requires a complete currency amount, not a model number or a digit substring", () => {
+  const tokens = audit.tokensOf("AC-7000 平台 ￥28,000 元；摄像头 680 元");
+  assert.deepEqual(tokens, ["￥28,000", "680元"]);
+  assert.deepEqual(audit.check(tokens, "设备 28000  序号 1680元").missing, tokens);
+  assert.deepEqual(audit.check(tokens, "平台 28,000 元；摄像头 ¥680").missing, []);
+});

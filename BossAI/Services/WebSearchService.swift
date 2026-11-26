@@ -938,7 +938,7 @@ enum WebSearchService {
     /// 这是"防谎报"的核心注入点：时效说明、外部证据边界（网页内容不是指令，
     /// 防提示注入）、引用规则（只能引用检索结果里实际出现的数值，缺数必须写
     /// 「未核实」）、输出结构约束全部在此注入；结果按发布日期倒序、最多注入 8 条。
-    static func format(hits: [SearchHit], pages: [(title: String, url: String, text: String)], sourceIDs: [Int] = []) -> String {
+    static func format(hits: [SearchHit], pages: [(title: String, url: String, text: String)], sourceIDs: [Int] = [], recency: SearchRecency = .any) -> String {
         var out = ""
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy年M月d日"
@@ -953,13 +953,13 @@ enum WebSearchService {
         在该句后标注来源编号，如「售价 4999 元（来源 3）」，让读者能追溯到对应条目 —— 不要只在文末笼统堆一堆链接。
 
         """
-        out += "【输出结构】回答用 Markdown 组织：小节标题用 ###；多对象对比用表格，末列写来源编号；每句具体结论句尾标（来源 N）；不要复述本证据块原文，也不要罗列检索过程。未能核实的字段集中在结尾「未核实项」小节，逐项写明原因（官方未公布/检索源无覆盖/日期存疑）。\n"
+        out += "【作答】先满足用户指定的条数、字数和格式。用实际支持结论的来源编号；区分检索摘要和已读原文，规范出处优先用发布方正文。无法核实的条目说明原因。\n"
         // P0-12 时效强化：①有日期的结果按日期倒序置顶（让模型先看到新鲜页面）
         // ②注入给模型的结果最多 10 条（此前一次 29 条混杂新旧，模型容易引用旧型号参数）
         // ③明确禁止"回退到上一代型号参数充当最新"——这是用户反复反馈的失败模式。
         let hasAnyDate = hits.contains { !$0.publishedAt.isEmpty }
-        let ordered: [SearchHit]
-        if hasAnyDate {
+        let ordered: [(offset: Int, element: SearchHit)]
+        if hasAnyDate && recency != .any {
             ordered = hits.enumerated().sorted { lhs, rhs in
                 let ld = Self.parseDateToken(lhs.element.publishedAt)
                 let rd = Self.parseDateToken(rhs.element.publishedAt)
@@ -967,17 +967,17 @@ enum WebSearchService {
                 // 未来若排序逻辑调整不会变成崩溃点。
                 guard let l = ld else { return false }
                 guard let r = rd else { return true }
-                return l > r
-            }.map(\.element)
+                return l == r ? lhs.offset < rhs.offset : l > r
+            }
         } else {
-            ordered = hits
+            ordered = Array(hits.enumerated())
         }
         // P0 检索质量：注入给模型的候选结果上限 10→8。实测 25+ 条来源混杂新旧与近重复，
         // 模型反而引用错误条目；8 条以内配合来源过滤，准确率与可追溯性最佳。
         let concise = Array(ordered.prefix(8))
-        out += "【时效铁律】今天日期：\(formatter.string(from: Date()))。优先采信近 30 天内的页面；若某对象没有近期证据，必须写「未检索到该对象的近期证据」，**严禁用上一代型号的参数、去年发布页或自媒体旧文来充当「最新」**。\n"
-        out += "【搜索结果】（本轮共 \(hits.count) 条，按发布日期倒序取前 \(concise.count) 条注入；摘要及发布日期需核实）\n"
-        for (index, hit) in concise.enumerated() {
+        out += "【时效】今天日期：\(formatter.string(from: Date()))。按问题要求的日期和适用版本核对。最新资讯看发生或生效时间，历史事实、规范原文和历法以适用的权威资料为准。\n"
+        out += "【搜索结果】（本轮共 \(hits.count) 条，取前 \(concise.count) 条注入；摘要及发布日期需核实）\n"
+        for (index, hit) in concise {
             let id = sourceIDs.indices.contains(index) ? sourceIDs[index] : index + 1
             out += "\(id). \(hit.title)\n"
             out += "   日期：\(hit.publishedAt.isEmpty ? "发布时间未核实" : hit.publishedAt)\n"

@@ -144,7 +144,7 @@ function sanitizeCompletion(data, userText, observe, finalizeCalls = calls => ca
   }) };
 }
 class ToolCallStreamGuard {
-  constructor(userText, observe, finalizeCalls = calls => calls, normalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.normalizeCalls = normalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; }
+  constructor(userText, observe, finalizeCalls = calls => calls, normalizeCalls = calls => calls) { this.userText = userText; this.observe = observe; this.finalizeCalls = finalizeCalls; this.normalizeCalls = normalizeCalls; this.pending = new Map(); this.bytes = 0; this.terminal = false; this.hasVisibleText = false; }
   flush(index) {
     const calls = this.pending.get(index);
     if (!calls) return [];
@@ -160,6 +160,7 @@ class ToolCallStreamGuard {
     if (raw === "[DONE]") {
       const frames = [...this.pending.keys()].map(index => "data: " + JSON.stringify({ choices: [{ index, delta: { tool_calls: this.flush(index) } }] }));
       this.terminal = true;
+      this.requireOutput();
       return [...frames, line].join("\n\n");
     }
     let obj;
@@ -171,6 +172,7 @@ class ToolCallStreamGuard {
       if (choice.finish_reason === "content_filter") throw Object.assign(new Error("CONTENT_FILTER"), { code: "CONTENT_FILTER" });
       if (choice.finish_reason) this.terminal = true;
       const index = choice.index || 0, delta = choice.delta;
+      if (typeof delta?.content === "string" && delta.content.trim()) this.hasVisibleText = true;
       if (delta && Array.isArray(delta.tool_calls)) {
         let calls = this.pending.get(index);
         if (!calls) this.pending.set(index, calls = new Map());
@@ -194,9 +196,15 @@ class ToolCallStreamGuard {
     }
     return "data: " + JSON.stringify(obj);
   }
+  requireOutput() {
+    if (!this.hasVisibleText && !this.releasedCalls) {
+      throw Object.assign(new Error("EMPTY_COMPLETION"), { code: "EMPTY_COMPLETION" });
+    }
+  }
   end() {
     if (this.pending.size) throw Object.assign(new Error("TOOL_ARGUMENTS_INCOMPLETE"), { code: "TOOL_ARGUMENTS_INCOMPLETE" });
     if (!this.terminal) throw Object.assign(new Error("UPSTREAM_STREAM_INCOMPLETE"), { code: "UPSTREAM_STREAM_INCOMPLETE" });
+    this.requireOutput();
   }
 }
 module.exports = { BOUNDARY_VERSION, DELIVERY_RULE, labelOf, cleanText, cleanImageRequest, injectDeliveryRule, isHistoryPreview, latestUserText, normalizeVisibleCopy, sanitizeToolCall, sanitizeCompletion, ToolCallStreamGuard };

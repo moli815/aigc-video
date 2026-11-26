@@ -183,6 +183,19 @@ final class SearchQualityTests: XCTestCase {
         XCTAssertTrue(out.contains("严禁"))
     }
 
+    func testFormattedEvidencePreservesIDsWhenResultsAreReordered() {
+        let hits = [
+            SearchHit(title: "规范发布原文", url: "https://a.com/rule", snippet: "", publishedAt: "2008-01-01"),
+            SearchHit(title: "故障通报", url: "https://b.com/news", snippet: "", publishedAt: "2026-11-25"),
+        ]
+        let dated = WebSearchService.format(hits: hits, pages: [], sourceIDs: [11, 24], recency: .week)
+        XCTAssertTrue(dated.contains("11. 规范发布原文"))
+        XCTAssertTrue(dated.contains("24. 故障通报"))
+        XCTAssertTrue(dated.range(of: "24. 故障通报")!.lowerBound < dated.range(of: "11. 规范发布原文")!.lowerBound)
+        let general = WebSearchService.format(hits: hits, pages: [], sourceIDs: [11, 24])
+        XCTAssertTrue(general.range(of: "11. 规范发布原文")!.lowerBound < general.range(of: "24. 故障通报")!.lowerBound)
+    }
+
     func testFormatUndatedMarkedUnverified() {
         let out = WebSearchService.format(hits: [hit("iPhone 17 价格报道", url: "https://a.com")], pages: [])
         XCTAssertTrue(out.contains("发布时间未核实"), "无日期结果必须标注「发布时间未核实」")

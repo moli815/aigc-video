@@ -5,6 +5,10 @@ name: UI Keypath Tests
 on:
   workflow_dispatch:
     inputs:
+      report_audit:
+        description: 'Run the report export, citation and iPad checks'
+        type: boolean
+        default: false
       verify_upgrade:
         description: "Also verify an in-place update from the November 23 iPad release"
         type: boolean
@@ -48,13 +52,22 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Verify citation numbering
+        if: inputs.report_audit
+        run: swift test --filter BossAISearchCoreTests
+
       - name: Run UI key-path tests
         run: |
           set -o pipefail
           # 工作台为 iPad 布局：从可用模拟器里动态挑第一台 iPad（单行管道，避免破坏 YAML 块）
           UDID=$(xcrun simctl list devices available -j | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin)["devices"];print(next(x["udid"] for k in sorted(d,reverse=True) for x in d[k] if x.get("isAvailable") and "iPad" in x.get("name","")))')
           echo "使用 iPad 模拟器: $UDID"
+          audit=()
+          if [ "${{ inputs.report_audit }}" = "true" ]; then
+            audit=("-only-testing:BossAITests/ExportAndPolicyTests" "-only-testing:BossAITests/AppPerformanceTests")
+          fi
           xcodebuild test \
+            "${audit[@]}" \
             -project BossAI.xcodeproj \
             -scheme BossAI \
             -destination "id=$UDID" \

@@ -147,6 +147,32 @@ enum MarkdownParser {
         return slides
     }
 
+    /// Import numbered slides emitted by the planning prompt. Only a complete
+    /// P1…Pn sequence is interpreted as an authored outline.
+    static func numberedSlides(from markdown: String) -> [(title: String, bullets: [String])]? {
+        let marker = #"^P[1-9][0-9]*[｜|、:：]\s*"#
+        var pages: [(title: String, bullets: [String])] = []
+        for block in blocks(from: markdown) {
+            if [.heading1, .heading2, .heading3].contains(block.kind),
+               let prefix = block.text.range(of: marker, options: .regularExpression) {
+                let number = block.text[prefix].dropFirst().prefix(while: { $0.isNumber })
+                guard Int(number) == pages.count + 1 else { return nil }
+                pages.append((String(block.text[prefix.upperBound...]), []))
+                continue
+            }
+            guard let last = pages.indices.last, block.kind != .pageBreak else { continue }
+            let line = block.text
+            if line.range(of: #"^(?:视觉建议|讲稿要点|落款区)\s*[：:]"#, options: .regularExpression) != nil
+                || line == "内容要点" { continue }
+            if last == 0, let prefix = line.range(of: #"^标题\s*[：:]"#, options: .regularExpression) {
+                pages[last].title = String(line[prefix.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else {
+                pages[last].bullets.append(line)
+            }
+        }
+        return pages.count >= 2 ? pages : nil
+    }
+
     /// 表格解析：把 Markdown 表格转成二维数组
     static func table(from markdown: String) -> [[String]] {
         var rows: [[String]] = []
@@ -362,9 +388,11 @@ enum DocumentBuilder {
 
         func paragraph(_ text: String, size: Int, bold: Bool, indent: Int = 0,
                        spacingBefore: Int = 0, spacingAfter: Int = 120,
-                       color: String? = nil) -> String {
-            var pPr = "<w:pPr><w:spacing w:before=\"\(spacingBefore)\" w:after=\"\(spacingAfter)\" w:line=\"320\" w:lineRule=\"auto\"/>"
+                       color: String? = nil, style: String? = nil, firstLine: Int? = nil) -> String {
+            let styleTag = style.map { "<w:pStyle w:val=\"\($0)\"/>" } ?? ""
+            var pPr = "<w:pPr>\(styleTag)<w:spacing w:before=\"\(spacingBefore)\" w:after=\"\(spacingAfter)\" w:line=\"320\" w:lineRule=\"auto\"/>"
             if indent > 0 { pPr += "<w:ind w:left=\"\(indent)\"/>" }
+            if let firstLine { pPr += "<w:ind w:firstLineChars=\"\(firstLine)\"/>" }
             pPr += "</w:pPr>"
             var rPr = runProps(size: size, bold: bold)
             if let color {
@@ -419,11 +447,11 @@ enum DocumentBuilder {
                 }
                 switch block.kind {
                 case .title, .heading1:
-                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "\(theme.primary)")
+                    body += paragraph(block.text, size: 32, bold: true, spacingBefore: 320, spacingAfter: 160, color: "\(theme.primary)", style: "Heading1")
                 case .heading2:
-                    body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120)
+                    body += paragraph(block.text, size: 26, bold: true, spacingBefore: 240, spacingAfter: 120, style: "Heading2")
                 case .heading3:
-                    body += paragraph(block.text, size: 22, bold: true, spacingBefore: 200, spacingAfter: 100)
+                    body += paragraph(block.text, size: 22, bold: true, spacingBefore: 200, spacingAfter: 100, style: "Heading3")
                 case .bullet:
                     body += paragraph("• " + block.text, size: 21, bold: false, indent: 360, spacingAfter: 80)
                 case .numbered:
@@ -431,7 +459,7 @@ enum DocumentBuilder {
                 case .quote:
                     body += paragraph("“" + block.text + "”", size: 21, bold: false, indent: 360, spacingAfter: 120, color: "555555")
                 case .paragraph:
-                    body += paragraph(block.text, size: 21, bold: false, spacingAfter: 120)
+                    body += paragraph(block.text, size: 21, bold: false, spacingAfter: 120, firstLine: 200)
                 case .pageBreak:
                     body += "<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"
                 }
@@ -440,7 +468,7 @@ enum DocumentBuilder {
 
         let document = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>\(body)<w:sectPr><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1418" w:bottom="1440" w:left="1418" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr></w:body></w:document>
+        <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>\(body)<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader"/><w:footerReference w:type="default" r:id="rIdFooter"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1418" w:bottom="1440" w:left="1418" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr></w:body></w:document>
         """
 
         var imageRels = ""
@@ -451,7 +479,7 @@ enum DocumentBuilder {
         var zip = ZipWriter()
         zip.add("[Content_Types].xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>
+        <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>
         """)
         zip.add("_rels/.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -459,7 +487,18 @@ enum DocumentBuilder {
         """)
         zip.add("word/_rels/document.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>\(imageRels)</Relationships>
+        <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdFooter" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/><Relationship Id="rIdHeader" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>\(imageRels)</Relationships>
+        """)
+        let headings = (1...3).map { level in
+            "<w:style w:type=\"paragraph\" w:styleId=\"Heading\(level)\"><w:name w:val=\"heading \(level)\"/><w:next w:val=\"Normal\"/><w:qFormat/><w:pPr><w:keepNext/><w:outlineLvl w:val=\"\(level - 1)\"/></w:pPr></w:style>"
+        }.joined()
+        zip.add("word/styles.xml", """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>\(headings)</w:styles>
+        """)
+        zip.add("word/header1.xml", """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">\(paragraph(title, size: 16, bold: false, color: theme.muted))</w:hdr>
         """)
         zip.add("word/footer1.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -481,7 +520,7 @@ enum DocumentBuilder {
         }
         xml += "</w:tblBorders></w:tblPr>"
         for (rowIndex, row) in rows.enumerated() {
-            xml += "<w:tr>"
+            xml += rowIndex == 0 ? "<w:tr><w:trPr><w:tblHeader/></w:trPr>" : "<w:tr>"
             for cell in row {
                 if rowIndex == 0 {
                     // 表头：主题蓝底 + 白字加粗
@@ -519,14 +558,27 @@ enum DocumentBuilder {
     }
 
     static func pptx(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) -> Data {
-        var deck = MarkdownParser.slides(from: markdown)
-        if deck.first?.title.isEmpty ?? true {
+        let numberedDeck = MarkdownParser.numberedSlides(from: markdown)
+        let hasAuthoredPages = numberedDeck != nil
+        var deck = numberedDeck ?? MarkdownParser.slides(from: markdown)
+        if !hasAuthoredPages && (deck.first?.title.isEmpty ?? true) {
             deck.insert((title, []), at: 0)
         }
 
         // Bound estimated lines, not just bullet count; preserve every character on continuation pages.
         var expanded: [(String, [String])] = []
         for slide in deck {
+            if slide.bullets.count >= 2, slide.bullets.allSatisfy({ $0.hasPrefix("|") }) {
+                let rows = slide.bullets.filter { !MarkdownTableCore.isSeparator($0) }
+                if let header = rows.first, rows.count > 1 {
+                    let data = Array(rows.dropFirst())
+                    for start in stride(from: 0, to: data.count, by: 8) {
+                        let pageTitle = start == 0 ? slide.title : "\(slide.title)（续 \(start / 8 + 1)）"
+                        expanded.append((pageTitle, [header] + Array(data[start..<min(start + 8, data.count)])))
+                    }
+                    continue
+                }
+            }
             var segments: [String] = []
             for bullet in slide.bullets {
                 let characters = Array(bullet)
@@ -569,7 +621,7 @@ enum DocumentBuilder {
             slideRelsExtra += "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>"
 
         contentTypes += "<Override PartName=\"/ppt/slides/slide\(n).xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + 2, theme: theme))
+            zip.add("ppt/slides/slide\(n).xml", slideXML(slide.title, slide.bullets, pageIndex: n, totalPages: deck.count + (hasAuthoredPages ? 0 : 2), theme: theme))
             zip.add("ppt/slides/_rels/slide\(n).xml.rels", """
             <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
             <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\(slideRelsExtra)</Relationships>
@@ -609,18 +661,22 @@ enum DocumentBuilder {
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>
         """
-        zip.add("ppt/slides/cover.xml", coverSlideXML(theme: theme, title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
-        zip.add("ppt/slides/_rels/cover.xml.rels", slideLayoutRels)
-        zip.add("ppt/slides/closing.xml", closingSlideXML(theme: theme))
-        zip.add("ppt/slides/_rels/closing.xml.rels", slideLayoutRels)
-        contentTypes += "<Override PartName=\"/ppt/slides/cover.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-        contentTypes += "<Override PartName=\"/ppt/slides/closing.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
-
+        if !hasAuthoredPages {
+            zip.add("ppt/slides/cover.xml", coverSlideXML(theme: theme, title: title, dateLine: DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none)))
+            zip.add("ppt/slides/_rels/cover.xml.rels", slideLayoutRels)
+            zip.add("ppt/slides/closing.xml", closingSlideXML(theme: theme))
+            zip.add("ppt/slides/_rels/closing.xml.rels", slideLayoutRels)
+            contentTypes += "<Override PartName=\"/ppt/slides/cover.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+            contentTypes += "<Override PartName=\"/ppt/slides/closing.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        }
         contentTypes += "</Types>"
         presentationRels += "<Relationship Id=\"rIdTheme\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/></Relationships>"
-        presentationRels = presentationRels.replacingOccurrences(
+        if !hasAuthoredPages {
+            slideIdList = "<p:sldId id=\"2147483000\" r:id=\"rIdCover\"/>" + slideIdList + "<p:sldId id=\"2147483001\" r:id=\"rIdClosing\"/>"
+            presentationRels = presentationRels.replacingOccurrences(
             of: "</Relationships>",
             with: "<Relationship Id=\"rIdCover\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/cover.xml\"/><Relationship Id=\"rIdClosing\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/closing.xml\"/></Relationships>")
+        }
 
         zip.add("[Content_Types].xml", contentTypes)
         zip.add("_rels/.rels", """
@@ -629,7 +685,7 @@ enum DocumentBuilder {
         """)
         zip.add("ppt/presentation.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="2147483000" r:id="rIdCover"/>\(slideIdList)<p:sldId id="2147483001" r:id="rIdClosing"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>
+        <p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" saveSubsetFonts="1"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>\(slideIdList)</p:sldIdLst><p:sldSz cx="12192000" cy="6858000" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>
         """)
         zip.add("ppt/_rels/presentation.xml.rels", presentationRels)
         zip.add("ppt/slideMasters/slideMaster1.xml", """
@@ -784,6 +840,7 @@ enum DocumentBuilder {
 
     static func xlsx(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) -> Data {
         var rows = MarkdownParser.table(from: markdown)
+        let hasHeaders = rows.count > 1
         if rows.isEmpty {
             rows = MarkdownParser.blocks(from: markdown).map { [$0.text] }
         }
@@ -802,14 +859,16 @@ enum DocumentBuilder {
             var cells = ""
             for (colIndex, value) in row.enumerated() {
                 let ref = "\(columnName(colIndex))\(rowIndex + 1)"
-                // Keep leading-zero identifiers and currency labels as text; ordinary numbers become numeric cells.
-                if let number = Double(value), number.isFinite,
-                   !(value.count > 1 && value.hasPrefix("0") && !value.hasPrefix("0.")) {
-                    let style = rowIndex == 0 ? " s=\"1\"" : ""
-                    cells += "<c r=\"\(ref)\"\(style)><v>\(number)</v></c>"
+                // Explicit yuan amounts become numeric cells with a currency format.
+                // Plain numbers retain the existing leading-zero identifier handling.
+                let yuan = rowIndex > 0 && value.range(of: #"^[¥￥]\s*-?(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{1,2})?$"#, options: .regularExpression) != nil
+                let currency = value.dropFirst().trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
+                let style = rowIndex == 0 ? 1 : yuan ? 3 : 2
+                if let number = Double(yuan ? currency : value), number.isFinite,
+                   yuan || !(value.count > 1 && value.hasPrefix("0") && !value.hasPrefix("0.")) {
+                    cells += "<c r=\"\(ref)\" s=\"\(style)\"><v>\(number)</v></c>"
                 } else {
-                    let style = rowIndex == 0 ? " s=\"1\"" : ""
-                    cells += "<c r=\"\(ref)\" t=\"inlineStr\"\(style)><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
+                    cells += "<c r=\"\(ref)\" t=\"inlineStr\" s=\"\(style)\"><is><t xml:space=\"preserve\">\(xmlEscape(value))</t></is></c>"
                 }
             }
             sheetData += "<row r=\"\(rowIndex + 1)\">\(cells)</row>"
@@ -887,9 +946,12 @@ enum DocumentBuilder {
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>
         """)
+        let sheetName = MarkdownTableCore.sheetName(title)
+        let printRows = hasHeaders ? "<definedNames><definedName name=\"_xlnm.Print_Titles\" localSheetId=\"0\">'\(xmlEscape(sheetName.replacingOccurrences(of: "'", with: "''")))'!$1:$1</definedName></definedNames>" : ""
+        let autoFilter = hasHeaders ? "<autoFilter ref=\"A1:\(columnName(maxCols - 1))\(rows.count)\"/>" : ""
         zip.add("xl/workbook.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(MarkdownTableCore.sheetName(title)))" sheetId="1" r:id="rId1"/>\(excelSheetsExtra)</sheets></workbook>
+        <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="\(xmlEscape(sheetName))" sheetId="1" r:id="rId1"/>\(excelSheetsExtra)</sheets>\(printRows)</workbook>
         """)
         zip.add("xl/_rels/workbook.xml.rels", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -897,11 +959,11 @@ enum DocumentBuilder {
         """)
         zip.add("xl/styles.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="微软雅黑"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF\(theme.primary)"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf></cellXfs></styleSheet>
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;¥&quot;#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="微软雅黑"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="微软雅黑"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF\(theme.primary)"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top/><bottom style="thin"><color rgb="FFDDE5E9"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1"/></cellXfs></styleSheet>
         """)
         zip.add("xl/worksheets/sheet1.xml", """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>\(cols)<sheetData>\(sheetData)</sheetData></worksheet>
+        <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>\(cols)<sheetData>\(sheetData)</sheetData>\(autoFilter)</worksheet>
         """)
         if !excelImages.isEmpty {
             zip.add("xl/worksheets/sheet2.xml", imageSheetXML)
@@ -940,15 +1002,25 @@ enum DocumentBuilder {
     static func pdf(title: String, markdown: String, theme: DocTheme = .business, images: [ExportImage] = []) throws -> Data {
         let pageSize = CGSize(width: 595.2, height: 841.8)
         let margin: CGFloat = 48
-        var sections: [NSAttributedString] = []
+        enum Section {
+            case text(NSAttributedString)
+            case table([[String]])
+        }
+        var sections: [Section] = []
         var section = NSMutableAttributedString(string: "")
+        func flushText() {
+            if section.length > 0 { sections.append(.text(immutableCopy(section))) }
+            section = NSMutableAttributedString(string: "")
+        }
         func append(_ text: String, size: CGFloat, weight: UIFont.Weight = .regular,
                     color: UIColor = .black, indent: CGFloat = 0, italic: Bool = false) {
             guard !text.isEmpty else { return }
             let style = NSMutableParagraphStyle()
             style.lineSpacing = 6; style.paragraphSpacing = 8
             style.headIndent = indent; style.firstLineHeadIndent = indent
-            let font = italic ? UIFont.italicSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size, weight: weight)
+            let fallback = UIFont.systemFont(ofSize: size, weight: weight)
+            let base = weight == .regular ? (UIFont(name: theme.bodyFont, size: size) ?? fallback) : fallback
+            let font = italic ? UIFont.italicSystemFont(ofSize: size) : base
             section.append(NSAttributedString(string: text + "\n", attributes: [
                 .font: font, .foregroundColor: color, .paragraphStyle: style
             ]))
@@ -956,26 +1028,35 @@ enum DocumentBuilder {
         let accent = DocumentBuilder.color(hex: theme.primary)
         append(title, size: 28, weight: .bold, color: accent)
         append(DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .none), size: 11, color: .gray)
-        for block in MarkdownParser.blocks(from: markdown) {
-            // 图片占位：正文里只标注"见附图页"，真实图片在文末统一出页
-            if let index = imageIndex(in: block.text), index >= 0, index < images.count {
-                append("（附图 \(index + 1)：\(images[index].caption)）", size: 10.5, color: .gray, indent: 16)
-                continue
+        for part in MarkdownParser.splitTables(from: markdown) {
+            if part.isTable {
+                let rows = MarkdownParser.table(from: part.markdown)
+                if rows.count >= 2, let first = rows.first, rows.allSatisfy({ $0.count == first.count }) {
+                    flushText()
+                    sections.append(.table(rows))
+                    continue
+                }
             }
-            switch block.kind {
-            case .title, .heading1: append(block.text, size: 19, weight: .bold, color: accent)
-            case .heading2: append(block.text, size: 16, weight: .semibold)
-            case .heading3: append(block.text, size: 13.5, weight: .semibold)
-            case .bullet: append("•  " + block.text, size: 12, indent: 16)
-            case .numbered: append(block.text, size: 12, indent: 16)
-            case .quote: append("“" + block.text + "”", size: 12, color: .darkGray, indent: 16, italic: true)
-            case .paragraph: append(block.text, size: 12)
-            case .pageBreak:
-                if section.length > 0 { sections.append(immutableCopy(section)) }
-                section = NSMutableAttributedString(string: "")
+            for block in MarkdownParser.blocks(from: part.markdown) {
+                // 图片占位：正文里只标注"见附图页"，真实图片在文末统一出页
+                if let index = imageIndex(in: block.text), index >= 0, index < images.count {
+                    append("（附图 \(index + 1)：\(images[index].caption)）", size: 10.5, color: .gray, indent: 16)
+                    continue
+                }
+                switch block.kind {
+                case .title, .heading1: append(block.text, size: 19, weight: .bold, color: accent)
+                case .heading2: append(block.text, size: 16, weight: .semibold)
+                case .heading3: append(block.text, size: 13.5, weight: .semibold)
+                case .bullet: append("•  " + block.text, size: 12, indent: 16)
+                case .numbered: append(block.text, size: 12, indent: 16)
+                case .quote: append("“" + block.text + "”", size: 12, color: .darkGray, indent: 16, italic: true)
+                case .paragraph: append(block.text, size: 12)
+                case .pageBreak:
+                    flushText()
+                }
             }
         }
-        if section.length > 0 { sections.append(immutableCopy(section)) }
+        flushText()
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: pageSize))
         let path = CGPath(rect: CGRect(x: margin, y: margin, width: pageSize.width - margin * 2,
                                       height: pageSize.height - margin * 2), transform: nil)
@@ -983,7 +1064,15 @@ enum DocumentBuilder {
         let result = renderer.pdfData { rendererContext in
             // Advance by the actual visible UTF-16 range. No character-count estimation
             // or recursive substring measurement, and no page can silently lose text.
-            for attributed in sections {
+            var pageNumber = 0
+            func beginPage() {
+                rendererContext.beginPage()
+                pageNumber += 1
+                let footer = "\(pageNumber)" as NSString
+                footer.draw(at: CGPoint(x: pageSize.width / 2, y: pageSize.height - 32),
+                            withAttributes: [.font: UIFont.systemFont(ofSize: 10), .foregroundColor: UIColor.darkGray])
+            }
+            func drawText(_ attributed: NSAttributedString) {
                 let framesetter = CTFramesetterCreateWithAttributedString(attributed as CFAttributedString)
                 var position = 0
                 while position < attributed.length {
@@ -992,7 +1081,7 @@ enum DocumentBuilder {
                         let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: position, length: 0), path, nil)
                         let visible = CTFrameGetVisibleStringRange(frame)
                         guard visible.length > 0, visible.location == position else { return 0 }
-                        rendererContext.beginPage()
+                        beginPage()
                         let graphics = rendererContext.cgContext
                         graphics.saveGState()
                         graphics.textMatrix = .identity
@@ -1006,10 +1095,65 @@ enum DocumentBuilder {
                     position += advanced
                 }
             }
-            // 10-23 导出嵌图：附图页（每张一页，等比缩放 + 图注），图片不会因为正文分页而丢失
+            func drawTable(_ rows: [[String]]) {
+                guard let headers = rows.first else { return }
+                let columnWidth = (pageSize.width - margin * 2) / CGFloat(headers.count)
+                let textWidth = columnWidth - 12
+                let available = pageSize.height - 2 * margin
+                let bodyFont = UIFont(name: theme.bodyFont, size: 11) ?? UIFont.systemFont(ofSize: 11)
+                let attributes: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: UIColor.black]
+                let options: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading]
+                func rowHeight(_ row: [String]) -> CGFloat {
+                    ceil(row.map {
+                        ($0 as NSString).boundingRect(with: CGSize(width: max(1, textWidth), height: .greatestFiniteMagnitude),
+                            options: options, attributes: attributes, context: nil).height
+                    }.max() ?? 0) + 14
+                }
+                let headerHeight = rowHeight(headers)
+                var y = pageSize.height - margin
+                func row(_ values: [String], height: CGFloat, header: Bool) {
+                    for (column, text) in values.enumerated() {
+                        let x = margin + CGFloat(column) * columnWidth
+                        let box = CGRect(x: x, y: y, width: columnWidth, height: height)
+                        let graphics = rendererContext.cgContext
+                        graphics.setFillColor((header ? accent : DocumentBuilder.color(hex: theme.light)).cgColor)
+                        graphics.fill(box)
+                        graphics.setStrokeColor(UIColor.systemGray4.cgColor)
+                        graphics.stroke(box.insetBy(dx: 0.5, dy: 0.5))
+                        let color = header ? UIColor.white : UIColor.black
+                        (text as NSString).draw(with: box.insetBy(dx: 6, dy: 6), options: options,
+                            attributes: [.font: bodyFont, .foregroundColor: color], context: nil)
+                    }
+                    y += height
+                }
+                for values in rows.dropFirst() {
+                    guard !Task.isCancelled else { layoutError = CancellationError(); return }
+                    let height = rowHeight(values)
+                    if textWidth < 34 || headerHeight + height > available {
+                        let labeled = zip(headers, values).map { "\($0.0)：\($0.1)" }.joined(separator: "\n")
+                        drawText(NSAttributedString(string: labeled, attributes: attributes))
+                        y = pageSize.height - margin
+                        continue
+                    }
+                    if y + height > pageSize.height - margin {
+                        beginPage()
+                        y = margin
+                        row(headers, height: headerHeight, header: true)
+                    }
+                    row(values, height: height, header: false)
+                }
+            }
+            for part in sections {
+                switch part {
+                case .text(let attributed): drawText(attributed)
+                case .table(let rows): drawTable(rows)
+                }
+                if layoutError != nil { return }
+            }
+            // 保持附图独立分页，保留原配文。
             for item in images {
                 guard let png = normalizedPNG(item.data), let image = UIImage(data: png) else { continue }
-                rendererContext.beginPage()
+                beginPage()
                 let contentRect = CGRect(x: margin, y: margin,
                                          width: pageSize.width - margin * 2,
                                          height: pageSize.height - margin * 2)
@@ -1034,7 +1178,7 @@ enum DocumentBuilder {
                     withAttributes: attributes
                 )
             }
-            if sections.isEmpty && images.isEmpty { rendererContext.beginPage() }
+            if pageNumber == 0 { beginPage() }
         }
         if let layoutError { throw layoutError }
         return result

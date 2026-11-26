@@ -13,6 +13,13 @@
  * 失败一律 fail-open：校验只是诊断，不允许因为它让出图中断。
  */
 
+const PRICE_AMOUNT = "(?:[0-9]{1,3}(?:[,，][0-9]{3})+|[0-9]+)(?:\\.[0-9]+)?";
+const PRICE_TOKEN = new RegExp("(?<![0-9.])(?:[¥￥]\\s*(" + PRICE_AMOUNT + ")(?![0-9.])|(" + PRICE_AMOUNT + ")\\s*元)", "g");
+const amount = value => Number(value.replace(/[,，]/g, ""));
+function pricesIn(text) {
+  return [...String(text || "").matchAll(PRICE_TOKEN)].map(match => amount(match[1] || match[2]));
+}
+
 const DIGIT_TOKEN = /(?:[¥￥]\s?\d+(?:\.\d+)?|\d+(?:\.\d+)?\s?(?:克|g|G|kg|KG|ml|mL|毫升|升|年|层|度|°|%|元|寸|小时|分钟|天|个月|周|人|次))/g;
 
 /** 从 structured.text（数组或字符串）里抽出必须出现在画面上的硬 token */
@@ -28,7 +35,10 @@ function tokensOf(blocks, limit = 16) {
     push(blocks);
   }
   const set = new Set();
-  for (const m of parts.join(" ").match(DIGIT_TOKEN) || []) {
+  const joined = parts.join(" ");
+  // Keep a grouped amount such as ￥28,000 as one token.
+  for (const price of joined.matchAll(PRICE_TOKEN)) set.add(price[0].replace(/\s+/g, ""));
+  for (const m of joined.replace(PRICE_TOKEN, " ").match(DIGIT_TOKEN) || []) {
     const token = m.replace(/\s+/g, "");
     if (token.length >= 2) set.add(token);
   }
@@ -49,8 +59,11 @@ function normalize(text) {
 function check(tokens, ocrText) {
   const hay = normalize(ocrText);
   const hayDigits = hay.replace(/[^0-9]/g, "");
+  const printedPrices = new Set(pricesIn(ocrText));
   const list = Array.isArray(tokens) ? tokens : [];
   const missing = list.filter(t => {
+    const price = pricesIn(t)[0];
+    if (price !== undefined) return !printedPrices.has(price);
     if (hay.includes(normalize(t))) return false;
     const digits = String(t).replace(/[^0-9]/g, "");
     if (digits.length >= 2 && hayDigits.includes(digits)) return false;
@@ -145,6 +158,7 @@ function structuralOf(sources) {
 function checkStructural(items, ocrText) {
   const hay = normalize(ocrText);
   const hayDigits = hay.replace(/[^0-9]/g, "");
+  const printedPrices = new Set(pricesIn(ocrText));
   const miss = [];
   const has = v => {
     if (!v) return true;

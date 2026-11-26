@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import SwiftData
+import PDFKit
 @testable import BossAI
 
 // ============================================================================
@@ -77,6 +78,51 @@ final class ExportAndPolicyTests: XCTestCase {
         let replaced = DocumentBuilder.replacingImageMarkers(markdown, images: images)
         XCTAssertFalse(replaced.contains("[[IMG:"), "不能把占位标记原样写进 PPT/Excel")
         XCTAssertTrue(replaced.contains("见附图 1"))
+    }
+
+    func testNumberedDeckKeepsEightPagesAndHidesProductionNotes() throws {
+        let markdown = "# 智慧安消汇报（8 页）\n\n---\n\n" + (1...8).map {
+            "### P\($0)｜第 \($0) 部分\n\n- 已确认的内容 \($0)\n\n**视觉建议**：仅给设计师\n\n**讲稿要点**：仅给演讲者"
+        }.joined(separator: "\n\n---\n\n")
+        let data = DocumentBuilder.pptx(title: "智慧安消汇报", markdown: markdown)
+        let archive = String(decoding: data, as: UTF8.self)
+        XCTAssertEqual(archive.components(separatedBy: "<p:sldId id=").count - 1, 8)
+        XCTAssertFalse(archive.contains("仅给设计师"))
+        XCTAssertFalse(archive.contains("仅给演讲者"))
+        XCTAssertTrue(archive.contains("已确认的内容 8"))
+    }
+
+    func testTableContinuationRepeatsHeaderInPptx() {
+        let table = "| 项目 | 价格 |\n| --- | --- |\n" + (1...12).map { "| P\($0) | ¥\($0) |" }.joined(separator: "\n")
+        let archive = String(decoding: DocumentBuilder.pptx(title: "报价", markdown: "# 报价\n\n" + table), as: UTF8.self)
+        XCTAssertEqual(archive.components(separatedBy: "<a:t>价格</a:t>").count - 1, 2)
+        XCTAssertTrue(archive.contains("<a:t>¥12</a:t>"))
+    }
+
+    func testDocumentHeadingsAndSpreadsheetNumberFormats() {
+        let table = "| 型号 | 单价 |\n| --- | --- |\n| 00123 | ¥1,280 |"
+        let word = String(decoding: DocumentBuilder.docx(title: "清单", markdown: "## 规格\n\n" + table), as: UTF8.self)
+        XCTAssertTrue(word.contains("word/header1.xml"))
+        XCTAssertTrue(word.contains("w:pStyle w:val=\"Heading2\""))
+        XCTAssertTrue(word.contains("<w:tblHeader/>"))
+        let excel = String(decoding: DocumentBuilder.xlsx(title: "清单", markdown: table), as: UTF8.self)
+        XCTAssertTrue(excel.contains("<c r=\"B2\" s=\"3\"><v>1280.0</v>"))
+        XCTAssertTrue(excel.contains(">00123</t>"))
+        XCTAssertTrue(excel.contains("<autoFilter ref=\"A1:B2\""))
+        XCTAssertTrue(excel.contains("_xlnm.Print_Titles"))
+    }
+
+    func testPdfTableRepeatsHeadersAndRetainsLastRow() throws {
+        let table = "| 工单 | 结果 |\n| --- | --- |\n" + (1...38).map {
+            "| R\($0) | 巡检记录已交接 |"
+        }.joined(separator: "\n")
+        let data = try DocumentBuilder.pdf(title: "巡检", markdown: table)
+        let doc = try XCTUnwrap(PDFDocument(data: data))
+        XCTAssertGreaterThanOrEqual(doc.pageCount, 3)
+        let body = try XCTUnwrap(doc.page(at: doc.pageCount - 1)?.string)
+        XCTAssertTrue(body.contains("工单"))
+        XCTAssertTrue(body.contains("R38"))
+        XCTAssertFalse(body.contains("| R38 |"))
     }
 
     // MARK: - 表达策略

@@ -90,3 +90,17 @@ test('reference redesign and edit receive compatible multi-image constraints',()
  assert.ok(!fn(['base','style'],['底图','风格参考'],'reference').includes('不重绘整张'));
  assert.ok(fn(['base','person'],['底图','人物素材'],'edit').includes('只修改用户指定区域'));
 });
+
+test('reasoning-only terminal output is an error, while a search tool is a valid continuation', () => {
+  const empty = new d.ToolCallStreamGuard('今天是什么节气？');
+  empty.pushLine(frame({ reasoning_content: 'analysis', content: ' ' }, 'stop'));
+  assert.throws(() => empty.pushLine('data: [DONE]'), { code: 'EMPTY_COMPLETION' });
+  assert.throws(() => empty.end(), { code: 'EMPTY_COMPLETION' });
+  const search = new d.ToolCallStreamGuard('查规范原文');
+  search.pushLine(frame({ tool_calls: [{ index: 0, id: 'lookup', function: {
+    name: 'web_search', arguments: '{"query":"规范原文"}',
+  } }] }));
+  assert.match(search.pushLine(frame({}, 'tool_calls')), /"id":"lookup"/);
+  search.pushLine('data: [DONE]');
+  search.end();
+});

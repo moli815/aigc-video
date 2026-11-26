@@ -345,7 +345,7 @@ extension ToolManifest {
                 ],
                 "content": [
                     "type": "string",
-                    "description": "正文，使用 Markdown：# 一级标题、## 二级标题、- 列表项。PPT 用 --- 分页，每页第一行是标题；Excel 用 Markdown 表格。",
+                    "description": "正文，使用 Markdown：# 一级标题、## 二级标题、- 列表项。PPT 按用户指定页数写连续的 ### P1｜标题 到 ### Pn｜标题，每页只给可直接上屏的定稿，所有重要事实和限定保留；不要在正文写视觉建议与讲稿。Excel 用 Markdown 表格，金额用明确币种符号。",
                 ],
             ],
             "required": ["format", "filename", "content"],
