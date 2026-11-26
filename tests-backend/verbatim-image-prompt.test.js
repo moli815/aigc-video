@@ -98,6 +98,16 @@ test('two planning sheets preserve original attachment 14 as the logo', () => {
   const args=JSON.parse(intent.apply([call],request)[0].function.arguments);
   assert.deepEqual(args.source_indexes,[1,14]);
   assert.equal(args.print_catalog_originals,true);
+  assert.equal(args.structured.catalog_attachment_count,14);
+});
+
+test('spoken request preserves every pictured original, while an explicit subset stays a subset', () => {
+  const call = {function:{name:'image_generate',arguments:JSON.stringify({source:'attached',prompt:'设备联展',structured:{text:[{key:'title',role:'title',text:'北线设备联展'}]}})}};
+  function result(userText) {
+    return JSON.parse(intent.apply([call], {userText,currentImageCount:14})[0].function.arguments);
+  }
+  assert.equal(result('做张联展海报，十三件原件都放进去，模样别改，Logo 用最后那张').print_catalog_originals,true);
+  assert.equal(result('做张联展海报，只用第一个产品，原件别改').print_catalog_originals,false);
 });
 
 test('catalogue print maps only declared original sheets and a separate logo', () => {
@@ -110,4 +120,24 @@ test('catalogue print maps only declared original sheets and a separate logo', (
   assert.equal(providerInput(workflow,refs,undefined,'图1、图2和图3').providerCount,0);
   assert.throws(()=>plan(structured,refs.slice(0,2),'reference'),/CATALOG_SOURCES_INVALID/);
   assert.throws(()=>plan({...structured,verbatim_prompt:'原文'},refs,'reference'),/CATALOG_SOURCES_INVALID/);
+});
+
+test('a new canvas direction supersedes an older ratio across a long project history', () => {
+  const messages=[{role:'user',content:'项目资料：'+ '设备交接和巡检记录。'.repeat(260)},
+    {role:'user',content:'上一版海报用16:9横版'},
+    {role:'user',content:'这次换成竖版，原件保留。'}];
+  const r=intent.resolve({messages,memories:['曾经喜欢16:9']});
+  assert.equal(r.orientation,'portrait');
+  assert.equal(r.ratio,null);
+  messages.push({role:'user',content:'这次明确用3:4'});
+  assert.equal(intent.resolve({messages}).ratio.label,'3:4');
+});
+
+test('empty last slot is retained for an owned white product and dropped only for declared padding', () => {
+  const {tiles}=require('../cloudfunctions/bf-image/catalog-print');
+  const raster={width:768,height:310,data:Buffer.alloc(768*310*4,255)};
+  assert.equal(tiles(raster,2).length,2);
+  assert.equal(tiles(raster,1).length,1);
+  raster.data[(384*4)]=0;
+  assert.equal(tiles(raster,1),null);
 });

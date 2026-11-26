@@ -52,6 +52,14 @@ function createCommercialComposition({app,assetStore,fetcher=fetch,log=()=>{},en
       return exclusive(async()=>{
         const fonts=await getFonts(policy),{satori,resvg}=await engines();
         const assets=protectedSources.selected.filter(p=>["ui","logo","catalog"].includes(p.role)).map(p=>({index:p.index,role:p.role,sha256:p.sha256,aspect:p.aspect,src:"data:image/png;base64,"+require("pngjs").PNG.sync.write(p.preparedRaster).toString("base64")}));
+        for(const asset of assets.filter(a=>a.role==="catalog")){
+          const raster=protectedSources.selected.find(p=>p.index===asset.index).preparedRaster;
+          const total=input.structured.catalog_attachment_count;
+          if(Number.isInteger(total)&&total>6&&total<=16){
+            const remaining=total-Number(input.structured.print_catalog.logo)-8*(asset.index-1);
+            asset.tiles=require("./catalog-print").tiles(raster,Math.min(8,remaining));
+          }
+        }
         // Measured fit and source count validation happen before a paid image.
         const fallback=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,satori,resvg,designEngine:"product_v2",assets});
         return {input,width,height,fonts,assets,designEngine:"product_v2",manifest:fallback.manifest,fallback:fallback.png};

@@ -8,7 +8,15 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
  const title=items.find(t=>t.role==="title")||items[0],subtitle=items.find(t=>t.role==="subtitle"&&t!==title),footer=items.filter(t=>["contact","footer"].includes(t.role)&&t!==title&&t!==subtitle),body=items.filter(t=>t!==title&&t!==subtitle&&!footer.includes(t));
  const editorial=layout==="product_spread",photo=layout==="product_stage",light=["editorial","illustrated","minimal"].includes(style);
  const portrait=height>width;
- const header=editorial?(portrait?[.05,.12,.32,.28]:[.05,.12,.31,.42]):[.05,.12,.9,.19],art=editorial?(portrait?[.43,.13,.52,.24]:[.4,.19,.55,.37]):photo?[.05,.37,.5,.44]:[.52,.35,.43,.43],bodyZone=editorial?(portrait?[.05,.45,.9,.4]:[.05,.62,.9,.23]):photo?[.6,.35,.35,.45]:[.05,.36,.42,.44],footerZone=[.05,.89,.9,.07];
+ let header=editorial?(portrait?[.05,.12,.32,.28]:[.05,.12,.31,.42]):[.05,.12,.9,.19],art=editorial?(portrait?[.43,.13,.52,.24]:[.4,.19,.55,.37]):photo?[.05,.37,.5,.44]:[.52,.35,.43,.43],bodyZone=editorial?(portrait?[.05,.45,.9,.4]:[.05,.62,.9,.23]):photo?[.6,.35,.35,.45]:[.05,.36,.42,.44],footerZone=[.05,.89,.9,.07];
+ const sheets=assets.filter(a=>a.role==="catalog");
+ // Short catalogue copy leaves the largest continuous area to the original photographs.
+ const shortCatalog=sheets.length>0 && !portrait && body.reduce((sum,item)=>sum+item.text.length,0)<=100;
+ if(shortCatalog){
+   header=[.045,.065,.77,.20];
+   bodyZone=[.775,.27,.19,.51];
+   art=[.043,.235,.725,.63];
+ }
  const box=b=>({left:b[0]*width,top:b[1]*height,width:b[2]*width,height:b[3]*height}),used=[],zones={},assetZones=[];
  const text=(item,scale=1,extra={},zone)=>{used.push(item.key);zones[item.key]=zone;return node("div",{display:"flex",flexDirection:"column",fontSize:fontSize*scale,lineHeight:1.4,whiteSpace:"pre-wrap",wordBreak:"break-word",flexShrink:0,...extra},item.text,{"data-copy-key":item.key});};
  const tree=[];
@@ -16,12 +24,22 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
  tree.push(node("div",{position:"absolute",left:0,top:0,width,height,backgroundImage:light?"linear-gradient(90deg,"+p.paper+"F5,"+p.paper+"A6)":"linear-gradient(90deg,"+p.paper+"FA 0%,"+p.paper+"D9 42%,"+p.paper+"33 100%)"}));
  tree.push(node("div",{position:"absolute",left:margin,top:height*.06,width:width*.12,height:6,backgroundColor:p.accent}));
  tree.push(node("div",{position:"absolute",...box(header),display:"flex",flexDirection:"column",gap:fontSize*.5},[
-  text(title,3.2,{fontWeight:700,lineHeight:1.12,color:p.ink},header),...(subtitle?[text(subtitle,1.3,{fontWeight:700,color:p.accent,lineHeight:1.35},header)]:[])
+  text(title,shortCatalog?4.25:3.2,{fontWeight:700,lineHeight:1.12,color:p.ink},header),...(subtitle?[text(subtitle,shortCatalog?1.55:1.3,{fontWeight:700,color:p.accent,lineHeight:1.35},header)]:[])
  ]));
  const groups=editorial&&body.length>3?partition(body.map(t=>({items:[t]})),2).map(g=>g.map(x=>x.items[0])):[body];
  const bw=bodyZone[2]*width,groupWidth=(bw-gap*(groups.length-1))/groups.length;
  const bodyGroups=groups.map(group=>node("div",{display:"flex",width:groupWidth,flexDirection:"column",gap:gap*.8,flexShrink:0},group.map(item=>{
-  const colon=item.text.search(/[：:]/),hasLead=colon>=1&&colon<16;
+  if(shortCatalog){
+     // Break on the original punctuation only; keep the complete approved copy.
+     const phrases=item.text.match(/[^：:，,；;。！？]+[：:，,；;。！？]*|[：:，,；;。！？]+/gu)||[item.text];
+     used.push(item.key);zones[item.key]=bodyZone;
+     return node("div",{display:"flex",flexDirection:"column",gap:gap*.65,padding:gap*.75,
+       borderTop:"4px solid "+p.accent,borderRadius:gap*.45,backgroundColor:p.panel,color:p.ink,
+       fontSize:fontSize*1.25,lineHeight:1.36,fontWeight:700},phrases.map((part,i)=>
+       node("div",{display:"flex",color:i===0&&/[：:]$/.test(part)?p.accent:p.ink},part)
+     ),{"data-copy-key":item.key});
+   }
+   const colon=item.text.search(/[：:]/),hasLead=colon>=1&&colon<16;
   if(!hasLead)return text(item,1,{paddingLeft:gap*.65,borderLeft:"3px solid "+p.accent,color:p.ink},bodyZone);
   used.push(item.key);zones[item.key]=bodyZone;
   return node("div",{display:"flex",flexDirection:"column",gap:fontSize*.16,fontSize,lineHeight:1.38,color:p.ink,whiteSpace:"pre-wrap",wordBreak:"break-word",flexShrink:0,paddingLeft:gap*.65,borderLeft:"3px solid "+p.accent},[
@@ -30,14 +48,28 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
   ],{"data-copy-key":item.key});
  })));
  tree.push(node("div",{position:"absolute",...box(bodyZone),display:"flex",gap},bodyGroups));
- const sheets=assets.filter(a=>a.role==="catalog");
  if(sheets.length){
+   if(sheets.every(sheet=>sheet.tiles?.length)){
+     const region=box(art),count=sheets.reduce((n,sheet)=>n+sheet.tiles.length,0);
+     const cols=Math.max(1,Math.min(count,Math.ceil(Math.sqrt(count*region.width/region.height/(384/310)))));
+     const rows=Math.ceil(count/cols),cw=(region.width-gap*(cols-1))/cols,ch=(region.height-gap*(rows-1))/rows;
+     let order=0;
+     for(const sheet of sheets)for(const [slot,src] of sheet.tiles.entries()){
+       const left=region.left+(order%cols)*(cw+gap),top=region.top+Math.floor(order/cols)*(ch+gap);
+       const w=Math.min(cw,ch*384/310),h=w*310/384,x=left+(cw-w)/2,y=top+(ch-h)/2;
+       tree.push(node("img",{position:"absolute",left:x,top:y,width:w,height:h,borderRadius:short*.009},undefined,{src}));
+       order++;
+       tree.push(node("div",{position:"absolute",left:x,top:y,padding:"2px 10px",color:p.ink,backgroundColor:p.panel,fontWeight:700,fontSize:Math.max(24,fontSize*.90)},String(order).padStart(2,"0")));
+       assetZones.push({role:"catalog-item",index:sheet.index,slot,sourceSha256:sheet.sha256,box:[x/width,y/height,w/width,h/height]});
+     }
+   } else {
    const region=box(art),slotWidth=(region.width-gap*(sheets.length-1))/sheets.length;
    for(const [i,sheet] of sheets.entries()){
      const w=Math.min(slotWidth,region.height*sheet.aspect),h=w/sheet.aspect;
      const x=region.left+i*(slotWidth+gap)+(slotWidth-w)/2,y=region.top+(region.height-h)/2;
      tree.push(node("img",{position:"absolute",left:x,top:y,width:w,height:h,objectFit:"contain"},undefined,{src:sheet.src}));
      assetZones.push({role:"catalog",index:sheet.index,sourceSha256:sheet.sha256,box:[x/width,y/height,w/width,h/height]});
+   }
    }
  } else {
  const uis=assets.filter(a=>a.role==="ui");if(uis.length!==1)throw Object.assign(Error("PRODUCT_UI_REQUIRED"),{code:"PRODUCT_UI_REQUIRED"});
@@ -52,9 +84,10 @@ function scene({items,width,height,fontSize,assets,style="commercial_launch",lay
  const logos=assets.filter(a=>a.role==="logo");if(logos.length>3)throw Error("PRODUCT_LOGO_LIMIT");
  // Original dark brand ink remains unchanged. A continuous light wash behind
  // the brand area keeps it legible without pasting a white image rectangle.
- if(logos.length&&!light)tree.push(node("div",{position:"absolute",left:width*.59,top:0,width:width*.41,height:height*.115,backgroundImage:"linear-gradient(90deg,#EEF2F400,#EEF2F4DD 38%,#EEF2F4F5 100%)"}));
+ if(logos.length&&!light&&!shortCatalog)tree.push(node("div",{position:"absolute",left:width*.59,top:0,width:width*.41,height:height*.115,backgroundImage:"linear-gradient(90deg,#EEF2F400,#EEF2F4DD 38%,#EEF2F4F5 100%)"}));
  const logoZones=[];for(const [i,logo]of logos.entries()){
   const available=[.65+i*.1,.03,.27/Math.max(1,logos.length),.065],b=box(available),w=Math.min(b.width,b.height*logo.aspect),h=w/logo.aspect;
+  if(shortCatalog&&!light)tree.push(node("div",{position:"absolute",left:b.left+b.width-w-gap*.36,top:b.top-gap*.2,width:w+gap*.72,height:h+gap*.4,borderRadius:gap*.25,backgroundColor:"#EDF2F7"}));
   tree.push(node("img",{position:"absolute",left:b.left+b.width-w,top:b.top,width:w,height:h,objectFit:"contain"},undefined,{src:logo.src}));
   logoZones.push({role:"logo",index:logo.index,sourceSha256:logo.sha256,box:[(b.left+b.width-w)/width,b.top/height,w/width,h/height]});
  }

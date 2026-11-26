@@ -24,4 +24,24 @@ function plan(structured, image, taskKind, textMode, layers) {
     protected_references: slots
   };
 }
-module.exports = {plan};
+// ImageCompressor.referenceSheets uses exactly two 384 × 310 cells per row.
+// Unknown sheet formats keep the existing whole-image path.
+function tiles(raster, expected) {
+  if (raster.width !== 768 || raster.height % 310 !== 0 || raster.height > 1240) return null;
+  if (!Number.isInteger(expected) || expected < 1 || expected > 8 || raster.height !== 310*Math.ceil(expected/2)) return null;
+  const {PNG} = require("pngjs");
+  const result = [];
+  const count = (raster.height / 310) * 2;
+  for (let i = 0; i < count; i++) {
+    const tile = new PNG({width:384,height:310});
+    PNG.bitblt(raster,tile,(i % 2) * 384,Math.floor(i / 2) * 310,384,310,0,0);
+    // Only discard confirmed empty padding. A count conflict preserves the whole sheet.
+    if (i >= expected) {
+      if (!tile.data.every(value => value === 255)) return null;
+      break;
+    }
+    result.push("data:image/png;base64," + PNG.sync.write(tile).toString("base64"));
+  }
+  return result;
+}
+module.exports = {plan,tiles};

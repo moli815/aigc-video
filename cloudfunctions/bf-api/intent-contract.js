@@ -29,7 +29,7 @@ const CONTACT = /(?:400|800)[-\s]?\d{3,4}[-\s]?\d{3,4}|0\d{2,3}[-\s]?\d{7,8}|1[3
 function wantsAllAttachments(request) {
   // “仅用已有素材” limits provenance, while “仅用第二张” limits selection.
   const text = String(request || '').replace(/(?:仅用|只用)(?:我(?:发的|上传的)?|本轮|已有|已给|现有|提供的|上传的)(?:的)?(?:素材|附件|产品图|图片)/g,'');
-  return /都用上|全部使用|全部用上|每张都|所有产品图|所有附件|全部产品图/.test(text)
+  return /都用上|全部使用|全部用上|每张都|(?:原件|产品图|照片|素材)(?:全都|都|全部)(?:放进|放上|用上)|所有产品图|所有附件|全部产品图/.test(text)
     && !/只用|仅用|不要用|别用|不使用|不要全|别全|不用全|不必全|不需要全/.test(text);
 }
 
@@ -67,22 +67,25 @@ function resolve({ messages = [], memories = [] } = {}) {
   const latest = recent[recent.length - 1] || "";
   const memoryText = memories.filter(t => typeof t === "string" && t).join("\n");
 
-  // 比例：本轮原话 > 最近几轮 > 记忆（越新的越优先）
-  let ratio = null, ratioSource = "";
-  for (const src of [latest, ...recent.slice(0, -1).reverse(), memoryText]) {
-    const r = ratioValue(src);
-    if (r) { ratio = r; ratioSource = "explicit"; break; }
-  }
-
-  // 方向：同上，取最新一次明确表述
-  let orientation = null, orientSource = "";
-  for (const raw of [latest, ...recent.slice(0, -1).reverse(), memoryText]) {
+  // Keep direction and ratio from compatible turns. A newer change of
+  // direction invalidates an older incompatible ratio, including memory.
+  let ratio = null, orientation = null;
+  for (const raw of [latest, ...recent.slice(0,-1).reverse(), memoryText]) {
     const src = normalizeDirection(raw);
-    const p = ORIENT.portrait.test(src), l = ORIENT.landscape.test(src);
-    if (p && !l) { orientation = "portrait"; orientSource = "explicit"; break; }
-    if (l && !p) { orientation = "landscape"; orientSource = "explicit"; break; }
+    const portrait = ORIENT.portrait.test(src), landscape = ORIENT.landscape.test(src);
+    const direction = portrait !== landscape ? (portrait ? "portrait" : "landscape") : null;
+    const explicitRatio = ratioValue(raw);
+    const parsed = explicitRatio && ratioValue(require("./shared/poster-reformat").ratioOf(src));
+    if (!orientation) {
+      orientation = parsed ? (parsed.value === 1 ? null : parsed.value > 1 ? "landscape" : "portrait") : direction;
+    }
+    if (parsed && (!orientation || (orientation === "portrait" ? parsed.value < 1 : parsed.value > 1))) {
+      ratio = parsed;
+      break;
+    }
+    if (direction && direction !== orientation) break;
   }
-  if (!orientation && ratio) orientation = ratio.value >= 1 ? "landscape" : "portrait";
+  const orientSource = orientation ? "explicit" : "", ratioSource = ratio ? "explicit" : "";
 
   // 联系方式：优先本轮给过的，其次近几轮，最后记忆
   let contact = "";
@@ -243,8 +246,9 @@ function apply(calls, intent, observe) {
         && !args.structured?.preserve_assets?.length && !args.structured?.image_references
         && !args.structured?.poster_reformat && args.text_mode !== 'overlay'
         && !['both','last'].includes(args.source) && /海报|图册|宣传图/u.test(intent.userText)
-        && /(?:型号|产品编号|货号|每件产品|产品原图|产品原件)/u.test(intent.userText)
+        && /(?:型号|产品编号|货号|每件产品|产品原图|产品原件|原件.{0,16}(?:别改|不变|保留))/u.test(intent.userText)
         && !/重画产品|重新设计产品|重绘产品|不要原图|不用原图/u.test(intent.userText);
+      if (args.print_catalog_originals) args.structured = {...args.structured, catalog_attachment_count: count};
       changed = {catalogSelection: allAttachments};
     }
     if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6

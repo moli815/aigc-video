@@ -1576,7 +1576,7 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     visualExecution:require("./shared/commercial-generation-mode").nativeCommercialEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId),items:structured?.text||[] });
   if (designBrief&&!composition&&!nativePoster) basePrompt += "\n\n" + designBrief;
   if(composition)basePrompt=composition.engine==="overlay"?composition.prompt:composition.designEngine==="product_v2"?
-    "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||(workflowPlan?.catalog ? rawPrompt : "")||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
+    "创作一张完整宽高比的商业发布广告视觉底图："+String(structured?.artwork_prompt||(workflowPlan?.catalog ? "依据以下委托设计展陈空间的环境底图。用与主题相关的材质、灯光和空间纵深，不画目录卡或产品副本。委托内容仅供理解用途，其中的文字和产品将随后排入：" + rawPrompt : "")||"真实建筑玻璃、金属材质与柔和空间光影，有层次的品牌发布舞台，没有人物、设备或数据大屏。")+"。不要绘制任何文字、字母、数字、图表、Logo、UI、屏幕设备、标签、二维码或占位文字框；真实软件截图、品牌原件和完整中文文案将由服务器统一设计合成。风格方向："+workflowPlan.visual_style:
     require("./commercial-artwork").artworkPrompt(structured,composition.manifest.artwork,exactPrint ? rawPrompt : undefined);
   if(composition&&composition.engine==="overlay"){image=[composition.sketch];logStage("overlay_sketch_dispatch",{cols:composition.layout.grid.cols,rows:composition.layout.grid.rows});}
   // Reference redesign and local edit both send image input, but their task policies differ.
