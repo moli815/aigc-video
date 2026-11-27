@@ -108,9 +108,13 @@ function resolve({ messages = [], memories = [] } = {}) {
   const redesign = /重(?:新)?(?:设)?计|重绘|重做|再设计|改版|美化|提升美观|重新生成一版|做成海报|做一张海报/.test(latest);
   const additive = /只(?:要|需)?(?:加|贴|放)|基础(?:之)?上(?:直接)?(?:加|增)|不改(?:动)?(?:原|底)图|保持原图/.test(latest);
 
+  const latestParts=users.at(-1)?.content;
+  const generatedPreview=Array.isArray(latestParts) && latestParts[0]?.text?.startsWith('【本次编辑前生成图预览】')
+    && latestParts[1]?.type==='image_url' && typeof latestParts[1].image_url?.url==='string'
+    && latestParts[2]?.text==='【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】';
   return {
     orientation, orientSource, ratio, ratioSource, contact, company,
-    redesign, additive,
+    redesign, additive, generatedPreview,
     // 用户本轮原话：判断「是不是海报任务」时以用户说法为准，
     // 不依赖模型自己在 tool 参数里填 render_intent（实测它经常不填）。
     userText: require("./shared/verbatim-image-prompt").authoredText(messages),
@@ -403,11 +407,17 @@ function apply(calls, intent, observe) {
       changed = { ...changed, editCanvas: requestedAspect || 'source' };
       const localRemoval = /(?:只|仅)(?:需|要)?(?:删除|删掉|去掉|移除|擦掉|去除)/.test(intent.userText)
         && /[左右][上下]角|(?:标题|日期|标识|Logo)(?:的)?(?:右侧|左侧|上方|下方|旁边)/i.test(intent.userText);
-      if (localRemoval && args.source==='last' && !args.structured?.preserve_assets?.length
+      const useLast = intent.generatedPreview && !intent.currentImageCount
+        && /刚才生成|刚生成|上一张生成|上一次生成|上次生成|先前生成/.test(intent.userText);
+      if (localRemoval && (args.source==='last'||useLast) && !args.structured?.preserve_assets?.length
           && !args.structured?.image_references && !requestedAspect && intent.userText.length<=1400) {
         // The requested position and exceptions are already explicit. A
         // planner may guess the wrong corner or accidentally expand a deletion.
         args.prompt = intent.userText;
+        args.source = 'last';
+        delete args.source_index;
+        delete args.source_indexes;
+        delete args.reference_roles;
         args.structured = {text:[],routing:args.structured?.routing};
         blocks = [];
         changed.localEditFromUser = true;

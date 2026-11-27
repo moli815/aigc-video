@@ -232,4 +232,17 @@ test('an explicit localized removal preserves the author’s position and keep i
  assert.equal(args.source,'last');
  assert.deepEqual(args.structured.text,[]);
  assert.equal(args.aspect_ratio,undefined);
+ const preview=[
+  {type:'text',text:'【本次编辑前生成图预览】这是编辑前的底图。'},
+  {type:'image_url',image_url:{url:'data:image/jpeg;base64,example'}},
+  {type:'text',text:'【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】'},
+  {type:'text',text:user}
+ ];
+ const wrong={function:{...call.function,arguments:JSON.stringify({...JSON.parse(call.function.arguments),source:'attached',source_indexes:[1],reference_roles:['误认的上传图']})}};
+ const bound=JSON.parse(intent.apply([wrong],intent.resolve({messages:[{role:'user',content:preview}]}))[0].function.arguments);
+ assert.equal(bound.source,'last');
+ assert.equal(bound.source_indexes,undefined);
+ assert.equal(bound.prompt,user);
+ const unbound=JSON.parse(intent.apply([wrong],r)[0].function.arguments);
+ assert.equal(unbound.source,'attached');
 });
