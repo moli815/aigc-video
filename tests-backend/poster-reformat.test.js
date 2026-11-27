@@ -1,6 +1,18 @@
 "use strict";
 const test=require('node:test'),assert=require('node:assert/strict'),R=require('../cloudfunctions/shared/poster-reformat'),D=require('../cloudfunctions/shared/image-delivery');
 const user='请你根据我给你这张背景图的内容，你帮我生成一张竖版的宣传海报';
+test('strict source reflow keeps embedded screens and honors an explicit change of medium',()=>{
+ const request='将这张原海报改为竖版，原文保留，改成暖色手绘，让场景更丰富。';
+ const input={image:['original'],structured:{poster_reformat:R.derive(request)}};
+ const {prompt}=R.plan(input);
+ assert.ok(prompt.includes(request));
+ assert.match(prompt,/图1核对并保留原文/);
+ assert.doesNotMatch(prompt,/文案：。|下列定稿|不出现显示器|沿原图色系|实景材质/);
+ input.structured.text=[{text:'巡检记录'},{text:'服务电话 400-7758-119'}];
+ const checked=R.plan(input).prompt;
+ for(const row of input.structured.text)assert.ok(checked.includes(JSON.stringify(row.text)));
+ assert.match(checked,/保留原文、栏目及带字原件/);
+});
 test('actual incident derives whole-poster portrait intent, not fixed business template',()=>{const i=R.derive(user,{aspect_ratio:'16:9'});assert.equal(i.target_aspect_ratio,'9:16');const p=R.plan({structured:{poster_reformat:i},image:'data:image/jpeg;base64,test'});assert.match(p.prompt,/全部业务内容/);assert.doesNotMatch(p.prompt,/8项|5大|深蓝|金色|PPT|无字/);});
 test('explicit 60x90 and portrait 3:4 stay explicit; original landscape ratio not reused',()=>{assert.equal(R.derive('原图16:9，改成竖版60×90厘米',{}).target_aspect_ratio,'2:3');assert.equal(R.derive('把这张改成3:4竖版',{}).target_aspect_ratio,'3:4');assert.equal(R.derive(user,{aspect_ratio:'3:4'}).target_aspect_ratio,'3:4');assert.equal(R.derive('原图9:16，转为横版21:9',{}).target_aspect_ratio,'7:3');});
 test('logo-only, style-only, crop-only, mockup, overlay, layers and series retain original route',()=>{for(const u of ['只参考这张风格，做竖版新产品广告','只加logo到这张竖版图','只扩图把这张改成竖版','原图只裁切成竖版'])assert.equal(R.derive(u),null,u);for(const args of[{text_mode:'overlay'},{layer_decomposition:true},{task_kind:'series'},{requested_count:2},{render_intent:'mockup'},{structured:{preserve_assets:[{}]}}])assert.equal(R.derive(user,args),null);});
