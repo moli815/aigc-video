@@ -61,3 +61,9 @@ OpenAI 公开资料建议在提示中明确用途、层级、材质、光线和�
 按成熟 Office 实践在测试中打开对应幻灯片 XML，逐段合并文字片段。Windows PowerPoint 打开原报告的 8 页离线复刻后发现，旧的 80 字截断会让句尾成为新条目。本次只在整段超单页容量时分段，并在短封面复用现有主题。下轮 CI 只复跑 iPad 文件导出。回滚本次跟进使用父提交 `ba42bff759301f6fd73a6dac1e6b774cb88caf80`。[python-pptx 段落实现](https://github.com/scanny/python-pptx/blob/master/src/pptx/text/text.py) · [PptxGenJS 表头与分页](https://gitbrent.github.io/PptxGenJS/docs/api-tables.html)
 
 python-pptx 为 MIT 的 Python 库，PptxGenJS 为 MIT 的 JavaScript 库。本项目借鉴其数据结构和验收方式，仍由 Swift 在设备上生成文件。
+
+
+## 2026-11-27 08:42 北京时间　联合复查结果
+
+- iPad 聚焦回归 57/57 通过，包含 12 项文档导出。Windows PowerPoint 打开了基于原始 8 页大纲的本地复刻，封面和末页结构已目视核对。四种文件的所有视觉和实机打开仍需分别核对。[CI 证据](https://github.com/moli815/aigc-video/actions/runs/45917245673)
+- C2 更正为 P0 错误。DS 回答把 GB 50444—2008 第 5.3.2 条当作报废依据。住建部公告将该条列为废止的强制性条文，既有文字也区分维修和报废。复测要求按现行来源原文核对适用范围与条款，不仅匹配数字。C9 与本条共用同一来源校验。[住建部公告](https://www.mohurd.gov.cn/gongkai/zc/wjk/art/2022/art_17339_767704.html37)
