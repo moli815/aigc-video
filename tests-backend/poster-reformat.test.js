@@ -32,3 +32,19 @@ test('portrait target wins over the input canvas without letting local layout in
  assert.equal(R.derive('把这张图改成3:4，不要横版',{aspect_ratio:'16:9'}).target_aspect_ratio,'3:4');
  assert.equal(R.derive('这张图改成2:3竖版，底部有一条横向的服务保障条',{aspect_ratio:'16:9'}).target_aspect_ratio,'2:3');
 });
+
+test('verified artwork roles bind source copy to the original when it is the second input', () => {
+  const input={structured:{poster_reformat:R.derive('把原海报改成竖版，原文保留。')},image:['style','poster'],
+    referenceRoles:['风格参考','原海报']};
+  const actual=R.plan(input).prompt;
+  assert.match(actual,/从图2核对并保留原文/);
+  assert.match(actual,/按图2的栏目归属重排/);
+});
+
+test('redesign preserves the untouched content and lets the user amend the poster', () => {
+ const request='把原海报改为竖版，原文保留，更新热线为400-1000-119，不要丰富装饰。';
+ const prompt=R.plan({image:'original',structured:{poster_reformat:R.derive(request)}}).prompt;
+ assert.ok(prompt.includes(request));
+ assert.match(prompt,/用户未要求改动的全部业务内容/);
+ assert.doesNotMatch(prompt,/以主题相关的场景|仅改变构图或媒介/);
+});

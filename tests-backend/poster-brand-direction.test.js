@@ -187,3 +187,46 @@ test('native posters dispatch the planner’s visual expressions with each confi
   for (const row of text) assert.equal(fallback.split(JSON.stringify(row.text)).length, 2);
   assert.doesNotMatch(fallback, /远处厂房与近处设备/);
 });
+
+test('a mixed reference turn reads an explicitly numbered source, not its style sample', () => {
+  const part = id=>({type:'image_url',image_url:{url:'data:image/png;base64,'+id}});
+  const request='图二是原海报，图一只参考风格。把图二换成科技风，文字保留。';
+  const messages=[{role:'user',content:[{type:'text',text:request},part('style'),part('original')]}];
+  assert.ok(ref.restylesReference('换成科技风'));
+  assert.ok(ref.shouldTranscribe(messages));
+  assert.equal(ref.firstUserImage(messages),'data:image/png;base64,original');
+  const actual = [{role:'user',content:[
+    {type:'text',text:'【本次编辑前生成图预览】历史成图'},part('previous'),
+    {type:'text',text:'【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】'},
+    ...messages[0].content
+  ]}];
+  assert.equal(ref.firstUserImage(actual),'data:image/png;base64,original');
+  assert.equal(ref.sourceImageIndex('用这两张图做一张新的海报',2),null);
+  assert.equal(ref.sourceImageIndex('图一是原图，图二是原图',2),null);
+  const long='机电设备运维记录包括巡检计划、状态监控及故障处置情况，维护记录归档供现场人员复查。';
+  assert.deepEqual(ref.linesOf(long),[long]);
+});
+
+test('a restyle sends the explicitly identified original before the style reference', () => {
+  const {apply}=require('../cloudfunctions/bf-api/intent-contract');
+  const userText='图二是原海报，图一只参考风格。把图二换成科技风，文字保留。';
+  const lines=['原海报标题','必须保留的原文'];
+  const original={function:{name:'image_generate',arguments:JSON.stringify({
+    source:'attached',source_indexes:[1,2],reference_roles:['风格参考','素材图'],
+    prompt:'按参考视觉设计',structured:{text:[{key:'title',role:'title',text:lines[0]}]}})}};
+  const [call]=apply([original],{userText,currentImageCount:2,referenceLines:lines});
+  const result=JSON.parse(call.function.arguments);
+  assert.deepEqual(result.source_indexes,[2,1]);
+  assert.deepEqual(result.reference_roles,['原海报','风格参考']);
+  assert.ok(result.structured.poster_delivery.reference_redesign);
+  assert.ok(result.structured.text.some(row=>row.text===lines[1]));
+});
+
+test('a colloquial user style survives reference compilation without the default palette', () => {
+  const request='把这张图换成科技风的并保留原稿内容';
+  const structured=poster.mark({text:[{key:'title',role:'title',text:'设备运营日报'}]},request,{referenceRedesign:true});
+  assert.equal(structured.poster_delivery.user_direction,request);
+  const prompt=poster.compile({visual:'截图上方用四列卡片',structured,density:'dense'});
+  assert.ok(prompt.includes(request));
+  assert.doesNotMatch(prompt,/四列卡片|高饱和/);
+});

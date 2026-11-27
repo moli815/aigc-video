@@ -23,7 +23,7 @@ const TRANSCRIBE_PROMPT = [
 const DESIGN_HINT = /海报|宣传|设计|重绘|重新做|重新生成|做成|排版|长图|宣传图|信息图|banner|封面/i;
 function restylesReference(text) {
   const value=String(text||"");
-  return /(?:换|改|重做|重新生成|重绘).{0,35}(?:风格|样式|画风)|(?:风格|画风).{0,12}(?:换|改)/.test(value)
+  return /(?:换|改|重做|重新生成|重绘).{0,35}(?:风格|样式|画风)|(?:换成|改成|改为|换为)[^，。；\n]{1,18}风(?=的|[，。；\n]|并|同时|$)|(?:风格|画风).{0,12}(?:换|改)/.test(value)
     && !/(?:删|去掉|移除|替换|修改|改写|新增).{0,8}(?:文案|文字|标题|栏目|内容|产品)|不要.{0,8}(?:保留|照抄)/.test(value);
 }
 function latestUserMessage(messages) {
@@ -40,13 +40,28 @@ function lastUserText(messages) {
 
 function currentImageParts(messages) {
   const parts = latestUserMessage(messages)?.content;
-  return Array.isArray(parts)?parts.filter(p=>p?.type==="image_url" && typeof p.image_url?.url==="string"):[];
+  if (!Array.isArray(parts)) return [];
+  const previews = parts[0]?.text?.startsWith('【本次编辑前生成图预览】') && parts[1]?.type === 'image_url'
+    && parts[2]?.text === '【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】';
+  return (previews ? parts.slice(3) : parts).filter(p => p?.type === 'image_url' && typeof p.image_url?.url === 'string');
+}
+
+function sourceImageIndex(text, count) {
+  if (count === 1) return 1;
+  // Mixed attachments have a source only when the user identifies it.
+  const refs = [...String(text || '').matchAll(/图([一二三四五六1-6])(?:是|为)(?:原海报|原稿|原图|底图)|(?:把|将)图([一二三四五六1-6])(?:的海报)?(?:重绘|重排|重新排版|改|换)/gu)];
+  const slots = [...new Set(refs.map(match => {
+    const number = match[1] || match[2];
+    return Number(number) || '一二三四五六'.indexOf(number) + 1;
+  }))];
+  return slots.length === 1 && slots[0] <= count ? slots[0] : null;
 }
 
 function firstUserImage(messages) {
-  const images=currentImageParts(messages);
-  // A mixed set has no unambiguous source for a full transcription.
-  return images.length===1?images[0].image_url.url:"";
+  const images = currentImageParts(messages);
+  const text = require('./shared/verbatim-image-prompt').authoredText(messages);
+  const source = sourceImageIndex(text, images.length);
+  return source ? images[source - 1].image_url.url : '';
 }
 
 /** 是否值得做前置转录：有图 + 是设计类诉求 */
@@ -66,7 +81,7 @@ function linesOf(text) {
   return String(text || "")
     .split("\n")
     .map(s => s.trim().replace(/^(?:[-*•]\s+|\d+[.、]\s+)/, ""))
-    .filter(s => s.length >= 2 && s.length <= 30)
+    .filter(s => s.length >= 2 && s.length <= 1000)
     .filter(s => !/^(好的|以下是|图中|文字如下|注[:：])/.test(s));
 }
 
@@ -144,4 +159,4 @@ function keepSourceLines(blocks, lines) {
   return result;
 }
 
-module.exports = { currentImageParts, restylesReference, keepSourceLines, shouldTranscribe, transcribe, verbatimMessage, repairTerms, linesOf, firstUserImage, lastUserText, TRANSCRIBE_PROMPT };
+module.exports = { currentImageParts, sourceImageIndex, restylesReference, keepSourceLines, shouldTranscribe, transcribe, verbatimMessage, repairTerms, linesOf, firstUserImage, lastUserText, TRANSCRIBE_PROMPT };

@@ -113,7 +113,7 @@ function resolve({ messages = [], memories = [] } = {}) {
     currentImageCount: (() => {
       const user = [...messages].reverse().find(m => m?.role === 'user' && !require('./shared/image-delivery').isHistoryPreview(m));
       if (!Array.isArray(user?.content)) return 0;
-      const previews = user.content.filter(part => part?.type === 'image_url').length;
+      const previews = require('./reference-text').currentImageParts(messages).length;
       if (!previews) return 0;
       // The iPad packs large sets into preview sheets but keeps original slot numbers.
       const catalog = user.content.filter(part => part?.type === 'text')
@@ -278,8 +278,18 @@ function apply(calls, intent, observe) {
       touched.push({tool: fn.name, verbatim: true});
       return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };
     }
-    const referenceRedesign=args.source==='attached'&&intent.currentImageCount===1
-      &&require('./reference-text').restylesReference(intent.userText);
+    const referenceText = require('./reference-text');
+    const originalIndex = args.source === 'attached' && referenceText.restylesReference(intent.userText)
+      ? referenceText.sourceImageIndex(intent.userText, count) : null;
+    const referenceRedesign = Boolean(originalIndex);
+    if (originalIndex && count > 1) {
+      const selected = args.source_indexes || [args.source_index || 1];
+      const roles = new Map(selected.map((index, slot) => [index, args.reference_roles?.[slot]]));
+      args.source_indexes = [originalIndex, ...selected.filter(index => index !== originalIndex)];
+      args.reference_roles = args.source_indexes.map(index => index === originalIndex ? '原海报' : roles.get(index) || '用户提供的参考图');
+      delete args.source_index;
+      changed = { ...changed, originalReference: originalIndex };
+    }
     const referenceDesign=referenceRedesign&&(refLines?.length>=2||posterDelivery.copyOf(args.structured).length>=2);
     const nativePoster = fn.name === 'image_generate' && posterDelivery.nativePoster(args, intent.userText,{referenceDesign});
     const poster = nativePoster || wantsPosterLayout(args, blocksOf(args), intent);
