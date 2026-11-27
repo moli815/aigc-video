@@ -3161,37 +3161,22 @@ async function handleChat(req, res) {
     }
   }
 
-  // P0-13 视觉路由：消息里出现图片段（image_url）时切到多模态模型——
-  // 此前图片只能靠 App 侧 OCR 文本传递，真正的"看图"能力缺失。
-  const hasImagePart = Array.isArray(upstreamBody.messages) && upstreamBody.messages.some((m) =>
-    Array.isArray(m.content) && m.content.some((part) => part && part.type === "image_url"));
+  // Use the visual planner before resolving the roles of uploaded references.
+  const hasImagePart = upstreamBody.messages.some(m =>
+    Array.isArray(m.content) && m.content.some(part => part?.type === "image_url"));
   if (hasImagePart) {
-    // P0-72 视觉路由防呆（430 根因修复）：切模型前校验"模型名与当前提供商匹配"——
-    // 此前 CHAT_MODEL_VISION 默认是豆包（火山模型）但请求发往 dashscope（阿里）→ 404 模型不存在，
-    // 表现为"带图请求必失败 + 偶发 430 + 多次重试"（用户实机反馈）。不匹配时不切模型（图片已剥离，走 OCR）。
-    const vm = RUNTIME.CHAT_MODEL_VISION || "";
-    const prov = String(RUNTIME.CHAT_PROVIDER || "qwen").toLowerCase();
-    // 1017 起 deepseek-v4.1-flash 原生支持图像理解 —— 主模型能看图时不再切外部视觉模型
-    // （切走会丢失 1017 的强工具调用/Agent 能力）。仅主模型不支持视觉时才走高精度视觉兜底。
-    const mainHasVision = /deepseek[\w.-]*(flash|vision)|vision/i.test(String(upstreamBody.model || ""));
-    const vmOK = mainHasVision ? false : (!vm ? false : ((prov === "dashscope" || prov === "qwen") ? /^qwen/i.test(vm)
-      : ((prov === "ark" || prov === "doubao" || prov === "volc") ? /^doubao|^seed/i.test(vm) : true)));
-    if (!vmOK) {
-      // 1017 修正：主模型自带视觉（deepseek-v4.1-flash）时**保留图片**让它自己看——
-      // 仅在主模型为纯文本模型时才剥离 image_url 走 OCR（避免上游 404/430）。
-      if (!mainHasVision && Array.isArray(upstreamBody.messages)) {
-        upstreamBody.messages = stripUnsupportedVision(upstreamBody.messages, "deepseek");
-      }
-    } else {
-      // P0-38 含图片：最高档本身支持看图，保持不变；其余档位强制切到多模态模型（保能力不降级）
-      if (useMode === "ultra") {
-        tier = UPSTREAM.chat.tiers.modeUltra;
-        upstreamBody.model = tier.model;
-      } else {
-        tier = UPSTREAM.chat.tiers.flash;                              // 记账仍按快答档（多模态模型成本更低）
-        upstreamBody.model = vm || UPSTREAM.chat.tiers.utility.model;
-      }
-      setThinking(upstreamBody, "disabled");
+    const {visionModelFor,attachmentPlanningInstruction}=require("./commercial-image-guidance");
+    const selected=visionModelFor(upstreamBody.model,RUNTIME.CHAT_MODEL_VISION,RUNTIME.CHAT_PROVIDER);
+    if (!selected) {
+      upstreamBody.messages=stripUnsupportedVision(upstreamBody.messages,"deepseek");
+    } else if (selected!==upstreamBody.model) {
+      tier=Object.values(UPSTREAM.chat.tiers).find(candidate=>candidate.model===selected)||UPSTREAM.chat.tiers.flash;
+      upstreamBody.model=selected;
+      setThinking(upstreamBody,"disabled");
+    }
+    if (!verbatimPrompt && upstreamBody.tools?.some(tool=>RASTER.has(tool?.function?.name))) {
+      upstreamBody.messages=[...upstreamBody.messages,{role:"system",content:attachmentPlanningInstruction(Boolean(selected))}];
+      logSafe({tag:"image_attachment_planning",requestId:currentRequestId(),mode:selected?"vision":"text_metadata",inputCount:intent.currentImageCount});
     }
   }
 

@@ -53,4 +53,21 @@ function injectCommercialImageGuidance(messages, tools, userText) {
   return injectImageDesignPolicy([...messages, { role: "system", content: COMMERCIAL_BRIEF }], userText);
 }
 
-module.exports = { VERSION, COMMERCIAL_BRIEF, isCommercialTask, injectCommercialImageGuidance };
+function visionModelFor(model, configured, provider) {
+  const primary=String(model||"");
+  const fallback=String(configured||"").trim();
+  const platform=String(provider||"").toLowerCase();
+  if (/^deepseek-(?:flash|v4(?:\.1)?-flash)(?:$|[.-])|vision|^qwen[\w.-]*-vl(?:$|[.-])/i.test(primary)) return primary;
+  if ((platform==="qwen"||platform==="dashscope")&&!/^qwen/i.test(fallback)) return "";
+  if (["ark","doubao","volc"].includes(platform)&&!/^(?:doubao|seed|ep-)/i.test(fallback)) return "";
+  if (platform==="deepseek"&&!/^deepseek/i.test(fallback)) return "";
+  return fallback;
+}
+
+function attachmentPlanningInstruction(canSee) {
+  return canSee
+    ? "如果本轮要用图片创作或编辑，先查看实际图像并结合用户原话，按附件原编号辨认底图、Logo、产品照、信息图和风格参考。编号图册用REF定位，历史预览不占本轮附件编号。用户明确指定的素材用途和位置优先，保留要求未改的内容。文件名和OCR只作辅助。只有关键素材或目标位置无法确定时才问一句，明确就直接执行。"
+    : "当前规划模型只收到图片的文字备注。用用户明确给出的编号和用途。关键底图、素材或位置无法确认时问一句，不凭文件名、尺寸或OCR断言已识别图片。";
+}
+
+module.exports = { VERSION, COMMERCIAL_BRIEF, isCommercialTask, injectCommercialImageGuidance, visionModelFor, attachmentPlanningInstruction };

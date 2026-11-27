@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), path = require("node:path"), vm = require("node:vm"), {createRequire}=require("node:module"), {EventEmitter}=require("node:events");
 const {memoryDatabase}=require("./foundation-fixture");
 const {ARBITRATION_BLOCK}=require("../cloudfunctions/bf-api/expert-delivery-arbitration");
-async function fixture() {
+async function fixture(env={}) {
   const file=path.resolve(__dirname,"../cloudfunctions/bf-api/index.js"), realRequire=createRequire(file), db=memoryDatabase(), calls=[],charges=[];
   let handler;
   const app={database:()=>db};
@@ -16,7 +16,7 @@ async function fixture() {
   const context={require:n=>n==="http"?{createServer(fn){handler=fn;return {listen(){}};}}:
     n==="@cloudbase/node-sdk"?{init:()=>app}:n==="./shared/model-call-ledger"?{createModelCallLedger:()=>({fetch:provider})}:
     n==="./log-safe"?{...realRequire(n),logSafe(){}}:realRequire(n),
-    module:{exports:{}},exports:{},process:{env:{CHAT_API_KEY:"fixture-only"},on(){}},Buffer,URL,Response,AbortController,AbortSignal,TextDecoder,
+    module:{exports:{}},exports:{},process:{env:{CHAT_API_KEY:"fixture-only",...env},on(){}},Buffer,URL,Response,AbortController,AbortSignal,TextDecoder,
     setTimeout,clearTimeout,setInterval,clearInterval,console:{log(){},error(){}},fetch:provider,__charges:charges};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(file,"utf8")+`
@@ -150,4 +150,29 @@ test("real /chat request after single image delivery cannot dispatch another ima
   messages.push({role:"user",content:"换个视觉风格再做一张海报"});
   assert.equal((await f.request("/api/chat",{stream:false,chatMode:"standard",tools,messages})).status,200);
   assert.equal(f.calls.at(-1).tools[0].function.name,"image_generate");
+});
+
+test("attachment planning sees the pixels at the selected model, including the highest tier",async()=>{
+ const actual=["data:image/png;base64,aW1hZ2Ux","data:image/png;base64,aW1hZ2Uy"];
+ const messages=[{role:"user",content:[{type:"text",text:"把图二的Logo放在图一海报右下角。"},
+  ...actual.map(url=>({type:"image_url",image_url:{url}}))]}];
+ const tools=[{type:"function",function:{name:"image_edit",parameters:{type:"object",properties:{}}}}];
+ for(const [model,configured,expected] of [
+  ["deepseek-flash","","deepseek-flash"],
+  ["deepseek-v4.1-flash-1017","qwen-vl-max","deepseek-v4.1-flash-1017"],
+  ["deepseek-v3.2","qwen-vl-max","qwen-vl-max"],
+  ["deepseek-v3.2","doubao-vision",""]
+ ]){
+  const f=await fixture({CHAT_PROVIDER:"qwen",CHAT_MODEL_VISION:configured,CHAT_MODEL_ULTRA:model});
+  const out=await f.request("/api/chat",{stream:false,chatMode:"ultra",messages,tools});
+  assert.equal(out.status,200,JSON.stringify(out.body));
+  assert.equal(f.calls.length,1);
+  const [up]=f.calls;
+  assert.equal(up.model,expected||model);
+  const user=up.messages.find(m=>m.role==="user").content;
+  if(expected)assert.deepEqual(user.filter(p=>p.type==="image_url").map(p=>p.image_url.url),actual);
+  else assert.equal(typeof user,"string");
+  assert.ok(up.messages.some(m=>m.role==="system"&&m.content.includes(expected?"先查看实际图像":"只收到图片的文字备注")));
+  assert.equal(f.charges.at(-1).meta.model,up.model);
+ }
 });
