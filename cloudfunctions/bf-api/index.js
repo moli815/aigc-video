@@ -2882,7 +2882,8 @@ async function handleChat(req, res) {
     owner: auth.sub, referenceStore: imageReferenceStore });
   messages = seriesReferences.messages;
   const singleReferences = await require('./image-single-reference-guidance').prepareSingleReferenceGuidance({messages,
-    tools:seriesReferences.tools,owner:auth.sub,referenceStore:imageReferenceStore,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,enforceRequested:nativeCommercialActive});
+    tools:seriesReferences.tools,owner:auth.sub,referenceStore:imageReferenceStore,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,enforceRequested:nativeCommercialActive,
+    db,bindCompanyLogo:compactPosterPilot&&!verbatimPrompt});
   messages = singleReferences.messages;
   if (seriesReferences.issuedCount) logSafe({ tag: "image_series_reference_context", requestId: currentRequestId(),
     recalled: seriesReferences.issuedCount, ready: seriesReferences.readyCount });
@@ -3060,6 +3061,10 @@ async function handleChat(req, res) {
     stream: wantStream,
   });
   if (upstreamBody.tools) upstreamBody.tools = verbatimPrompt ? singleReferences.tools : withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner,compactPosterBrief:intent.compactPosterBrief });
+  if(singleReferences.awaitingLogo && Array.isArray(upstreamBody.tools)){
+    if(!upstreamBody.tools.length){delete upstreamBody.tools;delete upstreamBody.tool_choice;}
+    else if(upstreamBody.tool_choice?.function && !upstreamBody.tools.some(t=>t.function?.name===upstreamBody.tool_choice.function.name))delete upstreamBody.tool_choice;
+  }
   if (imageDelivered && Array.isArray(upstreamBody.tools)) {
     upstreamBody.tools = upstreamBody.tools.filter(tool => !RASTER.has(tool?.function?.name));
     if (!upstreamBody.tools.length) delete upstreamBody.tools;

@@ -31,13 +31,19 @@ function selectFacts({owner,query,memories,messages,context=[],budget=6500}){
   if(!belongs(p))continue;
   if(!/公司|我们|合作伙伴|平台|产品|业务|品牌|logo|身份|电话/i.test(p.text))continue;
   if(p.text.length>3500)continue;out.push({origin:"explicit_user_correction",at:p.createdAt,text:p.text});}
- for(const r of memories){const p=payload(r,owner,"memory");if(!p||!belongs(p))continue;const text=String(p.content||"");
+ const savedBrandTypes=new Set();
+ for(const r of memories){const p=payload(r,owner,"memory");if(!p||!belongs(p))continue;const text=String(p.content||(p.source==="brand-memory"?p.text:"")||"");
   const overlaps=[...String(query).matchAll(/(?=(.{2}))/gu)].some(m=>text.includes(m[1]));
   if(!text||text.length>1800||!business&&!overlaps)continue;
   // Past event state is not evergreen company identity. Retrieve it only for
   // an explicit event/history request, never for a new generic introduction.
   if(/展会|参展|节日|开展|活动日期/.test(text)&&!/展会|参展|那次|上次|以前|历史/.test(query))continue;
-  out.push({origin:"saved_memory_needs_current_context",at:Number(p.updatedAt||p.createdAt)||0,text});}
+  if(p.source==="brand-memory"){
+   const type=/^(公司全称|公司联系方式|Logo 要求)：/.exec(text)?.[1];
+   if(type&&savedBrandTypes.has(type))continue;
+   if(type)savedBrandTypes.add(type);
+  }
+  out.push({origin:"saved_memory_needs_current_context",at:Number(p.updatedAt||p.createdAt||r.updatedAt)||0,text});}
  out.sort((a,b)=>(b.origin==="explicit_user_correction")-(a.origin==="explicit_user_correction")||b.at-a.at);
  const chosen=[],seen=new Set();let used=0;for(const f of out){if(seen.has(f.text)||used+f.text.length>budget)continue;chosen.push(f);used+=f.text.length;seen.add(f.text);if(chosen.length===12)break;}
  return chosen;

@@ -40,23 +40,56 @@ function addBrand(calls,binding,text){
   });
 }
 
+function currentImageNeedsCompanyLogo(messages){
+  if(require('./reference-text').currentImageParts(messages).length!==1)return false;
+  const text=require('./shared/verbatim-image-prompt').authoredText(messages);
+  const own=/(?:我们(?:的|公司|企业|品牌)?|本公司|公司|企业|品牌)\s*的?\s*(?:logo|标志|标识|商标)/iu;
+  const use=/(?:加|用|放|带|补|配|展示|保留)[^。；;\n]{0,55}(?:logo|标识|标志|商标)/iu;
+  const excluded=/(?:不要|不用|不必|不加|不需要|移除|去掉|别用)[^。；;\n]{0,16}(?:logo|标识|标志|商标|历史|这张图)|联名|合作方|合作伙伴的|他们的|客户的|对方的|(?:之前|上一张|上次|刚才|刚生成)的?(?:底图|海报|成图)|(?:这是|这张是|图一是|附件是)[^，。；;\n]{0,16}(?:logo|标识|商标)/iu;
+  return own.test(text)&&use.test(text)&&!excluded.test(text);
+}
+
+function bindCurrentWithLogo(args,logo){
+  const s=args.structured||{},fail=()=>{throw Object.assign(Error('TOOL_ARGUMENTS_INVALID'),{
+    code:'TOOL_ARGUMENTS_INVALID',reason:'HISTORY_REQUIRED_MISSING',field:'structured.image_references'});};
+  // A private file UUID is not a current iOS attachment index. Keep incompatible
+  // local-composition contracts out of the mixed-input path.
+  if(s.preserve_assets?.length||s.poster_reformat||args.layer_decomposition)return fail();
+  const raw=args.image_references||s.image_references;
+  if(args.image_references&&s.image_references)return fail();
+  if(raw&&require('./shared/image-reference-store').contractOf(raw).items.some(i=>i.kind!=='library'||i.id!==logo.fileId))return fail();
+  if(args.library_refs&&(!Array.isArray(args.library_refs)||args.library_refs.some(id=>String(id).toUpperCase()!==logo.fileId)))return fail();
+  args.source='attached';args.source_index=1;
+  delete args.source_indexes;delete args.reference_roles;delete args.library_refs;delete args.image_references;
+  args.structured={...s,image_references:{version:1,mode:'append',items:[{kind:'library',id:logo.fileId,role:BRAND_ROLE}]}};
+  return true;
+}
+
 async function preparePosterBrand({db,owner,policy,referenceStore,text,hasCurrentImages}){
   if(hasCurrentImages||!brandEnabled(policy,owner)||!requestedBrand(text)||!posterRequested("",text))return null;
+  return lookupCompanyLogo({db,owner,referenceStore});
+}
+
+// The sync index is only a candidate list. Recheck the original declaration and file owner.
+async function lookupCompanyLogo({db,owner,referenceStore,fileIds=[],unique=false}){
   const col=db.collection("bf_sync_v2");
-  const files=(await col.where({accountId:owner,kind:"file",deleted:false}).orderBy("revision","desc").limit(100).get()).data||[];
+  const files=fileIds.length ? (await Promise.all(fileIds.map(id=>col.doc(syncRecordKey(owner,"file",id)).get().then(documentOf)))).filter(Boolean) : (await col.where({accountId:owner,kind:"file",deleted:false}).orderBy("revision","desc").limit(100).get()).data||[];
+  if(unique&&!fileIds.length&&files.length===100)return null;
   // Read only declarations actually tied to the existing private image index.
   const matches=files.flatMap(row=>{
     const file=payload(row,owner,"file");
     const note=file?.textContent?.match(/【图片记忆索引v1】\n用途：公司原始Logo[^\n]*\n来源：同账号用户消息 ([A-F0-9-]{36})；原图ID：([A-F0-9-]{36})。/i);
     return note&&note[2].toUpperCase()===row.refId.toUpperCase()?[{row,messageId:note[1].toUpperCase()}]:[];
-  }).slice(0,10);
+  });
+  if(unique&&matches.length>10)return null;
+  matches.splice(10);
   const messages=await Promise.all(matches.map(({messageId})=>col.doc(syncRecordKey(owner,"message",messageId)).get().then(documentOf)));
-  const {preferred}=planImageMemory({owner,messages:messages.filter(Boolean),files:matches.map(x=>x.row)});
+  const {preferred,bindings}=planImageMemory({owner,messages:messages.filter(Boolean),files:matches.map(x=>x.row)});
   const brand=preferred.company_logo;
-  if(!brand)return null;
+  if(!brand||unique&&new Set(bindings.filter(b=>b.role==="company_logo").map(b=>b.asset.id)).size!==1)return null;
   const ref=await referenceStore.prepare(owner,{version:1,mode:"replace",items:[{kind:"library",id:brand.fileId,role:BRAND_ROLE}]});
   return ref.references[0]?.asset.id===brand.asset.id ? brand:null;
 }
 
-module.exports={BRAND_ROLE,brandEnabled,requestedBrand,anchorFor,addBrand,preparePosterBrand};
+module.exports={BRAND_ROLE,brandEnabled,requestedBrand,anchorFor,addBrand,preparePosterBrand,currentImageNeedsCompanyLogo,bindCurrentWithLogo,lookupCompanyLogo};
 
