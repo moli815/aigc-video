@@ -116,6 +116,7 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   args.structured = fitTextScene(result.structured);
   // The planning model cannot opt a normal user into verbatim transport.
   delete args.structured.verbatim_prompt;
+  delete args.structured.catalog_logo_slot;
   args.structured.routing = { reason: imageQualityReason(userText, args.quality_reason),
     preference: modelPreference(userText),
     user_quality: requestsQuality(userText) ? "high" : "auto" };

@@ -245,13 +245,27 @@ function apply(calls, intent, observe) {
     const allAttachments = wantsAllAttachments(intent.userText);
     if (fn.name === 'image_generate' && count > 0) {
       args.use_entire_catalog = allAttachments;
+      const lastLogo = count > 6 && count <= 16 && allAttachments && !intent.verbatim &&
+        /最后(?:一张|那张)(?:图|图片)?(?:是|作为|用作|的)?\s*(?:logo|标识|标志)|最后的\s*logo|logo\s*(?:用|选|是)\s*最后(?:一张|那张)/iu.test(intent.userText) &&
+        !/(?:不用|不要|不加|取消|删除).{0,10}(?:logo|标识|标志)/iu.test(intent.userText);
       args.print_catalog_originals = count > 6 && allAttachments && !intent.verbatim
         && !args.structured?.preserve_assets?.length && !args.structured?.image_references
         && !args.structured?.poster_reformat && args.text_mode !== 'overlay'
         && !['both','last'].includes(args.source) && /海报|图册|宣传图/u.test(intent.userText)
-        && /(?:型号|产品编号|货号|每件产品|产品原图|产品原件|原件.{0,16}(?:别改|不变|保留))/u.test(intent.userText)
+        && (lastLogo || /(?:型号|产品编号|货号|每件产品|产品原图|产品原件|原件.{0,16}(?:别改|不变|保留))/u.test(intent.userText))
         && !/重画产品|重新设计产品|重绘产品|不要原图|不用原图/u.test(intent.userText);
-      if (args.print_catalog_originals) args.structured = {...args.structured, catalog_attachment_count: count};
+      if (args.print_catalog_originals) {
+        args.structured = {...args.structured, catalog_attachment_count: count};
+        if (lastLogo) {
+          args.structured.catalog_logo_slot = count;
+          // The frozen client packs all attachments without these hints. An
+          // inferred role on the first six can steal the user's explicit slot.
+          args.source = 'attached';
+          delete args.source_index;
+          delete args.source_indexes;
+          delete args.reference_roles;
+        }
+      }
       changed = {catalogSelection: allAttachments};
     }
     if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6

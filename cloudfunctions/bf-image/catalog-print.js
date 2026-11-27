@@ -44,4 +44,25 @@ function tiles(raster, expected) {
   }
   return result;
 }
-module.exports = {plan,tiles};
+async function extractSheetLogo(assets, slot) {
+  const sheets = assets.filter(asset => asset.role === 'catalog');
+  const cellCount = sheets.reduce((count, sheet) => count + (sheet.tiles?.length || 0), 0);
+  if (!Number.isSafeInteger(slot) || slot !== cellCount || sheets.some(sheet => !sheet.tiles?.length)) {
+    throw Object.assign(Error('CATALOG_SOURCES_INVALID'), {code:'CATALOG_SOURCES_INVALID'});
+  }
+
+  const sheet = sheets.at(-1);
+  const bytes = Buffer.from(sheet.tiles.at(-1).split(',')[1], 'base64');
+  const {cutout,decode} = require('./protected-asset-compositor');
+  const {raster} = await cutout(decode(bytes));
+  const {PNG} = require('pngjs');
+  sheet.tiles.pop();
+  return {
+    index: assets.length + 1,
+    role: 'logo',
+    aspect: raster.width / raster.height,
+    sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+    src: 'data:image/png;base64,' + PNG.sync.write(raster).toString('base64'),
+  };
+}
+module.exports = {plan,tiles,extractSheetLogo};

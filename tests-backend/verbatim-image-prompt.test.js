@@ -155,3 +155,38 @@ test('empty last slot is retained for an owned white product and dropped only fo
   raster.data[(384*4)]=0;
   assert.equal(tiles(raster,1),null);
 });
+
+test('catalogue logo ordinal above six uses the frozen client sheet branch', () => {
+  const make = (text, indices = [1,14]) => {
+    const call={function:{name:'image_generate', arguments:JSON.stringify({
+      source:'attached', source_indexes:indices, reference_roles:['产品','Logo'],
+      structured:{text:[{key:'t',role:'title',text:'板卡产品'}]}
+    })}};
+    return JSON.parse(intent.apply([call],{userText:text,currentImageCount:14})[0].function.arguments);
+  };
+  const user='用这13张产品图和最后的Logo制作海报。全部放进去。';
+  const args=make(user);
+  assert.equal(args.structured.catalog_logo_slot,14);
+  assert.equal(args.print_catalog_originals,true);
+  assert.equal(args.source_indexes,undefined);
+  assert.equal(args.reference_roles,undefined);
+  assert.equal(make(user,[1,2]).reference_roles,undefined);
+  assert.equal(make(user+'这次只用第二张。').structured.catalog_logo_slot,undefined);
+});
+
+test('the last packed asset becomes a separate logo with all thirteen product cells intact', async () => {
+  const {PNG}=require('../cloudfunctions/bf-image/node_modules/pngjs');
+  const {extractSheetLogo}=require('../cloudfunctions/bf-image/catalog-print');
+  const raster=new PNG({width:16,height:16});
+  raster.data.fill(255);
+  for(let y=4;y<12;y++)for(let x=4;x<12;x++)raster.data.fill(0,(y*16+x)*4,(y*16+x)*4+3);
+  const item='data:image/png;base64,'+PNG.sync.write(raster).toString('base64');
+  const a={index:1,role:'catalog',tiles:Array(8).fill(item)};
+  const b={index:2,role:'catalog',tiles:[...Array(5).fill(item),item]};
+  await assert.rejects(()=>extractSheetLogo([a,b],13),{code:'CATALOG_SOURCES_INVALID'});
+  const logo=await extractSheetLogo([a,b],14);
+  assert.equal(a.tiles.length+b.tiles.length,13);
+  assert.equal(logo.role,'logo');
+  const result=PNG.sync.read(Buffer.from(logo.src.split(',')[1],'base64'));
+  assert.ok(result.width < raster.width);
+});

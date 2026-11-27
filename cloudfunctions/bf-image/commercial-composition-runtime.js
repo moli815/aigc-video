@@ -60,6 +60,13 @@ function createCommercialComposition({app,assetStore,fetcher=fetch,log=()=>{},en
             asset.tiles=require("./catalog-print").tiles(raster,Math.min(8,remaining));
           }
         }
+        const {catalog_logo_slot:logoSlot, print_catalog:catalog} = input.structured;
+        if (logoSlot != null && !catalog?.logo) {
+          const logo = await require('./catalog-print').extractSheetLogo(assets, logoSlot);
+          const lastSheet = assets.findLast(asset => asset.role === 'catalog');
+          if (!lastSheet.tiles.length) assets.splice(assets.indexOf(lastSheet), 1);
+          assets.push(logo);
+        }
         // Measured fit and source count validation happen before a paid image.
         const fallback=await compose({structured:input.structured,prompt:input.prompt,width,height,fonts,satori,resvg,designEngine:"product_v2",assets});
         return {input,width,height,fonts,assets,designEngine:"product_v2",manifest:fallback.manifest,fallback:fallback.png};
