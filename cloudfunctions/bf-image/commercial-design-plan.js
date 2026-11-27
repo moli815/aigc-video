@@ -20,6 +20,7 @@ function planOf({structured,prompt,width,height,content}){
  const labels=content.sections.map(textOf).join("\n");
  const hints=[structured?.design_brief?.visual_approach,prompt].filter(Boolean).join(" ").split(/[。；;\n]/).filter(s=>!/(不要|避免|禁止|不使用|不用)/.test(s)).join(" ");
  const photographic = /摄影|实拍|写实产品/.test(hints);
+ const plainBackground=/(?:^|[。；，,\n])\s*(?:请)?(?:用|要|采用|保留)?纯色(?:背景|底)|(?:请用|我要|改成|换成)纯色(?:背景|底)|背景(?:留白|用纯色|不要(?:插图|纹理|图片))|不要(?:背景图|背景纹理)/.test(prompt || "");
  const handmade = /手绘|插画|森林绿|木刻|纸感|暖色手作/.test(hints);
  const styleId = Object.hasOwn(library.styles,request.style_id) ? request.style_id :
    photographic ? "hyperreal-product" : handmade ? "organic-craft" :
@@ -39,7 +40,7 @@ function planOf({structured,prompt,width,height,content}){
  // an empty standalone body column. Move it without changing or duplicating it.
  if(sections[0]?.items.every(t=>t.role==="label")&&sections[0].items.length===1){header.push(...sections.shift().items);}
  return {version:VERSION,styleId,layoutId,header,footer:content.footer,sections,matrix:content.matrix,
-  artwork:{aspectRatio:library.layouts[layoutId].artworkAspect,placement:library.layouts[layoutId].hero},
+  artwork:{aspectRatio:library.layouts[layoutId].artworkAspect,placement:library.layouts[layoutId].hero,plainBackground},
   reason:valid?"validated_design_metadata":"compatible_content_selection"};
 }
 function designEnabled(policy,owner){return policy?.designEngine==="poster"&&(!Array.isArray(policy.designAccountIds)||policy.designAccountIds.includes(owner));}

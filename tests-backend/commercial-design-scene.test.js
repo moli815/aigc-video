@@ -54,3 +54,14 @@ test('brand highlight preserves its orange hue rather than flattening both surfa
  assert.ok(contrast(light,'#F1F5FA')>=3);assert.notEqual(light,ink);assert.ok(parseInt(light.slice(1,3),16)>parseInt(light.slice(5,7),16));
  assert.equal(accessibleAccent(requested,ink,'#FFFFFF',contrast),requested);
 });
+
+test("a requested deep-blue background reaches the photographic poster canvas",()=>{
+ const {paletteOf}=require("../cloudfunctions/bf-image/commercial-composer");
+ const prompt="用写实产品摄影，海报用深蓝背景";
+ const plan=planOf({...base,prompt});
+ const out=scene({plan,width:base.width,height:base.height,fontSize:30,palette:paletteOf({},prompt),contrast,partition});
+ assert.equal(plan.styleId,"hyperreal-product");
+ assert.equal(out.tree.props.style.backgroundColor,"#102039");
+ assert.equal(out.tree.props.style.color,"#EAF2FA");
+ assert.equal(paletteOf({},"不要深蓝背景，暖白色").explicit,undefined);
+});

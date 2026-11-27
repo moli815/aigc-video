@@ -19,6 +19,11 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
  const heroInk=contrast(hero,"#FFFFFF")>=4.5?"#FFFFFF":"#101820";
  const accentOnDark=accessibleAccent(selected.accent,hero,heroInk,contrast);
  const margin=Math.round(Math.min(width,height)*.034),gap=Math.round(fontSize*.68),inner=width-margin*2;
+ const split=plan.artwork.placement==="split";
+ const photoLead=split && plan.styleId==="hyperreal-product" && height>width;
+ const hasArt=!!background && plan.artwork.placement!=="none";
+ const photoSpill=hasArt && photoLead && !explicit && !plan.artwork.plainBackground &&
+   contrast(p.ink,mix(p.paper,"#000000",.14))>=4.5 ? Math.round(height*.15) : 0;
  const consumed=[];
  const mark=(item,children,style={})=>{consumed.push(item.key);return el("div",{display:"flex",flexDirection:"column",flexShrink:0,...style},children,{"data-copy-key":item.key});};
  const copy=(item,scale=1,style={})=>mark(item,item.text,{fontSize:fontSize*scale,lineHeight:1.43,whiteSpace:"pre-wrap",wordBreak:"break-word",fontWeight:item.role==="title"?700:400,...style});
@@ -78,19 +83,16 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
    const size=fontSize*1.55;
    return el('div',{display:'flex',gap:gap*.5,alignItems:'center',paddingBottom:gap*.6,marginBottom:gap*.4},[icon(section.kind,size),copy(item,1.24,{fontWeight:700,color:goodInk(backgroundColor),lineHeight:1.3,flexShrink:1})]);
   });
-  return el("div",{display:"flex",width:w,flexDirection:"column",flexShrink:0,color:goodInk(backgroundColor),backgroundColor,padding:gap,border:featured?"1px solid "+edge:"0px",borderRadius:preset.radius},[
+  return el("div",{display:"flex",width:w,flexDirection:"column",flexShrink:0,color:goodInk(backgroundColor),backgroundColor:photoSpill && backgroundColor===p.paper?"transparent":backgroundColor,padding:gap,border:featured?"1px solid "+edge:"0px",borderRadius:preset.radius},[
     ...headingNodes,
     el("div",{display:"flex",flexDirection:"column",gap:gap*.45,flexShrink:0},bodies.map(t=>full?splitLines(t,section.kind):copy(t)))
   ]);
  }
  const children=[];
- const split=plan.artwork.placement==="split";
- const photoLead=split && plan.styleId==="hyperreal-product" && height>width;
  const heightShare=photoLead?.33:plan.layoutId==="split-vertical"?.28:plan.layoutId==="modular-grid"?.17:.18;
  const heroH=Math.round(Math.min(height*heightShare,width*(photoLead?.82:.52)));
- const hasArt=!!background && plan.artwork.placement!=="none";
  const headerW=split?inner*.51:inner*.66;
- const photo=hasArt?el("img",{position:"absolute",top:0,right:0,width:photoLead?width*.85:split?width*.48:width,height:heroH,
+ const photo=hasArt?el("img",{position:"absolute",top:0,right:0,width:photoLead?width*.85:split?width*.48:width,height:heroH+photoSpill,
    objectFit:split&&!photoLead?"contain":"cover",opacity:split?1:.9},undefined,{src:background}):null;
  children.push(el("div",{display:"flex",position:"relative",minHeight:heroH,flexDirection:"column",backgroundColor:hero,padding:margin,color:heroInk,flexShrink:0,borderBottom:"7px solid "+p.accent},[
    ...(photo?[photo]:[]),
@@ -134,7 +136,9 @@ function scene({plan,width,height,fontSize,background,palette,contrast,partition
  flush();
  const footerBg=hero;
  if(plan.footer.length)body.push(el("div",{display:"flex",width:inner,flexDirection:"column",gap:gap*.3,backgroundColor:footerBg,color:heroInk,padding:gap,borderRadius:preset.radius,flexShrink:0},plan.footer.map(t=>copy(t,t.role==="contact"?1.15:.9))));
- children.push(el("div",{display:"flex",flexDirection:"column",width,gap,padding:margin,flexShrink:0},body));
+ children.push(el("div",{display:"flex",position:"relative",flexDirection:"column",width,gap,padding:margin,flexShrink:0,
+   ...(photoSpill?{backgroundImage:"linear-gradient(90deg,"+p.paper+" 15%,"+p.paper+"00 38%),linear-gradient("+p.paper+"DB,"+p.paper+")",
+     backgroundSize:"100% "+photoSpill+"px,100% "+photoSpill+"px",backgroundRepeat:"no-repeat,no-repeat"}:{})},body));
  return {tree:el("div",{display:"flex",flexDirection:"column",position:"relative",width,height,color:p.ink,backgroundColor:p.paper,fontFamily:"Noto CJK"},children),consumed,margin:0};
 }
 module.exports={scene,mix,accessibleAccent};

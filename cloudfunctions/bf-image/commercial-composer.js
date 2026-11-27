@@ -26,10 +26,11 @@ function paletteOf(structured, prompt) {
   const p = structured?.print_style?.palette;
   if (p && ["background","ink","accent"].every(k => /^#[0-9a-f]{6}$/i.test(p[k] || ""))) {
     // Contrast is verified below; invalid light-on-light palettes do not pass.
-    return { paper:p.background, ink:p.ink, accent:p.accent };
+    return { paper:p.background, ink:p.ink, accent:p.accent, explicit:true };
   }
   const intent = [structured?.design_brief?.visual_approach, prompt].filter(Boolean).join(" ").split(/[。；;\n]/).filter(s=>!/(不要|避免|禁止|不使用|不用)/.test(s)).join(" ");
-  if(/深蓝底|暗色|深色背景|深蓝背景/.test(intent))return {paper:"#102039",ink:"#EAF2FA",accent:"#64C6E8"};
+  if(/深蓝底|深色背景|深蓝背景/.test(intent))return {paper:"#102039",ink:"#EAF2FA",accent:"#64C6E8",explicit:true};
+  if(/暗色/.test(intent))return {paper:"#102039",ink:"#EAF2FA",accent:"#64C6E8"};
   if (/森林绿|深绿|墨绿|forest/i.test(intent)) return {paper:"#F7F3E9",ink:"#183C34",accent:"#B65A2D"};
   if (/朱红|赭红|暖|橙|warm|orange/i.test(intent)) return {paper:"#FBF5E9",ink:"#253A3E",accent:"#C54E26"};
   if (/深蓝|墨蓝|科技|blue/i.test(intent)) return {paper:"#F1F5FA",ink:"#162D4C",accent:"#216CBA"};
@@ -181,7 +182,7 @@ async function compose({structured,prompt,width,height,fonts,background,satori,r
   if(!Array.isArray(items)||!items.length||new Set(items.map(t=>t.key)).size!==items.length)throw fail("COMPOSITION_COPY_INVALID");
   if(items.length>80||items.some(t=>typeof t.text!=="string"||t.text.length>8000)||items.reduce((n,t)=>n+t.text.length,0)>12000)throw fail("COMPOSITION_COPY_LIMIT");
   if(![width,height].every(n=>Number.isInteger(n)&&n>=64&&n<=8192)||width*height>4622220)throw fail("COMPOSITION_CANVAS_INVALID");
-  const palette={...paletteOf(structured,prompt),explicit:!!structured?.print_style?.palette};
+  const palette=paletteOf(structured,prompt);
   const plan=designEngine==="poster"?require("./commercial-design-plan").planOf({structured,prompt,width,height,content:contentOf(items)}):null;
   if(contrast(palette.paper,palette.ink)<4.5)throw fail("COMPOSITION_CONTRAST_INVALID");
   const product=designEngine==="product_v2",short=Math.min(width,height),minimum=product?Math.max(28,short*.0175):Math.max(18,short*.0125,width*.0075);
