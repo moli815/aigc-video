@@ -10,7 +10,9 @@ const DESIGN_WORDS = /风格|版式|布局|构图|画风|配色|色调|插画|�
 const DELEGATED_DESIGN = /^(?:(?:画面)?(?:的)?(?:风格|版式|排版|布局|构图|配色|色调)[与和、及]?)+(?:由你|交给你|让你|你)?(?:来|自己|自行|自由|随意|看着|灵活|按内容|根据内容)*(?:决定|定|设计|选择|选|安排|发挥|调整|来)?(?:就好|即可|就行)?$/;
 const ROLES = new Set(['title', 'subtitle', 'label', 'body', 'contact', 'footer']);
 const LEGACY_COMPILED = /(?:^|\n)以下文字逐字照写、不得改动；画面不出现其它文字、伪字或乱码：/;
+const DEFAULT_COLOR_DIRECTION = '按主题、用途和受众选择媒介和配色。适合鲜明视觉时，默认用与内容相配的高饱和主色或强调色贯穿主视觉、背景细节与重点。正文区保持清楚的对比。用户指定的风格、配色和品牌视觉优先，并保留水墨等媒介本身的色彩特点。';
 const PLANNER_GUIDANCE = [
+  DEFAULT_COLOR_DIRECTION,
   '【海报设计简报】按本轮要交付的成品、受众、主题及已确认事实构思。优先执行用户明确指定的媒介、色彩、构图、留白、信息量与禁止项；其次是本轮选定的风格参考，同主题、同项目且用户确认的偏好仅补空缺。新主题由本轮内容决定美术，不把旧项目的漫画、卡通或色系当作跨项目默认，也不因为Logo自身是插画就沿用到整张图。科技新闻以当期真实内容选择编辑式排版、信息图及相关科技场景，其他主题按自身素材决定。品牌和参考原件按用途绑定。',
   '默认商业海报以主视觉统领整页。标题与主题场景、插画或材质呼应；挑适合可视化的栏目，给它们各自相关的业务细节。用与业务有关的环境、材质或图形语言衔接标题区、边缘和区块间；通过前中后景、统一色彩与明暗层次建立完整画面，正文背后降低纹理细节、保持高对比。用已确认的功能用途承载信息密度，保留原件、数字和图文对应。这些视觉内容和选用的媒介写进简报。不要因字多自行禁用照片或配图、留大片空底，也不强制固定栏数或同款卡片。用户要求的极简、留白、无配图和纯摄影照做。',
   'prompt 写简短自然的视觉委托，交代主体、场景、表现手法及必要约束，约300字以内；已提供的图片只说明编号与作用。定稿全部放 structured.text，视觉简报不再重列标签、编号和文案，也不单独重排同一栏目。仅有真实先后关系时画流程。在 design_brief.visual_map 里按正文 key 对应表现形式，用具体的主题场景、细节或图解说明怎么表达。整图改款保留原稿主体、定稿和用户未要求改变的内容关系。',
@@ -157,13 +159,14 @@ function compile({ visual, structured, density }) {
   // For whole-artwork restyling, artwork is the authoritative visual input.
   // The planner's invented aesthetic restrictions must not overrule it.
   const direction=reference?reference:polished||brief;
+  const color = density === 'dense' && !explicit ? DEFAULT_COLOR_DIRECTION : '';
   const planned = density === 'dense' && !reference && Array.isArray(structured.design_brief?.visual_map)
     ? compileDesignBrief(structured.design_brief, { visualExecution: true, items: rows })
     : '';
-  if (planned) return [priority, design, polished, planned].filter(Boolean).join('\n');
-  return [priority, design, direction,
+  if (planned) return [priority, design, color, polished, planned].filter(Boolean).join('\n');
+  return [priority, design, color, direction,
     '以下引号内是全部可见文案；中文和英文都以清单为准，留白处只画相关实物或图形。不要自行做英文副标、口号、页眉或页脚。每个栏目标题和它的说明合在唯一一处，逐字印刷一次。末栏若有行动信息就在该栏呈现，不另抄到底栏。装饰、图示和非原件小插画仅用无字图形，不加清单外的编号、词句、数字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
 }
 
-module.exports = { PLANNER_GUIDANCE, posterRequested, nativePoster, normalizeRows, copyOf, mark, modeFor, compile };
+module.exports = { PLANNER_GUIDANCE, DEFAULT_COLOR_DIRECTION, posterRequested, nativePoster, normalizeRows, copyOf, mark, modeFor, compile };

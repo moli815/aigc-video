@@ -228,9 +228,27 @@ test('two uploaded originals: restyle with numbered logo keeps source copy and a
     text:[{role:'title',text:'和正文'}],preserve_assets:[{box:{x:.82,y:.04,width:.1,height:.08}}]}})}};
   const args = JSON.parse(finalizeUploadedLogoAddition([decoy], intent)[0].function.arguments);
   assert.deepEqual(args.source_indexes,[1,2]);
-  assert.equal(args.source,'attached'); assert.equal(args.structured.preserve_assets[0].reference_index,2);
-  assert.equal(args.structured.preserve_outside,false); assert.deepEqual(args.structured.text,[]);
+  assert.equal(args.source,'attached');
+  assert.deepEqual(args.reference_roles,['原海报', 'Logo原件']);
+  assert.equal(args.structured.preserve_assets,undefined);
+  assert.deepEqual(args.structured.text,[]);
   assert.match(args.prompt,/科技风/); assert.doesNotMatch(args.prompt,/霓虹|和正文/);
+  const legacy = uploadedLogoAddition(messages,'把这张海报换成科技风并加上图二的logo');
+  const local = JSON.parse(finalizeUploadedLogoAddition([decoy],legacy)[0].function.arguments);
+  assert.equal(local.structured.preserve_assets[0].reference_index,2);
+  assert.equal(local.structured.preserve_outside,false);
   assert.deepEqual(uploadedLogoAddition(messages, '改成水墨风并加上图一的徽标').indices,[2,1]);
   assert.equal(uploadedLogoAddition(messages,text+'，并把标题改成夜航'),null);
+});
+
+test('poster palette defaults to a content-driven saturated accent and keeps explicit requests', () => {
+  const {mark, compile, DEFAULT_COLOR_DIRECTION} = require('../cloudfunctions/shared/poster-delivery');
+  const text=[{key:'t',role:'title',text:'AI 热讯日报'}];
+  const visual='主视觉展示相应主题的现场';
+  assert.ok(compile({visual,structured:mark({text},'制作一张海报'),density:'dense'}).includes(DEFAULT_COLOR_DIRECTION));
+  const user='采用低饱和配色和黑白摄影，用大量留白';
+  const explicit=compile({visual,structured:mark({text},user),density:'dense'});
+  assert.ok(explicit.includes(user)); assert.ok(!explicit.includes(DEFAULT_COLOR_DIRECTION));
+  const minimal=compile({visual,structured:mark({text},'极简海报，只写标题'),density:'sparse'});
+  assert.ok(!minimal.includes(DEFAULT_COLOR_DIRECTION));
 });

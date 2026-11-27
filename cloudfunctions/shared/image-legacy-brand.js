@@ -44,7 +44,8 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
   if (messages.some(message => message?.role === "system" && typeof message.content === "string" && message.content.includes(VERSION))) return messages;
   const intent = uploadedLogoAddition(messages, require('./verbatim-image-prompt').authoredText(messages));
   const guidance = intent?.style
-    ? '本轮只改变上传底图的视觉风格并添加另一张上传的Logo。使用image_edit，source=attached，先底图后Logo，按底图可用留白测量一个不盖字的box写入preserve_assets。保留原稿全部文字，structured.text=[]。勿生成新标题或重新设计素材。'
+    ? '用一次 image_edit。按本轮附件顺序区分原海报和Logo，保留原海报的阅读顺序和文案。按用户指定风格设计，不写新标题。' +
+      (intent.composeExact ? '在底图上测量不遮挡内容的小框，填入 preserve_assets。' : '')
     : RULE;
   return [...messages, { role: "system", content: guidance }];
 }
@@ -64,7 +65,9 @@ function uploadedLogoAddition(messages, text) {
   const uploads = (base ? parts.slice(3) : parts).filter(part => part?.type === 'image_url');
   if (styleEdit && uploads.length === 2) {
     const logoIndex = /[一1]/.test(styleEdit[2] || styleEdit[3]) ? 1 : 2;
-    return {base: true, style: styleEdit[1], indices: [3 - logoIndex, logoIndex]};
+    // Older app builds treat “换 … 这张 … Logo” as requiring exact local composition.
+    // Keep that transport contract while allowing the unambiguous restyle to co-design its logo.
+    return {base: true, style: styleEdit[1], indices: [3 - logoIndex, logoIndex], composeExact: /这张|原图/.test(text)};
   }
   if (styleEdit) return null;
   if (correction && (!base || !parts[0].text.startsWith('【本次编辑前生成图预览】已回到上次贴标前的原海报。'))) return {base:false};
@@ -80,15 +83,25 @@ function finalizeUploadedLogoAddition(calls, intent) {
     };
     if (!intent.base || call.function.name !== 'image_edit') reject();
     const args = JSON.parse(call.function.arguments);
+    if (intent.style && !intent.composeExact) {
+      return { ...call, function: { ...call.function, arguments: JSON.stringify({
+        source: 'attached', source_indexes: intent.indices, reference_roles: ['原海报', 'Logo原件'],
+        prompt: '图1是要调整风格的原海报，图2是必须使用的原Logo。保留图1的标题、日期、原文、各栏目、图文关系和阅读顺序。换成' +
+          intent.style + '。按题材选合适的色彩与媒介。适合亮色时，让清亮高饱和的主题色贯穿主视觉、区块和背景，用主题相关场景、纹理或光线建立层次，让正文易读。' +
+          '将图2放入一个与文字、边距和光线自然呼应的小位置，去除外圈白底，保留完整标志形状和色彩，只出现一次。画面只保留原稿文字。',
+        structured: { text: [] }
+      }) } };
+    }
     const asset = args.structured?.preserve_assets?.[0];
     const validBox = asset?.box && ['x','y','width','height'].every(key => Number.isFinite(asset.box[key]));
     if (!validBox || args.structured.preserve_assets.length !== 1) reject();
     const {x,y,width,height} = asset.box;
     if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1 || width * height > 0.35) reject();
     if (intent.style) {
+      const color = ' ' + require('./poster-delivery').DEFAULT_COLOR_DIRECTION;
       return { ...call, function: { ...call.function, arguments: JSON.stringify({
         source: 'attached', source_indexes: intent.indices, reference_roles: ['原海报', 'Logo原件'],
-        prompt: '以底图原海报为准。仅将视觉表现调整为' + intent.style + '。沿用原稿标题、日期、栏目及每段原文。只改变配色、材质与无字装饰，保持文字清晰可读。',
+        prompt: '以底图原海报为准。仅将视觉表现调整为' + intent.style + '。沿用原稿标题、日期、栏目及每段原文。只改变配色、材质与无字装饰，保持文字清晰可读。' + color,
         structured: { text: [], preserve_outside: false, exact_logo_addition: true, preserve_assets: [
           {reference_index: 2, kind: 'logo', background: 'auto', box: {x,y,width,height}}
         ] }
