@@ -230,3 +230,13 @@ test('a colloquial user style survives reference compilation without the default
   assert.ok(prompt.includes(request));
   assert.doesNotMatch(prompt,/四列卡片|高饱和/);
 });
+
+test('a numbered product set and its final logo survive catalog planning', () => {
+  const {apply}=require('../cloudfunctions/bf-api/intent-contract');
+  const userText='用这13张产品图和最后的Logo制作一张蓝橙工业风横版产品海报。只使用图中能确认的产品，全部放进去，保留编号对应。';
+  const call={function:{name:'image_generate',arguments:JSON.stringify({source:'attached',source_indexes:[1,2],reference_roles:['图册1','图册2'],
+    structured:{text:[{key:'t',role:'title',text:'产品海报'}]}})}};
+  const run=text=>JSON.parse(apply([call],{userText:text,currentImageCount:14})[0].function.arguments);
+  assert.equal(run(userText).use_entire_catalog,true);
+  assert.equal(run(userText+'只用第二张').use_entire_catalog,false);
+});

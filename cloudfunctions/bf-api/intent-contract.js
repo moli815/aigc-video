@@ -29,7 +29,10 @@ const CONTACT = /(?:400|800)[-\s]?\d{3,4}[-\s]?\d{3,4}|0\d{2,3}[-\s]?\d{7,8}|1[3
 function wantsAllAttachments(request) {
   // “仅用已有素材” limits provenance, while “仅用第二张” limits selection.
   const text = String(request || '').replace(/(?:仅用|只用)(?:我(?:发的|上传的)?|本轮|已有|已给|现有|提供的|上传的)(?:的)?(?:素材|附件|产品图|图片)/g,'');
-  return /都用上|全部使用|全部用上|每张都|(?:原件|产品图|照片|素材)(?:全都|都|全部)(?:放进|放上|用上)|所有产品图|所有附件|全部产品图/.test(text)
+  const explicitAll = /都用上|全部使用|全部用上|每张都|(?:原件|产品图|照片|素材)(?:全都|都|全部)(?:放进|放上|用上)|所有产品图|所有附件|全部产品图/.test(text);
+  const numberedPhotos = /(?:用|使用|选用)这?\s*\d+\s*张(?:产品图|图片|照片)/.test(text);
+  const includeSet = numberedPhotos && /(?:全部|全都)(?:放进|放上)/.test(text);
+  return (explicitAll || includeSet)
     && !/只用|仅用|不要用|别用|不使用|不要全|别全|不用全|不必全|不需要全/.test(text);
 }
 
