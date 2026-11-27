@@ -33,14 +33,24 @@ extension ChatViewModel {
             saveOrWarn()
             return
         }
-        let currentImages = attachments.filter(\.isImage)
+        let conversationHistory = conv.messages.sorted { $0.createdAt < $1.createdAt }
+        let userTurn = conversationHistory.last { $0.role == "user" }
+        let restoredLogo = userTurn.flatMap { GeneratedImagePlanningContext.previousLogoSources(in: conversationHistory, before: $0) }
+        let imageAttachments = restoredLogo.map { files(for: $0.upload) } ?? attachments
+        let currentImages = imageAttachments.filter(\.isImage)
+        if ImageReferenceResolver.asksForLogoOnlyCorrection(userText), attachments.isEmpty,
+           restoredLogo == nil || currentImages.count != 1 {
+            assistantMessage.text = "请选中要保留的原海报，并附上原 Logo，我会只添加这一处。"
+            saveOrWarn()
+            return
+        }
         let attachmentLimit = HostedAccount.isHostedActive ? HostedAccount.cachedImageAttachmentLimit : ImageReferenceResolver.maxAttachments
         guard currentImages.count <= attachmentLimit else {
             assistantMessage.text = "一轮最多处理 \(attachmentLimit) 张图片。请分批上传后再试。"
             saveOrWarn()
             return
         }
-        let localImageWork = ImageReferenceResolver.isLocalImageWork(userText, hasImage: !currentImages.isEmpty)
+        let localImageWork = restoredLogo != nil || ImageReferenceResolver.isLocalImageWork(userText, hasImage: !currentImages.isEmpty)
         let searchAllowed = researchMode != .local && !localImageWork
         if searchAllowed && ResearchIntent.needsSpecificTarget(userText) {
             let topic = ResearchIntent.searchSeed(from: userText)
@@ -81,7 +91,7 @@ extension ChatViewModel {
         var nativeSearchRejected = false
         var presentedQueries = Set<String>()
         researchSummary = nil
-        let lastGeneratedMessage = conv.messages
+        let lastGeneratedMessage = restoredLogo?.base ?? conv.messages
             .filter { $0.role == "assistant" && ($0.imageData != nil || !CloudAssetStore.references($0.imageAssetsJSON).isEmpty) }
             .sorted { $0.createdAt < $1.createdAt }
             .last
@@ -445,6 +455,15 @@ extension ChatViewModel {
                                 "content": ToolPipeline.failureNote(pluginID: call.name, reason: error.localizedDescription)])
                             continue
                         }
+                        if restoredLogo != nil {
+                            let structured = args?["structured"] as? [String: Any]
+                            guard call.name == "image_edit", args?["source"] as? String == "both",
+                                  structured?["exact_logo_addition"] as? Bool == true else {
+                                assistantMessage.text = "请选中贴标前的原海报和原 Logo，再指定放置位置。"
+                                saveOrWarn()
+                                return
+                            }
+                        }
                         let prompt = args?["prompt"] as? String ?? userText
                         // P0-64 missingArgsNote 接入：prompt 缺失（且无用户原话兜底）时明确报错而非执行空请求
                         if prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -473,7 +492,7 @@ extension ChatViewModel {
                             // 图片来源由单一 resolver 落地，附件序号与发给多模态模型的顺序一致。
                             var refs: [Data] = []
                             let toolName = call.name
-                            let attachedCandidates = imageReferenceCandidates(currentAttachments: attachments, in: conv)
+                            let attachedCandidates = imageReferenceCandidates(currentAttachments: imageAttachments, in: conv)
                             let sourceIndex = (args?["source_index"] as? Int)
                                 ?? (args?["source_index"] as? NSNumber)?.intValue
                                 ?? 1
@@ -1089,9 +1108,11 @@ extension ChatViewModel {
         // 10-23 修复：首 token 超时也会触发 Task.isCancelled，但此时 errorMessage 已设置，
         // 需要保留空的 assistantMessage 以便 retryReply 能正常工作；只有用户主动停止且无错误时才删除。
         if Task.isCancelled {
-            if errorMessage == nil, assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
+            if singleImageDelivered {
+                assistantMessage.text = ImageTaskStatus.doneText
+            } else if errorMessage == nil, assistantMessage.text.isEmpty && assistantMessage.imageData == nil {
                 modelContext.delete(assistantMessage)
-            } else if !assistantMessage.text.isEmpty {
+            } else if !assistantMessage.text.isEmpty, imageTurnNote != ImageTaskStatus.Failure.generateFailed.message {
                 assistantMessage.text += "\n\n*（已停止生成）*"
             }
         }

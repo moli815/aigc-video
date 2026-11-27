@@ -79,7 +79,15 @@ enum PreservedAssetWorkflow {
             let replacingExisting = ["替换", "换掉", "更换", "换成", "换为", "改成"].contains { promptText.contains($0) }
             let aspect = max(0.05, image.size.width / max(1, image.size.height))
             let placementBox: CGRect
-            if replacingExisting {
+            if context.structured?["exact_logo_addition"] as? Bool == true {
+                // Keep the placement inside the planner's free space, including when the
+                // nearest grid corner contains a headline or a previously printed mark.
+                let canvas = original.size
+                let suggested = BrandPlacementPlanner.adjust(box: box, logoAspect: aspect, canvas: canvas, hint: context.prompt)
+                let w = min(box.width, suggested.width / canvas.width)
+                let h = min(box.height, suggested.height / canvas.height)
+                placementBox = CGRect(x: box.midX - w/2, y: box.midY - h/2, width: w, height: h)
+            } else if replacingExisting {
                 placementBox = box
             } else {
                 let canvas = original.size
@@ -100,7 +108,13 @@ enum PreservedAssetWorkflow {
         let regions = placements.map { p in
             "<bbox>\(Int(p.cleanBox.minX*999)),\(Int(p.cleanBox.minY*999)),\(Int(p.cleanBox.maxX*999)),\(Int(p.cleanBox.maxY*999))</bbox>"
         }.joined(separator:"；")
-        let background = ImageRequestContext(prompt:context.prompt + "\n本次仅处理底图：清除区域\(regions)中的旧标识并自然补齐背景，不绘制替换Logo/商标/二维码。原始素材将于后续直接合成，其形状与文字不得由模型重新设计。",
+        let assetInstruction: String
+        if context.structured?["exact_logo_addition"] as? Bool == true {
+            assetInstruction = "\n在区域\(regions)保留适合小标识的空位，保留原稿全部文字。标识由程序合成，图中无需绘制新标识、占位字或版式指令。"
+        } else {
+            assetInstruction = "\n本次仅处理底图：清除区域\(regions)中的旧标识并自然补齐背景，不绘制替换Logo/商标/二维码。原始素材将于后续直接合成，其形状与文字不得由模型重新设计。"
+        }
+        let background = ImageRequestContext(prompt:context.prompt + assetInstruction,
             references:references,taskKind:context.taskKind,qualityTier:context.qualityTier,
             requestedCount:context.requestedCount,aspectRatio:context.aspectRatio,renderIntent:context.renderIntent,
             structured:fields,layerDecomposition:context.layerDecomposition,targetSize:context.targetSize,

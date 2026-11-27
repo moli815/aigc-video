@@ -38,6 +38,21 @@ enum GeneratedImagePlanningContext {
         }
     }
 
+    @MainActor
+    static func previousLogoSources(in history: [Message], before user: Message) -> (base: Message, upload: Message)? {
+        guard user.attachmentIdList.isEmpty, ImageReferenceResolver.asksForLogoOnlyCorrection(user.text) else { return nil }
+        let turns = history.filter { $0.conversationID == user.conversationID && $0.role == "user" && $0.createdAt < user.createdAt }
+            .sorted { $0.createdAt > $1.createdAt }
+        for turn in turns {
+            if turn.attachmentIdList.isEmpty && ImageReferenceResolver.asksForLogoOnlyCorrection(turn.text) { continue }
+            guard turn.attachmentIdList.count == 1, ImageReferenceResolver.addsUploadedLogoToPoster(turn.text),
+                  let base = latestGenerated(in: history.filter { $0.conversationID == user.conversationID }, before: turn)
+            else { return nil }
+            return (base, turn)
+        }
+        return nil
+    }
+
     static func canAppend(to messages: [[String: Any]]) -> Bool {
         guard HostedAccount.behaviorBool("generatedPreviewEnabled", default: true) else { return false }
         guard let user = messages.last(where: { $0["role"] as? String == "user" }) else { return false }
@@ -45,11 +60,11 @@ enum GeneratedImagePlanningContext {
         return parts.filter { $0["type"] as? String == "image_url" }.count < 6
             && !parts.contains { ($0["text"] as? String ?? "").hasPrefix(marker) }
     }
-    static func appending(_ url: String, to messages: [[String: Any]]) -> [[String: Any]] {
+    static func appending(_ url: String, to messages: [[String: Any]], restoredLogoBase: Bool = false) -> [[String: Any]] {
         guard canAppend(to: messages), url.hasPrefix("data:image/jpeg;base64,"),
               url.utf8.count <= maxPreviewBytes * 4 / 3 + 30 else { return messages }
         return prepending([
-            ["type": "text", "text": marker + "这是编辑前的底图，不是本轮编辑结果，仅供本次定位。source=last；both时为第1张底图。本预览不属于用户上传附件，不计入source_index。替换标识时定位完整旧标识区域，不覆盖邻近标题。原样替换上传素材必须在structured.preserve_assets填写reference_index=2、kind=logo、background=auto和box，不是仅写在prompt里；保留其余原图时preserve_outside=true且text=[]。"],
+            ["type": "text", "text": marker + (restoredLogoBase ? "已回到上次贴标前的原海报。" : "") + "这是编辑前的底图，不是本轮编辑结果，仅供本次定位。source=last；both时为第1张底图。本预览不属于用户上传附件，不计入source_index。替换标识时定位完整旧标识区域，不覆盖邻近标题。原样替换上传素材必须在structured.preserve_assets填写reference_index=2、kind=logo、background=auto和box，不是仅写在prompt里；保留其余原图时preserve_outside=true且text=[]。"],
             ["type": "image_url", "image_url": ["url": url]],
             ["type": "text", "text": "【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】"]
         ], to: messages)

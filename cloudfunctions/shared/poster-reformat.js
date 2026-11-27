@@ -71,7 +71,7 @@ function plan(input){
  const strict=/不加新内容|别加新内容|不新增|不得改字|原文保留/.test(intent.user_request);
  const required=Array.isArray(input.structured?.text)?input.structured.text.map(row=>row?.text).filter(row=>typeof row==="string"&&row.trim()):[];
  const copy=strict?[
-  '\n从图1核对并保留原文、栏目及带字原件。新绘装饰不添加文字。',
+  '\n从图1核对并保留原文、栏目及带字原件。按图1的栏目归属重排，每个条目只在原属栏目出现一次。仅改变构图或媒介，画面上不得新增解释图、流程箭头、标语和图注；新增场景细节保持无字。',
   required.length?'下列定稿逐项核对：'+required.map(text=>JSON.stringify(text)).join('、')+'。':'',
  ].filter(Boolean).join('\n'):'';
  const roles=images.length>1?'\n'+images.map((_,i)=>`图${i+1}：${String(input.referenceRoles?.[i]||(i===0?'待改版的原海报':'用户补充素材')).slice(0,120)}`).join('\n'):'';

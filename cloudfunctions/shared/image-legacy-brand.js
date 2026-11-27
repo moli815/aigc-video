@@ -42,18 +42,33 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
   if (!/logo|标识|标志|商标|徽标|二维码/i.test(text) ||
       !/添加|加上|加到|放到|放在|放上|贴|替换|换|抠|去底|去背景|透明|提取|搜索|查找/i.test(text)) return messages;
   if (messages.some(message => message?.role === "system" && typeof message.content === "string" && message.content.includes(VERSION))) return messages;
-  return [...messages, { role: "system", content: RULE }];
+  const intent = uploadedLogoAddition(messages, require('./verbatim-image-prompt').authoredText(messages));
+  const guidance = intent?.style
+    ? '本轮只改变上传底图的视觉风格并添加另一张上传的Logo。使用image_edit，source=attached，先底图后Logo，按底图可用留白测量一个不盖字的box写入preserve_assets。保留原稿全部文字，structured.text=[]。勿生成新标题或重新设计素材。'
+    : RULE;
+  return [...messages, { role: "system", content: guidance }];
 }
 
 function uploadedLogoAddition(messages, text) {
-  if (!/^(?:请)?在(?:这张|上一张|刚才的|原)?海报(?:上|里)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.test(text.trim())) return null;
+  const direct = /^(?:请)?在(?:这张|上一张|刚才的|原)?海报(?:上|里)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.test(text.trim());
+  const correction = /(?:我|其实|还是|就)?只(?:是想|需要|要|想|需)?\s*(?:在(?:原图|原海报|海报)上)?(?:加上|加|添加|贴上|放上)(?:之前的|那个|这个|公司)?\s*(?:logo|标识|标志|徽标)[。！!？? ]*$/i.test(text.trim());
+  // Only bind a pure restyle + numbered logo addition. A request to change copy,
+  // canvas, logo placement or other content must keep its full planning path.
+  const styleEdit = /^(?:请)?(?:把(?:这张|原)?(?:海报|图[一二12])|将(?:海报|图[一二12]))?(?:换成|改成|改为|换为)([^，。；、\n]{1,24}?风(?:格)?)(?:的)?[，, ]*(?:并且|同时|然后|并|再)?(?:加上|添加|贴上|放上)(?:第([一二12])张(?:图)?|图([一二12]))(?:中|上)?的\s*(?:logo|标志|标识|徽标)[。！! ]*$/iu.exec(text.trim());
+  if (!direct && !correction && !styleEdit) return null;
   const { isHistoryPreview } = require('./image-delivery');
   const parts = messages.findLast(message => message?.role === 'user' && !isHistoryPreview(message))?.content;
-  if (!Array.isArray(parts)) return null;
+  if (!Array.isArray(parts)) return correction ? {base:false} : null;
   const base = parts[0]?.text?.startsWith('【本次编辑前生成图预览】') && parts[1]?.type === 'image_url'
       && parts[2]?.text === '【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】';
   const uploads = (base ? parts.slice(3) : parts).filter(part => part?.type === 'image_url');
-  return uploads.length === 1 ? { base: Boolean(base) } : null;
+  if (styleEdit && uploads.length === 2) {
+    const logoIndex = /[一1]/.test(styleEdit[2] || styleEdit[3]) ? 1 : 2;
+    return {base: true, style: styleEdit[1], indices: [3 - logoIndex, logoIndex]};
+  }
+  if (styleEdit) return null;
+  if (correction && (!base || !parts[0].text.startsWith('【本次编辑前生成图预览】已回到上次贴标前的原海报。'))) return {base:false};
+  return uploads.length === 1 ? { base: Boolean(base) } : correction ? {base:false} : null;
 }
 
 function finalizeUploadedLogoAddition(calls, intent) {
@@ -70,6 +85,15 @@ function finalizeUploadedLogoAddition(calls, intent) {
     if (!validBox || args.structured.preserve_assets.length !== 1) reject();
     const {x,y,width,height} = asset.box;
     if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1 || width * height > 0.35) reject();
+    if (intent.style) {
+      return { ...call, function: { ...call.function, arguments: JSON.stringify({
+        source: 'attached', source_indexes: intent.indices, reference_roles: ['原海报', 'Logo原件'],
+        prompt: '以底图原海报为准。仅将视觉表现调整为' + intent.style + '。沿用原稿标题、日期、栏目及每段原文。只改变配色、材质与无字装饰，保持文字清晰可读。',
+        structured: { text: [], preserve_outside: false, exact_logo_addition: true, preserve_assets: [
+          {reference_index: 2, kind: 'logo', background: 'auto', box: {x,y,width,height}}
+        ] }
+      }) } };
+    }
     return { ...call, function: { ...call.function, arguments: JSON.stringify({
       source: 'both', source_index: 1, prompt: '在原海报上加上本轮上传的Logo。保持原图比例、标题、正文、插画和布局。',
       structured: { text: [], preserve_outside: true, exact_logo_addition: true,

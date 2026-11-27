@@ -205,3 +205,32 @@ test("adding one attached Logo preserves the selected poster and rejects ungroun
   assert.throws(() => finalizeUploadedLogoAddition([{function:{...edit.function,name:"image_generate"}}], intent), { code: "BRAND_PLAN_CONFLICT" });
   assert.equal(uploadedLogoAddition(withPreview, "在海报上加上这个logo，另外换成漫画风"), null);
 });
+
+test('纠错必须带贴标前原稿和同一份原Logo', () => {
+  const {uploadedLogoAddition} = require('../cloudfunctions/shared/image-legacy-brand');
+  const text = '我要科技风的 而且这个这个标题是个什么东西 我只要加上logo';
+  const parts = [{type:'text',text:'【本次编辑前生成图预览】已回到上次贴标前的原海报。'},
+    {type:'image_url'}, {type:'text',text:'【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】'},
+    {type:'text',text}, {type:'image_url'}];
+  const intent = content => uploadedLogoAddition([{role:'user',content}],text);
+  assert.deepEqual(intent(parts),{base:true});
+  assert.deepEqual(intent(parts.slice(3)),{base:false});
+  assert.deepEqual(intent(text),{base:false});
+  assert.deepEqual(intent([{type:'text',text:'【本次编辑前生成图预览】最新成图'},...parts.slice(1)]),{base:false});
+});
+
+test('two uploaded originals: restyle with numbered logo keeps source copy and asset roles', () => {
+  const {uploadedLogoAddition, finalizeUploadedLogoAddition} = require('../cloudfunctions/shared/image-legacy-brand');
+  const messages = [{role:'user',content:[{type:'image_url'},{type:'image_url'}]}];
+  const text = '换成科技风的并且加上图二的logo';
+  const intent = uploadedLogoAddition(messages, text);
+  const decoy = {function:{name:'image_edit',arguments:JSON.stringify({prompt:'标题区加冷蓝色霓虹光效',structured:{
+    text:[{role:'title',text:'和正文'}],preserve_assets:[{box:{x:.82,y:.04,width:.1,height:.08}}]}})}};
+  const args = JSON.parse(finalizeUploadedLogoAddition([decoy], intent)[0].function.arguments);
+  assert.deepEqual(args.source_indexes,[1,2]);
+  assert.equal(args.source,'attached'); assert.equal(args.structured.preserve_assets[0].reference_index,2);
+  assert.equal(args.structured.preserve_outside,false); assert.deepEqual(args.structured.text,[]);
+  assert.match(args.prompt,/科技风/); assert.doesNotMatch(args.prompt,/霓虹|和正文/);
+  assert.deepEqual(uploadedLogoAddition(messages, '改成水墨风并加上图一的徽标').indices,[2,1]);
+  assert.equal(uploadedLogoAddition(messages,text+'，并把标题改成夜航'),null);
+});

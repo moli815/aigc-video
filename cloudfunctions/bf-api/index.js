@@ -2901,7 +2901,7 @@ async function handleChat(req, res) {
   const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
     policy: uploadedLogo ? { enabled: true, audience: "all" } : RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
-  if (uploadedLogo && messages !== beforeLegacyBrand) {
+  if (uploadedLogo && !uploadedLogo.style && messages !== beforeLegacyBrand) {
     messages = [...messages, { role: "system", content: uploadedLogo.base
       ? "本轮是在原海报上加一枚上传的Logo。用一次image_edit，给附件Logo在原海报空位上选一个小边角框。不换标题，不重画正文，不放大成横幅。"
       : "原海报定位预览未收到。请让用户重新选中或上传需要编辑的原海报；先不要调用图片工具或宣称已添加。" }];

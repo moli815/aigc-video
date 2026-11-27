@@ -134,6 +134,28 @@ final class GeneratedImagePlanningContextTests: XCTestCase {
         XCTAssertEqual(actual.first, expected)
         XCTAssertEqual(messages.filter { $0["role"] as? String == "assistant" }.count, 2)
     }
+    func testLogoCorrectionUsesPreEditPosterAndOriginalUpload() async throws {
+        let (vm, conv) = try model()
+        let original = image(.blue)
+        _ = add("assistant", "", at: 1, data: original, to: conv, vm: vm)
+        let logo = try attachment(image(.green), vm: vm)
+        defer { try? FileManager.default.removeItem(at: FileStore.url(for: logo)) }
+        let edit = add("user", "在海报上加上这个logo", at: 2, to: conv, vm: vm)
+        edit.attachmentIds = logo.id.uuidString
+        _ = add("assistant", "", at: 3, data: image(.red), to: conv, vm: vm)
+        _ = add("user", "我要科技风的 而且这个这个标题是个什么东西 我只要加上logo", at: 4, to: conv, vm: vm)
+        try vm.modelContext.save()
+        let messages = await vm.buildAPIMessages(conv: conv)
+        let actual = try urls(messages)
+        let base = await GeneratedImagePlanningContext.dataURL(from: original)
+        let upload = await ChatViewModel.imageDataURL(for: logo)
+        XCTAssertEqual(actual.count, 2)
+        XCTAssertEqual(actual.first, base)
+        XCTAssertEqual(actual.last, upload)
+        _ = add("user", "另一个项目", at: 5, to: conv, vm: vm)
+        let next = add("user", "我只要加上logo", at: 6, to: conv, vm: vm)
+        XCTAssertNil(GeneratedImagePlanningContext.previousLogoSources(in: conv.messages, before: next))
+    }
     func testActualContextContainsGeneratedBaseAndCurrentLogoWithoutReordering() async throws {
         let (vm, conv) = try model()
         _ = add("assistant", "", at: 0, data: image(.blue), to: conv, vm: vm)

@@ -31,6 +31,12 @@ enum ImageReferenceResolver {
         return request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 
+    static func asksForLogoOnlyCorrection(_ text: String) -> Bool {
+        let pattern = #"(?:我|其实|还是|就)?只(?:是想|需要|要|想|需)?\s*(?:在(?:原图|原海报|海报)上)?(?:加上|加|添加|贴上|放上)(?:之前的|那个|这个|公司)?\s*(?:logo|标识|标志|徽标)[。！!？? ]*$"#
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     /// Resolve conflicts between the Agent's tool arguments and explicit user references.
     /// User intent wins: a mistaken `source=none/last` must not silently turn an edit into T2I.
     static func sourceOverride(requested: String?,

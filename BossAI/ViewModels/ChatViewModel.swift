@@ -392,13 +392,18 @@ final class ChatViewModel: ObservableObject {
         // 在循环处理最新消息时一并塞进 content。这样"先传图识别、再发文字做新海报"
         // 时模型仍能看到原图，避免误判为只改文字或选错工具。
         let latestUserMessage = sortedMessages.last(where: { $0.role == "user" })
+        let restoredLogo = latestUserMessage.flatMap { GeneratedImagePlanningContext.previousLogoSources(in: sortedMessages, before: $0) }
         let generatedPreview: Message?
-        if let user = latestUserMessage,
+        if let restoredLogo {
+            generatedPreview = restoredLogo.base
+        } else if let user = latestUserMessage,
            GeneratedImagePlanningContext.shouldInclude(userText: user.text, hasAttachedImages: files(for: user).contains(where: \.isImage)) {
             generatedPreview = GeneratedImagePlanningContext.latestGenerated(in: sortedMessages, before: user)
         } else { generatedPreview = nil }
         var carriedImageURL: String?
-        if let latestUser = latestUserMessage,
+        if let restoredLogo, let file = files(for: restoredLogo.upload).first(where: \.isImage) {
+            carriedImageURL = await Self.imageDataURL(for: file)
+        } else if let latestUser = latestUserMessage,
            generatedPreview == nil,
            latestUser.attachmentIdList.isEmpty,
            Self.mentionsImageGenerationOrEdit(latestUser.text) {
@@ -499,7 +504,7 @@ final class ChatViewModel: ObservableObject {
         if let generatedPreview {
             if GeneratedImagePlanningContext.canAppend(to: messages),
                let preview = await GeneratedImagePlanningContext.dataURL(for: generatedPreview, in: conv, owner: contextOwner, session: contextSession) {
-                messages = GeneratedImagePlanningContext.appending(preview, to: messages)
+                messages = GeneratedImagePlanningContext.appending(preview, to: messages, restoredLogoBase: restoredLogo != nil)
             } else {
                 messages = GeneratedImagePlanningContext.notingUnavailable(in: messages)
             }

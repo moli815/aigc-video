@@ -53,7 +53,13 @@ final class RenderingAndExportRegressionTests: XCTestCase {
         }
         XCTAssertLessThan(pulse.maxGap, max(1.0, duration * 0.5), "不得阻塞整个导出期间")
         let doc = try XCTUnwrap(PDFDocument(data: data))
-        let text = (0..<doc.pageCount).compactMap { doc.page(at: $0)?.string }.joined()
+        // The renderer prints page numbers below the 48-point body margin. PDFKit
+        // includes them in page.string, which interrupts a paragraph spanning pages.
+        let text = try (0..<doc.pageCount).map { index in
+            let page = try XCTUnwrap(doc.page(at: index))
+            let body = page.bounds(for: .mediaBox).insetBy(dx: 0, dy: 40)
+            return try XCTUnwrap(page.selection(for: body)?.string)
+        }.joined()
         let normalized = text.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
         let expected = content.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression)
         if !normalized.contains(expected) {

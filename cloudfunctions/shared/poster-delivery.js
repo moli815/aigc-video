@@ -162,7 +162,7 @@ function compile({ visual, structured, density }) {
     : '';
   if (planned) return [priority, design, polished, planned].filter(Boolean).join('\n');
   return [priority, design, direction,
-    '以下为全部印刷文字。每个栏目标题和它的说明合在唯一一处，逐字印刷一次。末栏若有行动信息就在该栏呈现，不另抄到底栏。装饰、图示和非原件小插画仅用无字图形，不加清单外的编号、词句、数字或占位文字。', ...copy]
+    '以下引号内是全部可见文案；中文和英文都以清单为准，留白处只画相关实物或图形。不要自行做英文副标、口号、页眉或页脚。每个栏目标题和它的说明合在唯一一处，逐字印刷一次。末栏若有行动信息就在该栏呈现，不另抄到底栏。装饰、图示和非原件小插画仅用无字图形，不加清单外的编号、词句、数字或占位文字。', ...copy]
     .filter(Boolean).join('\n');
 }
 

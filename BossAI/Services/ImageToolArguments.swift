@@ -29,10 +29,11 @@ enum ImageToolArguments {
         }
         if toolName == "image_edit", exactAssetReplacement {
             let historicalPair = (args["library_refs"] as? [String] ?? []).count >= 2
-            guard args["source"] as? String == "both" || historicalPair,
+            let attachedPair = args["source"] as? String == "attached" && (args["source_indexes"] as? [NSNumber])?.count == 2
+            guard args["source"] as? String == "both" || historicalPair || attachedPair,
                   let fields = args["structured"] as? [String:Any],
                   let assets = fields["preserve_assets"] as? [[String:Any]], !assets.isEmpty else {
-                throw InputError.invalid("原样替换上传Logo必须使用source=both、structured.preserve_assets=[{reference_index:2,kind:logo,background:auto,box:{x,y,width,height}}]；box根据底图预览估算旧Logo区域的归一化坐标，不要猜固定坐标。除Logo外保留原图：preserve_outside=true、text=[]，不要把已有标题再画一次。尚未调用作图模型，请补全参数后重新调用image_edit")
+                throw InputError.invalid("上次成图加上传Logo用source=both，两份上传原件用source=attached及底图在首的source_indexes。填写structured.preserve_assets=[{reference_index:2,kind:logo,background:auto,box:{x,y,width,height}}]；box根据底图预览估算旧Logo区域的归一化坐标，不要猜固定坐标。除Logo外保留原图：preserve_outside=true、text=[]，不要把已有标题再画一次。尚未调用作图模型，请补全参数后重新调用image_edit")
             }
         }
         if let reason = args["quality_reason"] {
