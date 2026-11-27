@@ -1,6 +1,7 @@
 "use strict";
 const {syncRecordKey}=require("./shared/sync-identifiers");
 const {documentOf}=require("./shared/document-store");
+const {authoredText}=require("./shared/verbatim-image-prompt");
 const VERSION="confirmed-image-context-v1";
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function messageText(m) { return typeof m?.content==="string"?m.content:Array.isArray(m?.content)?m.content.filter(p=>p?.type==="text").map(p=>p.text||"").join("\n"):""; }
@@ -32,7 +33,9 @@ async function restoreSyncedImageContext(messages,{owner,db,enabled,observe=()=>
   if(!enabled||!owner||!db)return messages;
   const existing=userExcerpts(messages);
   let recovered=[];
-  const anchors=messages.filter(m=>m?.role==="user").map(messageText).filter(t=>t.length>=24).slice(-4);
+  const userTurns=messages.filter(m=>m?.role==="user").map(m=>authoredText([m])).filter(Boolean);
+  const latest=userTurns.at(-1);
+  const anchors=[...userTurns.slice(0,-1).filter(t=>t.length>=24).slice(-3),latest].filter(Boolean);
   if(anchors.length>=2 && (messages.length>=30 || messages.reduce((n,m)=>n+messageText(m).length,0)>=20000)){
     try {
       const recent=(await db.collection("bf_sync_v2").where({accountId:owner,kind:"message"}).orderBy("revision","desc").limit(100).get()).data||[];
@@ -54,7 +57,7 @@ async function restoreSyncedImageContext(messages,{owner,db,enabled,observe=()=>
             db.collection("bf_sync_v2").where({accountId:owner,kind:"message",parentId:parent}).orderBy("revision","desc").limit(100).get(),
           ]);
           const rows=[...new Map(pages.flatMap(p=>p.data||[]).map(r=>[r.refId||r._id||JSON.stringify(r.payload),r])).values()];
-          const visible=new Set(messages.filter(m=>m?.role==="user").map(messageText));
+          const visible=new Set(userTurns);
           const missing=rows.map(r=>payloadOf(r,owner)).filter(p=>p&&!visible.has(p.text)&&Number.isFinite(Number(p.createdAt))&&Number(p.createdAt)<=matchedTimes.get(parent)).sort((a,b)=>Number(a.createdAt)-Number(b.createdAt));
           recovered=userExcerpts(missing.map(p=>({role:"user",content:p.text})),10000).map(e=>({...e,origin:"synced_user_same_conversation"}));
         }

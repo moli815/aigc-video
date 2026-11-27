@@ -26,13 +26,15 @@ const RATIO = /(\d{1,2}(?:\.\d+)?)\s*[:：]\s*(\d{1,2}(?:\.\d+)?)/g;
 const CONTACT = /(?:400|800)[-\s]?\d{3,4}[-\s]?\d{3,4}|0\d{2,3}[-\s]?\d{7,8}|1[3-9]\d{9}/;
 
 /** 把「不要横版」这类否定说法先规范化，避免竖/横互相抵消 */
-function wantsAllAttachments(request) {
+function wantsAllAttachments(request,count) {
   // “仅用已有素材” limits provenance, while “仅用第二张” limits selection.
   const text = String(request || '').replace(/(?:仅用|只用)(?:我(?:发的|上传的)?|本轮|已有|已给|现有|提供的|上传的)(?:的)?(?:素材|附件|产品图|图片)/g,'');
   const explicitAll = /都用上|全部使用|全部用上|每张都|(?:原件|产品图|照片|素材)(?:全都|都|全部)(?:放进|放上|用上)|所有产品图|所有附件|全部产品图/.test(text);
   const numberedPhotos = /(?:用|使用|选用)这?\s*\d+\s*张(?:产品图|图片|照片)/.test(text);
   const includeSet = numberedPhotos && /(?:全部|全都)(?:放进|放上)/.test(text);
-  return (explicitAll || includeSet)
+  const together=/(?:把|用)这(几|[一二三四五六七八九十]|\d+)张(?:产品图|图片|照片|图)(?:一起)?(?:做|制作|生成|合成|排成)/.exec(text)?.[1];
+  const requestedCount=together&&(Number(together)||"一二三四五六七八九十".indexOf(together)+1);
+  return (explicitAll || includeSet || together==="几" || requestedCount===count)
     && !/只用|仅用|不要用|别用|不使用|不要全|别全|不用全|不必全|不需要全/.test(text);
 }
 
@@ -242,7 +244,7 @@ function apply(calls, intent, observe) {
     let changed = null;
     const count = intent.currentImageCount;
     // The iPad converts large selections into sheets; the server owns the choice.
-    const allAttachments = wantsAllAttachments(intent.userText);
+    const allAttachments = wantsAllAttachments(intent.userText,count);
     if (fn.name === 'image_generate' && count > 0) {
       args.use_entire_catalog = allAttachments;
       const lastLogo = count > 6 && count <= 16 && allAttachments && !intent.verbatim &&
@@ -268,17 +270,38 @@ function apply(calls, intent, observe) {
       }
       changed = {catalogSelection: allAttachments};
     }
-    if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2 && count <= 6
-        && !args.library_refs?.length && !args.structured?.image_references && !args.structured?.image_plan
-        && !args.structured?.preserve_assets?.length && !args.structured?.poster_reformat
-        && allAttachments) {
+    if (fn.name === 'image_generate' && [undefined,'auto','none','attached'].includes(args.source) && count >= 2
+        && !args.library_refs?.length && !args.structured?.image_references
+        && !args.structured?.preserve_assets?.length && !args.structured?.poster_reformat && allAttachments) {
+      const plan = args.structured?.image_plan;
       const oldIndices = args.source_indexes || [args.source_index || 1];
-      const roles = new Map(oldIndices.map((index, slot) => [index, args.reference_roles?.[slot]]));
-      args.source = 'attached';
-      args.source_indexes = Array.from({ length: count }, (_, slot) => slot + 1);
-      delete args.source_index;
-      args.reference_roles = args.source_indexes.map(index => roles.get(index) || ('本轮素材' + index));
-      changed = { completeCurrentReferences: count };
+      const protectedRefs = plan?.protected_references || [];
+      if (count <= 6 && protectedRefs.every(ref => oldIndices[ref.index - 1] >= 1 && oldIndices[ref.index - 1] <= count)) {
+        const roles = new Map(oldIndices.map((index, slot) => [index, args.reference_roles?.[slot]]));
+        args.source = 'attached';
+        args.source_indexes = Array.from({length: count}, (_,slot) => slot + 1);
+        delete args.source_index;
+        args.reference_roles = args.source_indexes.map(index => roles.get(index) || ('本轮素材' + index));
+        if (plan) {
+          plan.reference_count = count;
+          plan.protected_references = protectedRefs.map(ref => ({...ref,index:oldIndices[ref.index - 1]}));
+        }
+        changed = {completeCurrentReferences:count};
+      } else if (count > 6 && count <= 16 && !plan && !intent.verbatim) {
+        // The installed app reconstructs the full selection from its ordered sheets.
+        // Compatible hints can still let it upload a separate Logo original.
+        const pairs = args.print_catalog_originals && Array.isArray(args.source_indexes)
+          ? args.source_indexes.map((index, slot) => [index, args.reference_roles?.[slot]]).filter(([index]) => index >= 1 && index <= 6)
+          : [];
+        args.source = 'attached';
+        delete args.source_index;
+        delete args.source_indexes;
+        delete args.reference_roles;
+        if (pairs.length) {
+          args.source_indexes = pairs.map(([index]) => index);
+          if (pairs.every(([,role]) => role)) args.reference_roles = pairs.map(([,role]) => role);
+        }
+      }
     }
     // Binding happens after membership/reference finalization, using only this user turn.
     if (intent.verbatim && fn.name !== 'image_series') {

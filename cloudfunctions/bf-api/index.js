@@ -2937,7 +2937,8 @@ async function handleChat(req, res) {
   if (referenceLines.length) intent.referenceLines = referenceLines;
   // 交付要求：自动识别附件角色，把「不许拉伸/不许占位/不许重复/Logo 用原件」等写成约束
   const rg = require("./requirement-guard");
-  const roles = rg.classify(rg.collectImages(messages), imageUserText || "");
+  const roleImages = rg.collectImages(messages);
+  const roles = rg.classify(intent.currentImageCount > roleImages.length ? [] : roleImages, intent.userText);
   const reqNote = rg.buildRequirements({ roles, company: intent.company, contact: intent.contact });
   if (reqNote) messages = messages.concat([{ role: "system", content: reqNote }]);
   intent.enforceSpec = { company: intent.company, contact: intent.contact };

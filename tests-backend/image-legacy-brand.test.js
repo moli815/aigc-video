@@ -252,3 +252,32 @@ test('poster palette defaults to a content-driven saturated accent and keeps exp
   const minimal=compile({visual,structured:mark({text},'极简海报，只写标题'),density:'sparse'});
   assert.ok(!minimal.includes(DEFAULT_COLOR_DIRECTION));
 });
+
+test('a named corner for the uploaded Logo is kept on the selected original poster',()=>{
+ const {uploadedLogoAddition,finalizeUploadedLogoAddition}=require('../cloudfunctions/shared/image-legacy-brand');
+ const text='请在原海报右下角加上这个Logo';
+ const intent=uploadedLogoAddition([{role:'user',content:[
+  {type:'text',text:'【本次编辑前生成图预览】'},{type:'image_url'},
+  {type:'text',text:'【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】'},
+  {type:'text',text},{type:'image_url'}
+ ]}],text);
+ assert.deepEqual(intent,{base:true,corner:'右下角'});
+ const make=(x,y)=>[{function:{name:'image_edit',arguments:JSON.stringify({prompt:'放在左上角并重排文字',structured:{
+  preserve_assets:[{reference_index:2,box:{x,y,width:.08,height:.08}}]}})}}];
+ assert.throws(()=>finalizeUploadedLogoAddition(make(.08,.08),intent),{code:'BRAND_PLAN_CONFLICT'});
+ const args=JSON.parse(finalizeUploadedLogoAddition(make(.83,.81),intent)[0].function.arguments);
+ assert.equal(args.source,'both');
+ assert.equal(args.source_index,1);
+ assert.equal(args.structured.preserve_outside,true);
+ assert.deepEqual(args.structured.text,[]);
+ assert.match(args.prompt,/右下角/);
+ assert.doesNotMatch(args.prompt,/左上角|重排/);
+ const twoUploads=[{role:'user',content:[{type:'image_url'},{type:'image_url'}]}];
+ const selected=uploadedLogoAddition(twoUploads,'请在图二海报左下角加上图一的Logo');
+ assert.deepEqual(selected,{base:true,corner:'左下角',indices:[2,1]});
+ const attached=JSON.parse(finalizeUploadedLogoAddition(make(.08,.81),selected)[0].function.arguments);
+ assert.equal(attached.source,'attached');
+ assert.deepEqual(attached.source_indexes,[2,1]);
+ assert.match(attached.prompt,/左下角/);
+
+});

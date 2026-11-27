@@ -8,13 +8,12 @@
  * 这个模块把它变成产品行为：自动识别附件角色、自动生成要求、自动校验返回的文案。
  *
  * 只做三件事：
- *   1. 读附件尺寸，判断哪张是 Logo、哪张是照片、哪张是参考旧稿
+ *   1. 依据用户原话绑定明确编号的 Logo 或底图，读取原图尺寸
  *   2. 产出「交付要求」系统消息（不写死具体文案，只写约束）
  *   3. 对模型给的 structured.text 做硬校验与修补（缺公司名/缺热线/有占位/有重复）
  */
 
-const { restylesReference } = require("./reference-text");
-const LOGO_MAX_RATIO = 3.2;   // Logo 一般扁平但不至于超过 3.2:1
+const {restylesReference,sourceImageIndex}=require("./reference-text");
 
 /** 读 data URL 里图片的宽高（只解析头部，不整图解码） */
 function imageSize(dataUrl) {
@@ -45,45 +44,22 @@ function imageSize(dataUrl) {
 function collectImages(messages) {
   const out = [];
   for(const part of require("./reference-text").currentImageParts(messages)){
-    if(!/^data:image\//i.test(part.image_url.url))continue;
     out.push({index:out.length+1,size:imageSize(part.image_url.url)});
   }
   return out;
 }
 
-/**
- * 判定附件角色。
- * 规则：面积最小的扁图 → logo；面积最大的 → 参考/旧稿；其余 → 素材照片。
- * 只有 1 张时不做角色假设。
- */
+/** Roles are hard constraints only when the user identifies an attachment. */
 function classify(images, userText) {
-  const valid = images.filter(i => i.size && i.size.w > 0 && i.size.h > 0);
-  const mentionsOldText = String(userText || "");
-  const oldSemantics = /旧稿|旧版|上一版|之前的|原来那|改版|重绘|这张海报|参考这版|照着这版/.test(mentionsOldText);
-  if (valid.length === 0) return { logo: null, poster: null, photo: null, count: 0 };
-  // 只有一张图时也必须能判角色：小扁图当 Logo，否则按语义在「旧稿 / 素材照片」之间选
-  if (valid.length === 1) {
-    const only = valid[0];
-    if(restylesReference(mentionsOldText))return {logo:null,poster:only,photo:null,count:1};
-    const ratio = only.size.w / only.size.h;
-    const area = only.size.w * only.size.h;
-    if (ratio <= LOGO_MAX_RATIO && area < 400 * 200) return { logo: only, poster: null, photo: null, count: 1 };
-    return oldSemantics
-      ? { logo: null, poster: only, photo: null, count: 1 }
-      : { logo: null, poster: null, photo: only, count: 1 };
-  }
-  const withArea = valid.map(i => ({ ...i, area: i.size.w * i.size.h, ratio: i.size.w / i.size.h }));
-  const sorted = [...withArea].sort((a, b) => a.area - b.area);
-  const smallest = sorted[0];
-  const largest = sorted[sorted.length - 1];
-  const logo = smallest.ratio <= LOGO_MAX_RATIO && smallest.area * 3 < largest.area ? smallest : null;
-  // 「旧稿」必须有语义证据：用户提到旧/上一版/改版/这张海报/重绘；否则面积最大的当素材照片
-  const text = String(userText || "");
-  const mentionsOld = /旧稿|旧版|上一版|之前的|原来那|改版|重绘|这张海报|参考这版|照着这版/.test(text);
-  const rest = withArea.filter(i => i !== logo);
-  const poster = mentionsOld && rest.length ? rest[rest.length - 1] : null;
-  const photo = rest.find(i => i !== poster) || null;
-  return { logo, poster, photo, count: valid.length };
+  const text=String(userText||"");
+  const ordinals=new Set([...text.matchAll(/(?:图([一二三四五六1-6])|第([一二三四五六1-6])张(?:图|图片)?)(?:是|为|中|上|的|里的|中的|上的)\s*(?:logo|标识|标志|徽标)/ig)]
+    .map(m=>Number(m[1]||m[2])||"一二三四五六".indexOf(m[1]||m[2])+1));
+  const denied=/(?:不要|不用|去掉|删掉|删除)\s*(?:这个|这张|公司)?\s*(?:logo|标识|标志|徽标)/i.test(text);
+  const logo=denied?null:ordinals.size===1?images.find(img=>img.index===[...ordinals][0])||null
+    : images.length===1 && /(?:这个|这张|我上传的)\s*(?:logo|标识|标志|徽标)/i.test(text)?images[0]:null;
+  const posterIndex=images.length>1||restylesReference(text)?sourceImageIndex(text,images.length):null;
+  const poster=images.find(img=>img.index===posterIndex && img!==logo)||null;
+  return {logo,poster,photo:null,count:images.length};
 }
 
 /**
@@ -99,13 +75,9 @@ function buildRequirements({ roles, company, contact }) {
   parts.push("画布比例与 aspect_ratio 完全一致");
   parts.push("小字清晰可读，不生成带糊英文的假界面");
   if (roles && roles.logo) parts.push("第 " + roles.logo.index + " 张附件是公司 Logo，直接用附件里的原图形，不重画、不加白底或方框");
-  if (roles && roles.photo) parts.push("第 " + roles.photo.index + " 张附件是实拍素材，作主视觉并保持人物与设备原比例");
   if (roles && roles.poster) parts.push("第 " + roles.poster.index + " 张附件是要改版的旧稿，栏目与文字一个都不能丢");
   if (company) parts.push("公司全称固定写作「" + company + "」");
   if (contact) parts.push("联系方式固定写作「" + contact + "」");
-  // 多附件时最容易出的错：模型把数据看板/价目表整张截图贴进画面
-  const imgCount = [roles && roles.logo, roles && roles.photo, roles && roles.poster].filter(Boolean).length;
-  if (imgCount >= 3) parts.push("附件里除指定的主视觉与旧稿外，其余图片仅作信息参考——只提取其中的数值和文字，不要把整张界面截图贴进画面");
   return "【交付要求】以下是硬性约束，直接执行，不要把要求本身画进画面：" + parts.join("；") + "。";
 }
 

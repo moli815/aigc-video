@@ -101,7 +101,7 @@ test('the reported exact-print wording is recognized without changing quote copy
   assert.equal(mark({text}, '不用原样印在图上').poster_delivery.exact_copy, undefined);
 });
 
-test('two planning sheets preserve original attachment 14 as the logo', () => {
+test('two planning sheets do not send an attachment ordinal the installed client rejects', () => {
   const meta = '【本轮附件图册】共有 14 张独立图片。REF 番号就是原附件序号；上面只是规划用预览。';
   const parts = [{type:'text',text:'做张海报，所有产品图都用上，对应型号保留。'}, {type:'text',text:meta},
     ...['first','second'].map(url=>({type:'image_url',image_url:{url}}))];
@@ -110,7 +110,8 @@ test('two planning sheets preserve original attachment 14 as the logo', () => {
   const call={function:{name:'image_generate',arguments:JSON.stringify({prompt:'发布海报',source:'attached',
     source_indexes:[1,14],reference_roles:['产品原件','Logo 原件'],structured:{text:[{key:'title',role:'title',text:'新品'}]}})}};
   const args=JSON.parse(intent.apply([call],request)[0].function.arguments);
-  assert.deepEqual(args.source_indexes,[1,14]);
+  assert.deepEqual(args.source_indexes,[1]);
+  assert.deepEqual(args.reference_roles,['产品原件']);
   assert.equal(args.print_catalog_originals,true);
   assert.equal(args.structured.catalog_attachment_count,14);
 });
@@ -189,4 +190,35 @@ test('the last packed asset becomes a separate logo with all thirteen product ce
   assert.equal(logo.role,'logo');
   const result=PNG.sync.read(Buffer.from(logo.src.split(',')[1],'base64'));
   assert.ok(result.width < raster.width);
+});
+
+test('four to eight explicit inputs stay compatible with independent-image and sheet transports',()=>{
+ const make=(n,t,plan)=>{
+   const nText=['','','','','四','五','六','七','八'][n];
+   const content=[{type:'text',text:t || '把这'+nText+'张图做成海报。'}];
+   if(n>6)content.push({type:'text',text:'【本轮附件图册】共有 '+n+' 张独立图片。REF 番号就是原附件序号；上面只是规划用预览。'});
+   for(let i=0;i<(n>6?1:n);i++)content.push({type:'image_url',image_url:{url:'fixture-'+i}});
+   const structured={text:[{key:'title',role:'title',text:'设备联展'}]};
+   if(plan)structured.image_plan={version:2,reference_count:2,protected_references:[{index:1,role:'logo',anchor:'bottom_right'},{index:2,role:'ui'}]};
+   const r=intent.resolve({messages:[{role:'user',content}]});
+   assert.equal(r.currentImageCount,n);
+   return JSON.parse(intent.apply([{function:{name:'image_generate',arguments:JSON.stringify({
+    source:'attached',source_indexes:[n,1],reference_roles:['Logo','平台界面'],prompt:'设备联展',structured
+   })}}],r)[0].function.arguments);
+ };
+ for(const n of [4,5,6]){
+  const out=make(n,null,true);
+  assert.deepEqual(out.source_indexes,Array.from({length:n},(_,i)=>i+1));
+  assert.equal(out.structured.image_plan.reference_count,n);
+  assert.equal(out.reference_roles[n-1],'Logo');
+  assert.deepEqual(out.structured.image_plan.protected_references.map(r=>r.index),[n,1]);
+ }
+ for(const n of [7,8]){
+  const out=make(n);
+  assert.equal(out.use_entire_catalog,true);
+  assert.equal(out.source,'attached');
+  assert.equal(out.source_indexes,undefined);
+ }
+ assert.equal(make(4,'只用第四张。').use_entire_catalog,false);
+ assert.equal(make(8,'把这四张图做成海报。').use_entire_catalog,false);
 });

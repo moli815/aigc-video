@@ -7,3 +7,20 @@ test('owned long-chat recovery includes early identity and correction150, exclud
 test('deleted or different-account conversations never restore the correction',async()=>{const f=fixture();f.delete();const deleted=await M.restoreSyncedImageContext(f.messages,{db:f.db,owner,enabled:true});assert.doesNotMatch(JSON.stringify(deleted),/米白橄榄绿/);const g=fixture(),other=await M.restoreSyncedImageContext(g.messages,{db:g.db,owner:'other-account',enabled:true});assert.doesNotMatch(JSON.stringify(other),/米白橄榄绿|青禾设备协同/);});
 test('short ordinary tasks do not incur long-chat database retrieval',async()=>{let n=0;const db={collection(){n++;throw Error('UNEXPECTED');}},r=await M.restoreSyncedImageContext([{role:'user',content:'风格改成米白。'}],{db,owner,enabled:true});assert.equal(n,0);assert.match(r.at(-1).content,/风格改成米白/);});
 test('literal style survives even when the summarizer omits it',async()=>{const {compactConversation}=require('../cloudfunctions/bf-api/context-compaction'),style='不要蓝色霓虹，风格换成米白与橄榄绿。',messages=[{role:'user',content:style},...Array.from({length:35},(_,i)=>({role:i%2?'assistant':'user',content:'普通讨论内容'.repeat(20)+i}))],r=await compactConversation(messages,{threshold:1,keepCount:4,scope:'isolated',cacheGet:async()=>null,cachePut:async()=>{},summarize:async()=> '这是一份没有保留配色与风格的普通业务摘要，仅用于验证原文保护。'});assert.ok(r.some(m=>m.role==='system'&&m.content.includes(style)));});
+
+test('long conversation with a short latest request and old-client attachment notes recovers the right facts',async()=>{
+ const f=fixture();
+ const latest='按前面谈的做一张海报';
+ f.rows[179].payload=JSON.stringify({conversationId:parent,role:'user',text:latest,createdAt:180});
+ f.messages.at(-1).content=[
+  {type:'text',text:latest+'\n\n【本轮附件图册】共有 8 张独立图片。REF 番号就是原附件序号；上面只是规划用预览。'},
+  {type:'image_url',image_url:{url:'data:image/jpeg;base64,preview'}}];
+ const r=await M.prepareImageContext(f.messages,{db:f.db,owner,enabled:true,
+  compact:messages=>require('../cloudfunctions/bf-api/context-compaction').compactConversation(messages,{
+   threshold:1,keepCount:6,cacheGet:async()=>null,cachePut:async()=>{},summarize:async()=> '这里是通用资料摘要，故意漏掉公司名称和修订的配色。'})});
+ const text=JSON.stringify(r);
+ assert.match(text,/青禾设备协同/);
+ assert.match(text,/米白橄榄绿/);
+ assert.doesNotMatch(text,/FOREIGN_FUTURE/);
+ assert.ok(r.some(m=>m.role==='user'&&Array.isArray(m.content)));
+});

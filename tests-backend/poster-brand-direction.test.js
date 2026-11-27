@@ -240,3 +240,11 @@ test('a numbered product set and its final logo survive catalog planning', () =>
   assert.equal(run(userText).use_entire_catalog,true);
   assert.equal(run(userText+'只用第二张').use_entire_catalog,false);
 });
+
+test('a smaller photo or larger square Logo is never assigned a role from its geometry',()=>{
+ const photos=[{index:1,size:{w:200,h:180}},{index:2,size:{w:1400,h:1400}},{index:3,size:{w:900,h:1100}}];
+ assert.equal(guard.classify(photos,'用这三张图一起制作海报').logo,null);
+ assert.equal(guard.classify(photos,'把图二的Logo放在图三海报右下角').logo,photos[1]);
+ assert.equal(guard.classify(photos,'图一是原海报，把它重绘并加上图二的Logo').poster,photos[0]);
+ assert.equal(guard.classify([photos[1]],'在海报上加上这个Logo').logo,photos[1]);
+});

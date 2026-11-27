@@ -43,7 +43,9 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
       !/添加|加上|加到|放到|放在|放上|贴|替换|换|抠|去底|去背景|透明|提取|搜索|查找/i.test(text)) return messages;
   if (messages.some(message => message?.role === "system" && typeof message.content === "string" && message.content.includes(VERSION))) return messages;
   const intent = uploadedLogoAddition(messages, require('./verbatim-image-prompt').authoredText(messages));
-  const guidance = intent?.style
+  const guidance = intent?.corner && intent.base
+    ? '仅在用户指定的' + intent.corner + '添加本轮上传的原Logo。用image_edit'+(intent.indices?'，按用户指定的原稿和标识顺序传两张本轮图片。':'和source=both，使用上次成图与本轮Logo。')+' 给出该处实际空位的归一化box，保留原海报的像素和文字。若指定区域没有空位，先说明遮挡风险。'
+    : intent?.style
     ? '用一次 image_edit。按本轮附件顺序区分原海报和Logo，保留原海报的阅读顺序和文案。按用户指定风格设计，不写新标题。' +
       (intent.composeExact ? '在底图上测量不遮挡内容的小框，填入 preserve_assets。' : '')
     : RULE;
@@ -51,18 +53,25 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
 }
 
 function uploadedLogoAddition(messages, text) {
+  const corner = /^(?:请)?(?:在|给)(?:这张|上一张|刚才的|刚才生成的|刚刚生成的|上一张生成的|原)?海报(?:的)?([左右][上下]角)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.exec(text.trim())?.[1];
   const direct = /^(?:请)?在(?:这张|上一张|刚才的|原)?海报(?:上|里)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.test(text.trim());
   const correction = /(?:我|其实|还是|就)?只(?:是想|需要|要|想|需)?\s*(?:在(?:原图|原海报|海报)上)?(?:加上|加|添加|贴上|放上)(?:之前的|那个|这个|公司)?\s*(?:logo|标识|标志|徽标)[。！!？? ]*$/i.test(text.trim());
   // Only bind a pure restyle + numbered logo addition. A request to change copy,
   // canvas, logo placement or other content must keep its full planning path.
   const styleEdit = /^(?:请)?(?:把(?:这张|原)?(?:海报|图[一二12])|将(?:海报|图[一二12]))?(?:换成|改成|改为|换为)([^，。；、\n]{1,24}?风(?:格)?)(?:的)?[，, ]*(?:并且|同时|然后|并|再)?(?:加上|添加|贴上|放上)(?:第([一二12])张(?:图)?|图([一二12]))(?:中|上)?的\s*(?:logo|标志|标识|徽标)[。！! ]*$/iu.exec(text.trim());
-  if (!direct && !correction && !styleEdit) return null;
+  const attachedCorner = /^(?:请)?(?:在|给)图([一二12])(?:的)?(?:原)?(?:海报)?(?:的)?([左右][上下]角)(?:加上|加|添加|贴上|放上)图([一二12])(?:的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.exec(text.trim());
+  if (!direct && !corner && !attachedCorner && !correction && !styleEdit) return null;
   const { isHistoryPreview } = require('./image-delivery');
   const parts = messages.findLast(message => message?.role === 'user' && !isHistoryPreview(message))?.content;
   if (!Array.isArray(parts)) return correction ? {base:false} : null;
   const base = parts[0]?.text?.startsWith('【本次编辑前生成图预览】') && parts[1]?.type === 'image_url'
       && parts[2]?.text === '【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】';
   const uploads = (base ? parts.slice(3) : parts).filter(part => part?.type === 'image_url');
+  if (attachedCorner && uploads.length === 2) {
+    const baseIndex = /[一1]/.test(attachedCorner[1]) ? 1 : 2;
+    const logoIndex = /[一1]/.test(attachedCorner[3]) ? 1 : 2;
+    if (baseIndex !== logoIndex) return {base:true,corner:attachedCorner[2],indices:[baseIndex,logoIndex]};
+  }
   if (styleEdit && uploads.length === 2) {
     const logoIndex = /[一1]/.test(styleEdit[2] || styleEdit[3]) ? 1 : 2;
     // Older app builds treat “换 … 这张 … Logo” as requiring exact local composition.
@@ -71,7 +80,7 @@ function uploadedLogoAddition(messages, text) {
   }
   if (styleEdit) return null;
   if (correction && (!base || !parts[0].text.startsWith('【本次编辑前生成图预览】已回到上次贴标前的原海报。'))) return {base:false};
-  return uploads.length === 1 ? { base: Boolean(base) } : correction ? {base:false} : null;
+  return uploads.length === 1 ? {base:Boolean(base),...(corner?{corner}:{})} : correction ? {base:false} : null;
 }
 
 function finalizeUploadedLogoAddition(calls, intent) {
@@ -87,7 +96,7 @@ function finalizeUploadedLogoAddition(calls, intent) {
       return { ...call, function: { ...call.function, arguments: JSON.stringify({
         source: 'attached', source_indexes: intent.indices, reference_roles: ['原海报', 'Logo原件'],
         prompt: '图1是要调整风格的原海报，图2是必须使用的原Logo。保留图1的标题、日期、原文、各栏目、图文关系和阅读顺序。换成' +
-          intent.style + '。按题材选合适的色彩与媒介。适合亮色时，让清亮高饱和的主题色贯穿主视觉、区块和背景，用主题相关场景、纹理或光线建立层次，让正文易读。' +
+          intent.style + '。' +
           '将图2放入一个与文字、边距和光线自然呼应的小位置，去除外圈白底，保留完整标志形状和色彩，只出现一次。画面只保留原稿文字。',
         structured: { text: [] }
       }) } };
@@ -97,18 +106,22 @@ function finalizeUploadedLogoAddition(calls, intent) {
     if (!validBox || args.structured.preserve_assets.length !== 1) reject();
     const {x,y,width,height} = asset.box;
     if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1 || width * height > 0.35) reject();
+    if (intent.corner) {
+      const actual = (x + width / 2 < .5 ? '左' : '右') + (y + height / 2 < .5 ? '上' : '下') + '角';
+      if (actual !== intent.corner) reject();
+    }
     if (intent.style) {
-      const color = ' ' + require('./poster-delivery').DEFAULT_COLOR_DIRECTION;
       return { ...call, function: { ...call.function, arguments: JSON.stringify({
         source: 'attached', source_indexes: intent.indices, reference_roles: ['原海报', 'Logo原件'],
-        prompt: '以底图原海报为准。仅将视觉表现调整为' + intent.style + '。沿用原稿标题、日期、栏目及每段原文。只改变配色、材质与无字装饰，保持文字清晰可读。' + color,
+        prompt: '以底图原海报为准。仅将视觉表现调整为' + intent.style + '。沿用原稿标题、日期、栏目及每段原文。只改变配色、材质与无字装饰，保持文字清晰可读。',
         structured: { text: [], preserve_outside: false, exact_logo_addition: true, preserve_assets: [
           {reference_index: 2, kind: 'logo', background: 'auto', box: {x,y,width,height}}
         ] }
       }) } };
     }
     return { ...call, function: { ...call.function, arguments: JSON.stringify({
-      source: 'both', source_index: 1, prompt: '在原海报上加上本轮上传的Logo。保持原图比例、标题、正文、插画和布局。',
+      ...(intent.indices?{source:'attached',source_indexes:intent.indices,reference_roles:['原海报','Logo原件']}:{source:'both',source_index:1}),
+      prompt: '在原海报' + (intent.corner || '上') + '加上本轮上传的Logo。保持原图比例、标题、正文、插画和布局。',
       structured: { text: [], preserve_outside: true, exact_logo_addition: true,
         preserve_assets: [{ reference_index: 2, kind: 'logo', background: 'auto', box: {x,y,width,height} }] }
     }) } };
