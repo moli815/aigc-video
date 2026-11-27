@@ -39,7 +39,9 @@ final class MemoryService {
             source: $0.source, date: max($0.createdAt, $0.updatedAt)) }
         let relevant = ContextRecall.select(records, query: query, limit: 12)
         let ids = Set(relevant.map(\.id))
-        let fallback = records.filter { !ids.contains($0.id) }.prefix(4)
+        let newVisualTopic = query.range(of: #"(?:做|设计|生成|制作|画).{0,30}(?:海报|宣传图|配图|信息图)"#, options: .regularExpression) != nil
+            && query.range(of: #"之前|上次|沿用|接着|同款|原风格|和刚才|按这张"#, options: .regularExpression) == nil
+        let fallback = records.filter { !newVisualTopic && !ids.contains($0.id) }.prefix(4)
         return ContextRecall.fragment(relevant + fallback, budget: 5500)
     }
 

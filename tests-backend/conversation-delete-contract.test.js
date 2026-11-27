@@ -173,7 +173,7 @@ test("DEL-19 排版分支：底图成功即缓存、命中跳过 Pro、成功与
     "排版完成后必须保留可复用底图");
   assert.match(STREAMING, /cache\.retainAfterOverlayFailure\(conversationId: cacheConversationId, taskId: cacheTaskId\)/,
     "排版失败未显式保留缓存");
-  assert.match(STREAMING, /if baseImageFromCache \{[\s\S]{0,260}else \{[\s\S]{0,120}BudgetTracker\.addImageGeneration\(\)/,
+  assert.match(STREAMING, /if baseImageFromCache \{[\s\S]{0,260}else if structuredArgs\?\["exact_logo_addition"\] as\? Bool != true \{[\s\S]{0,120}BudgetTracker\.addImageGeneration\(\)/,
     "命中缓存仍计本地生图额度（重复计费体感）");
   const saveIndex = STREAMING.indexOf("cache.save(taskId: cacheTaskId");
   const renderIndex = STREAMING.indexOf("TextOverlayRenderer.render(base: baseImage");

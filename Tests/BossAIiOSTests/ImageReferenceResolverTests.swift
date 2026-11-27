@@ -42,6 +42,16 @@ final class ImageReferenceResolverTests: XCTestCase {
             hasAttachedImage: true, hasLastGeneratedImage: true), "both")
     }
 
+    func testAddingUploadedLogoUsesBothAndIncludesPriorPosterPreview() {
+        let request = "在海报上加上这个logo"
+        XCTAssertEqual(ImageReferenceResolver.sourceOverride(requested: "attached",
+            userText: request, hasAttachedImage: true, hasLastGeneratedImage: true), "both")
+        XCTAssertTrue(GeneratedImagePlanningContext.shouldInclude(userText: request, hasAttachedImages: true))
+        XCTAssertTrue(ImageReferenceResolver.isLocalImageWork(request, hasImage: true))
+        XCTAssertFalse(ImageReferenceResolver.addsUploadedLogoToPoster("不要在海报上加上这个logo"))
+        XCTAssertFalse(ImageReferenceResolver.addsUploadedLogoToPoster("帮这个logo做张海报"))
+    }
+
     func testBothSourceDoesNotSilentlyLoseMissingRequiredMaterial() {
         XCTAssertNil(ImageReferenceResolver.sourceOverride(requested: "both",
             userText: "修改你生成的海报中的Logo", hasAttachedImage: false, hasLastGeneratedImage: true))

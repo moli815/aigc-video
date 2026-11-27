@@ -166,6 +166,10 @@ enum PreservedAssetWorkflow {
                 sourceData:material,cutoutMode:placement.cutoutMode,kind:placement.kind))
         }
         let prepared = Plan(original:plan.original,placements:placements,preserveOutside:plan.preserveOutside,background:plan.background)
+        if plan.preserveOutside, plan.background.structured?["exact_logo_addition"] as? Bool == true,
+           placements.count == 1, placements.first?.kind == .logo {
+            return try compose(plan: prepared, cleaned: plan.original)
+        }
         let signature = try JSONSerialization.data(withJSONObject:["owner":owner,"prompt":plan.background.prompt,
             "aspect":plan.background.aspectRatio,"size":plan.background.targetSize ?? "","tier":plan.background.qualityTier,
             "kind":plan.background.taskKind,"intent":plan.background.renderIntent,"textMode":plan.background.textMode.rawValue,

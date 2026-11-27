@@ -105,6 +105,9 @@ extension ChatViewModel {
         let artifactFlag = FirstTokenFlag()
         // 10-24 宣称校验：本轮是否尝试过图片/图表工具、已自动修复次数、修复预算
         var imageToolAttempted = false
+        var singleImageDelivered = false
+        let requestsSeveralImages = userText.range(of: #"分别|各(?:出|做|生成)|再.{0,8}(?:修|改|加|贴|拆)|组图|多张|多版|[两二三四五六七八九2-9]\s*(?:张|版)"#,
+                                                   options: .regularExpression) != nil
         var claimRepairCount = 0
         var claimRepairBudget = 0
         var currentTextCommitted = true
@@ -285,7 +288,7 @@ extension ChatViewModel {
 
                 // A native-search answer without a link cannot be audited. Fetch App evidence once
                 // and ask again, rather than displaying an unsourced "I searched" claim.
-                if pendingToolCalls.isEmpty, nativeSearch, needsFreshEvidence,
+                if pendingToolCalls.isEmpty, !singleImageDelivered, nativeSearch, needsFreshEvidence,
                    !nativeEvidenceFallbackUsed,
                    // 10-22：优先看引用注册表（citations），同时保留"答案里连 URL 都没有"这一强信号作为兜底。
                    // 两者都满足才回退，避免把"模型给了链接但未走注册表"的合法回答误判成缺来源。
@@ -426,6 +429,11 @@ extension ChatViewModel {
                                                 "content": ToolPipeline.failureNote(pluginID: "expert_skill", reason: error.localizedDescription)])
                         }
                     case "image_generate", "image_edit", "image_decompose", "image_series", "generate_image":   // 10-19 拆 4 工具（统一执行器，旧名兼容）
+                        if singleImageDelivered && !requestsSeveralImages && call.name != "image_decompose" {
+                            apiMessages.append(["role": "tool", "tool_call_id": call.id,
+                                                "content": "本轮单张图片已经交付，请直接结束或补充简短说明。"])
+                            continue
+                        }
                         imageToolAttempted = true
                         // 10-25：等待文案统一由 imageWait 承担（这里不再写"约 20 秒"这种伪预估）
                         statusText = nil
@@ -883,6 +891,7 @@ extension ChatViewModel {
                             // P0-59 统一管道落库（含 save）——产出物消息一律走 ToolPipeline，漏 save 类问题结构上不再可能
                             do {
                                 try ToolPipeline.persistArtifact(conversation: conv, imageData: imageData, context: modelContext)
+                                singleImageDelivered = true
                                 artifactFlag.set()   // 10-23 P0：产物已落库，后续说明失败降级为部分成功
                                 imageTurnNote = ImageTaskStatus.doneText
                                 if aspectKeptAnyway {
@@ -896,8 +905,8 @@ extension ChatViewModel {
                             if baseImageFromCache {
                                 // 命中缓存 = 没调 Pro、没产生上游费用：本地生图额度不计（避免"重复扣费"体感）
                                 PerformanceTrace.event("cache_hit_skip_image_quota")
-                            } else {
-                                BudgetTracker.addImageGeneration()   // B01：生图计入生图池
+                            } else if structuredArgs?["exact_logo_addition"] as? Bool != true {
+                                BudgetTracker.addImageGeneration()
                             }
                             apiMessages.append([
                                 "role": "tool",

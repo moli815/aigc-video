@@ -66,6 +66,24 @@ final class PreservedAssetWorkflowTests: XCTestCase {
         }
         XCTAssertFalse(PreservedAssetWorkflow.keepsExistingCanvas(context(preserveOutside:false).structured))
     }
+    func testExactLogoAdditionDoesNotGenerateNewBackground() async throws {
+        let box = ["x": 0.075, "y": 0.075, "width": 0.1, "height": 0.1]
+        let sample = context(box: box, prompt: "在原海报上加Logo")
+        let request = ImageRequestContext(prompt: sample.prompt, references: sample.references,
+            taskKind: "edit", qualityTier: "high", requestedCount: nil, aspectRatio: "5:4", renderIntent: "flat_artwork",
+            structured: ["text": [], "preserve_outside": true, "exact_logo_addition": true,
+                "preserve_assets": [["reference_index": 2, "kind": "logo", "background": "keep", "box": box]]],
+            layerDecomposition: false)
+        let plan = try XCTUnwrap(PreservedAssetWorkflow.plan(request))
+        let result = try await PreservedAssetWorkflow.generate(plan: plan) { _ in
+            XCTFail("Adding one Logo does not call the image provider")
+            throw PreservedAssetWorkflow.Failure.compositionFailed
+        }
+        let p = pixels(result)
+        XCTAssertEqual(Array(p[0..<3]), [255, 0, 0])
+        XCTAssertTrue(stride(from: 0, to: p.count, by: 4).contains { p[$0 + 1] > 230 && p[$0] < 20 })
+    }
+
     func testACompositionFailureReusesThePaidBackground() async throws {
         let plan=try XCTUnwrap(PreservedAssetWorkflow.plan(context(prompt:UUID().uuidString)))
         var calls=0

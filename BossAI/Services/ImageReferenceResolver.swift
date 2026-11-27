@@ -25,6 +25,12 @@ enum ImageReferenceResolver {
         return phrases.contains { value.contains($0) }
     }
 
+    static func addsUploadedLogoToPoster(_ text: String) -> Bool {
+        let request = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = #"^(?:请)?在(?:这张|上一张|刚才的|原)?海报(?:上|里)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$"#
+        return request.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
     /// Resolve conflicts between the Agent's tool arguments and explicit user references.
     /// User intent wins: a mistaken `source=none/last` must not silently turn an edit into T2I.
     static func sourceOverride(requested: String?,
@@ -44,6 +50,7 @@ enum ImageReferenceResolver {
         if ["不要用上传", "不使用上传", "只改生成图", "只修改生成图"].contains(where: {value.contains($0)}), hasLastGeneratedImage { return "last" }
         if ["不要用生成图", "不使用生成图", "只改上传", "只修改上传"].contains(where: {value.contains($0)}), hasAttachedImage { return "attached" }
         if selected == "both" { return nil }
+        if hasAttachedImage && hasLastGeneratedImage && addsUploadedLogoToPoster(userText) { return "both" }
         let combinesUploadedMaterial = ["logo", "标志", "商标", "徽标", "素材"].contains { value.contains($0) }
             && ["替换", "换成", "换为", "放到", "放在", "加到", "贴到"].contains { value.contains($0) }
         if combinesUploadedMaterial && asksForLastGenerated && hasAttachedImage && hasLastGeneratedImage {
@@ -132,6 +139,7 @@ enum ImageReferenceResolver {
             return true
         }
         guard hasImage else { return false }
+        if addsUploadedLogoToPoster(text) { return true }
         let operations = ["重排", "重新排", "重绘", "做海报", "做成海报", "改成", "抠图", "修图", "贴上", "放上", "用上"]
         let external = ["联网", "上网", "搜一下", "查一下", "查找", "核实", "最新消息"]
         return operations.contains(where: { text.contains($0) }) &&

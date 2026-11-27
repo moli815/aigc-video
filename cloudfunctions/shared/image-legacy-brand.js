@@ -45,6 +45,39 @@ function injectLegacyBrandGuidance({ messages, tools, policy, accountId }) {
   return [...messages, { role: "system", content: RULE }];
 }
 
+function uploadedLogoAddition(messages, text) {
+  if (!/^(?:请)?在(?:这张|上一张|刚才的|原)?海报(?:上|里)(?:加上|加|添加|贴上|放上)(?:这个|这张|我上传的)?\s*(?:logo|标识|标志|商标|徽标)[。！! ]*$/i.test(text.trim())) return null;
+  const { isHistoryPreview } = require('./image-delivery');
+  const parts = messages.findLast(message => message?.role === 'user' && !isHistoryPreview(message))?.content;
+  if (!Array.isArray(parts)) return null;
+  const base = parts[0]?.text?.startsWith('【本次编辑前生成图预览】') && parts[1]?.type === 'image_url'
+      && parts[2]?.text === '【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】';
+  const uploads = (base ? parts.slice(3) : parts).filter(part => part?.type === 'image_url');
+  return uploads.length === 1 ? { base: Boolean(base) } : null;
+}
+
+function finalizeUploadedLogoAddition(calls, intent) {
+  if (!intent) return calls;
+  return calls.map(call => {
+    if (!['image_generate', 'image_edit', 'image_series', 'generate_image'].includes(call?.function?.name)) return call;
+    const reject = () => {
+      throw Object.assign(Error('BRAND_PLAN_CONFLICT'), { code: 'BRAND_PLAN_CONFLICT' });
+    };
+    if (!intent.base || call.function.name !== 'image_edit') reject();
+    const args = JSON.parse(call.function.arguments);
+    const asset = args.structured?.preserve_assets?.[0];
+    const validBox = asset?.box && ['x','y','width','height'].every(key => Number.isFinite(asset.box[key]));
+    if (!validBox || args.structured.preserve_assets.length !== 1) reject();
+    const {x,y,width,height} = asset.box;
+    if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1 || y + height > 1 || width * height > 0.35) reject();
+    return { ...call, function: { ...call.function, arguments: JSON.stringify({
+      source: 'both', source_index: 1, prompt: '在原海报上加上本轮上传的Logo。保持原图比例、标题、正文、插画和布局。',
+      structured: { text: [], preserve_outside: true, exact_logo_addition: true,
+        preserve_assets: [{ reference_index: 2, kind: 'logo', background: 'auto', box: {x,y,width,height} }] }
+    }) } };
+  });
+}
+
 function requestsMultipleBrandOutputs(text) {
   // Count target works, not input references: two photos can still make ONE poster.
   return /(?:每张|每一张|各张)(?:海报|图片|图)|(?:两张|三张|这些|这几张|所有)(?:海报|图片|图)[^，。\n]{0,12}(?:都|各|分别)|分别(?:给|为)[^，。\n]{0,16}(?:添加|加上|替换)/.test(String(text || ""));
@@ -75,4 +108,4 @@ function guardBrandCalls(calls, observe = () => {}, userText = "") {
   return output;
 }
 
-module.exports = { VERSION, RULE, enabledFor, injectLegacyBrandGuidance, guardBrandCalls, requestsMultipleBrandOutputs };
+module.exports = { VERSION, RULE, enabledFor, injectLegacyBrandGuidance, guardBrandCalls, requestsMultipleBrandOutputs, uploadedLogoAddition, finalizeUploadedLogoAddition };

@@ -2797,6 +2797,11 @@ async function handleChat(req, res) {
 
   // P0-46 上下文压缩（在日期/规则注入之前进行：先瘦身，再注入）
   const imageUserText = latestUserText(body.messages || []);
+  const { deliveredSingleImage, RASTER } = require("./image-task-readiness");
+  const authoredImageText = require("./shared/verbatim-image-prompt").authoredText(body.messages || []);
+  const imageDelivered = deliveredSingleImage(body.messages || [], authoredImageText);
+  const brandEdit = require("./shared/image-legacy-brand");
+  const uploadedLogo = !imageDelivered && brandEdit.uploadedLogoAddition(body.messages || [], authoredImageText);
   messages = await require("./account-context").injectAccountContext(messages,{db,owner:auth.sub,
     enabled:require("./account-context").imageAccountContextEnabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub,{messages,tools:body.tools||[],userText:imageUserText}),
     observe:fields=>logSafe({tag:"account_context",requestId:currentRequestId(),...fields})});
@@ -2895,7 +2900,12 @@ async function handleChat(req, res) {
   }
   const beforeLegacyBrand = messages;
   messages = injectLegacyBrandGuidance({ messages, tools: body.tools,
-    policy: RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
+    policy: uploadedLogo ? { enabled: true, audience: "all" } : RUNTIME.IMAGE_LEGACY_BRAND_POLICY, accountId: auth.sub });
+  if (uploadedLogo && messages !== beforeLegacyBrand) {
+    messages = [...messages, { role: "system", content: uploadedLogo.base
+      ? "本轮是在原海报上加一枚上传的Logo。用一次image_edit，给附件Logo在原海报空位上选一个小边角框。不换标题，不重画正文，不放大成横幅。"
+      : "原海报定位预览未收到。请让用户重新选中或上传需要编辑的原海报；先不要调用图片工具或宣称已添加。" }];
+  }
   const legacyBrandActive = messages !== beforeLegacyBrand;
   const observeBrand = fields => logSafe({ tag: "image_brand_planning", requestId: currentRequestId(), ...fields });
   // 前置意图：从「本轮原话 + 最近几轮 + 长期记忆」里抽出硬约束，再对生图参数定稿做校正。
@@ -2903,7 +2913,7 @@ async function handleChat(req, res) {
   let referenceLines = [];
   try {
     const refText = require("./reference-text");
-    if (refText.shouldTranscribe(messages)) {
+    if (!uploadedLogo && refText.shouldTranscribe(messages)) {
       const got = await refText.transcribe({ imageUrl: refText.firstUserImage(messages), callModel: msgs => callVisionModel(msgs, auth.sub) });
       if (got && got.lines && got.lines.length) {
         referenceLines = got.lines;
@@ -2953,6 +2963,7 @@ async function handleChat(req, res) {
     catch (error) { return recoverReferenceContract(calls, error, "finalize"); }
   };
   const finalizeImageCalls = calls => {
+    if (imageDelivered && Array.isArray(calls)) calls = calls.filter(call => !RASTER.has(call?.function?.name));
     // 诊断（2026-11-23）：真实客户三次复现里契约一次都没生效，而本地同样的 apply
     // 能正常追加。先确认这个函数到底有没有被流式路径调用——只有它被调用，
     // 里面的 intent_apply_entry 才会出现。两条日志对照就能定位是「没调用」还是「调用了但判定不过」。
@@ -2960,6 +2971,9 @@ async function handleChat(req, res) {
       count: Array.isArray(calls) ? calls.length : -1,
       names: (Array.isArray(calls) ? calls : []).map(c => c && c.function && c.function.name).join(",") });
     try {
+      if (uploadedLogo && legacyBrandActive) {
+        return brandEdit.finalizeUploadedLogoAddition(guardBrandCalls(calls, observeBrand, authoredImageText), uploadedLogo);
+      }
       const finalized=intentContract.apply(finalizeImageCallsBase(calls), intent,
         f => logSafe({ ...f, requestId: currentRequestId() }));
       return posterBrand.addBrand(finalized,ownedPosterBrand,imageUserText);
@@ -3042,6 +3056,14 @@ async function handleChat(req, res) {
     stream: wantStream,
   });
   if (upstreamBody.tools) upstreamBody.tools = verbatimPrompt ? singleReferences.tools : withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner });
+  if (imageDelivered && Array.isArray(upstreamBody.tools)) {
+    upstreamBody.tools = upstreamBody.tools.filter(tool => !RASTER.has(tool?.function?.name));
+    if (!upstreamBody.tools.length) delete upstreamBody.tools;
+    if (!upstreamBody.tools || RASTER.has(upstreamBody.tool_choice?.function?.name) || upstreamBody.tool_choice === "required") {
+      delete upstreamBody.tool_choice;
+    }
+    upstreamBody.messages = [...upstreamBody.messages, { role: "system", content: "本轮单张图片已经交付。用简短文字收尾；如果用户还明确要求了其他类型的产物，可完成该产物。已有来源仅按实际使用引用。" }];
+  }
   if (nativeCommercialActive && upstreamBody.tools?.some(t=>["image_generate","image_edit"].includes(t?.function?.name))) upstreamBody.parallel_tool_calls = false;
   if (legacyBrandActive) upstreamBody.parallel_tool_calls = false;
   delete upstreamBody.api_key;

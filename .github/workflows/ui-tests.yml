@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       export_only:
-        description: 'Rerun only the iPad Office export tests'
+        description: 'Run focused Office export and image intent tests on iPad'
         type: boolean
         default: false
       verify_upgrade:
@@ -71,7 +71,7 @@ jobs:
             audit+=("-only-testing:BossAITests/ExportAndPolicyTests" "-only-testing:BossAITests/AppPerformanceTests")
           fi
           if [ "${{ inputs.export_only }}" = "true" ]; then
-            audit=("-only-testing:BossAITests/ExportAndPolicyTests")
+            audit=("-only-testing:BossAITests/ExportAndPolicyTests" "-only-testing:BossAITests/ImageReferenceResolverTests" "-only-testing:BossAITests/GeneratedImagePlanningContextTests" "-only-testing:BossAITests/PreservedAssetWorkflowTests")
           fi
           xcodebuild test \
             "${audit[@]}" \

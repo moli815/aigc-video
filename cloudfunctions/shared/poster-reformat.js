@@ -2,7 +2,7 @@
 // Explicit whole-artwork reflow is different from generating an illustration
 // and from crop/outpaint. This contract travels through existing structured.
 const VERSION=1;
-function excluded(a){return !!a.structured?.print_catalog||a.layer_decomposition===true||Number(a.requested_count||a.requestedCount||1)>1||['series','decompose'].includes(a.task_kind||a.taskKind)||a.text_mode==='overlay'||a.structured?.preserve_assets?.length||['mockup'].includes(a.render_intent||a.renderIntent);}
+function excluded(a){return !!a.structured?.print_catalog||a.structured?.exact_logo_addition===true||a.layer_decomposition===true||Number(a.requested_count||a.requestedCount||1)>1||['series','decompose'].includes(a.task_kind||a.taskKind)||a.text_mode==='overlay'||a.structured?.preserve_assets?.length||['mockup'].includes(a.render_intent||a.renderIntent);}
 function normalizeDirection(text){
  return String(text||"")
   .replace(/(?:不要|别|避免|禁止|不用|勿|不能|不可)[^，。；、\n]{0,6}?(横版|横向|横屏|横图)/g,"竖版")

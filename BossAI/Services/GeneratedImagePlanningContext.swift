@@ -26,6 +26,7 @@ enum GeneratedImagePlanningContext {
         guard explicitAsk || clauses.contains(where: { clause in starts.contains(where: { clause.hasPrefix($0) }) || edits.contains(where: { clause.hasPrefix($0) }) }) else { return false }
         if ["你生成", "刚才生成", "刚生成", "上一张生成", "生成的这张", "生成的那张", "刚才那张", "generated", "you made", "previous image", "last image"].contains(where: { text.contains($0) }) { return true }
         // A current uploaded photo is never replaced by an unrelated generated image.
+        if hasAttachedImages && ImageReferenceResolver.addsUploadedLogoToPoster(text) { return true }
         return !hasAttachedImages && ImageReferenceResolver.userRequestsImageSource(text)
     }
 

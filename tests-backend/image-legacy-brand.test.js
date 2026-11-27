@@ -159,3 +159,49 @@ test('stream conflicting plans cannot partially leak an image call', () => {
     { ...edit('a'), index: 0 }, { ...edit('b', { prompt: '不同方案', source: 'both' }), index: 1 }] } }] }));
   assert.throws(() => guard.pushLine('data: [DONE]'), { code: 'BRAND_PLAN_CONFLICT' });
 });
+
+test("successful image tool return suppresses only a second image on the current single-image turn", () => {
+  const { deliveredSingleImage } = require("../cloudfunctions/bf-api/image-task-readiness");
+  const prompt = "根据今天的AI热点新闻做一个海报";
+  const user = { role: "user", content: prompt };
+  const toolCall = { role: "assistant", tool_calls: [{ id: "first", function: { name: "image_generate" } }] };
+  const delivered = { role: "tool", tool_call_id: "first", content: "图片生成已完成并展示给用户。给用户的回复控制在一句话内。" };
+  const history = [user, toolCall, delivered];
+  assert.equal(deliveredSingleImage(history, prompt), true);
+  assert.equal(deliveredSingleImage(history, "做两张海报"), false);
+  assert.equal(deliveredSingleImage([...history, user], prompt), false);
+  assert.equal(deliveredSingleImage([user, toolCall, {...delivered, tool_call_id: "different"}], prompt), false);
+  assert.equal(deliveredSingleImage([user, toolCall, {...delivered, content: "图片生成失败"}], prompt), false);
+});
+
+test("adding one attached Logo preserves the selected poster and rejects ungrounded redraw plans", () => {
+  const { uploadedLogoAddition, finalizeUploadedLogoAddition } = require("../cloudfunctions/shared/image-legacy-brand");
+  const user = "在海报上加上这个logo";
+  const text = text => ({ type: "text", text });
+  const photo = url => ({ type: "image_url", image_url: { url } });
+  const withPreview = [{ role: "user", content: [
+    text("【本次编辑前生成图预览】"), photo("base"),
+    text("【以下是用户本轮输入与上传附件，source_index仍按原附件顺序从1计数】"),
+    text(user), photo("logo")
+  ] }];
+  const intent = uploadedLogoAddition(withPreview, user);
+  assert.deepEqual(intent, { base: true });
+  const edit = { function: { name:"image_edit", arguments:JSON.stringify({
+    source:"attached", prompt:"重画海报，标题和正文", structured:{
+      text:[{key:"title",role:"title",text:"和正文"}],
+      preserve_assets:[{reference_index:1,box:{x:0.03,y:0.03,width:0.12,height:0.12}}]
+    }
+  }) } };
+  const clean = JSON.parse(finalizeUploadedLogoAddition([edit], intent)[0].function.arguments);
+  assert.equal(clean.source, "both");
+  assert.equal(clean.source_index, 1);
+  assert.equal(clean.structured.preserve_assets[0].reference_index, 2);
+  assert.equal(clean.structured.exact_logo_addition, true);
+  assert.deepEqual(clean.structured.text, []);
+  assert.doesNotMatch(clean.prompt, /和正文|重画/);
+  const pending = { prompt: "参考原海报改成竖版9:16", image: ["base"], structured: clean.structured };
+  assert.equal(require("../cloudfunctions/shared/poster-reformat").normalize(pending), pending);
+  assert.throws(() => finalizeUploadedLogoAddition([edit], { base: false }), { code: "BRAND_PLAN_CONFLICT" });
+  assert.throws(() => finalizeUploadedLogoAddition([{function:{...edit.function,name:"image_generate"}}], intent), { code: "BRAND_PLAN_CONFLICT" });
+  assert.equal(uploadedLogoAddition(withPreview, "在海报上加上这个logo，另外换成漫画风"), null);
+});

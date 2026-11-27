@@ -132,3 +132,22 @@ test("utility JSON defaults to no thinking and preserves an explicit caller choi
   assert.equal(result.status,200);assert.equal(f.calls.at(-1).enable_thinking,expected);
  }
 });
+
+test("real /chat request after single image delivery cannot dispatch another image", async () => {
+  const f = await fixture();
+  const tools = ["image_generate", "image_edit", "create_document"].map(name => ({
+    type: "function", function: {name, parameters: {type:"object", properties:{}}}
+  }));
+  const messages = [
+    {role:"user", content:"根据今天的AI热点新闻做一个海报"},
+    {role:"assistant", content:null, tool_calls:[{id:"first",type:"function",function:{
+      name:"image_generate",arguments:'{"prompt":"海报"}'
+    }}]},
+    {role:"tool",tool_call_id:"first",content:"图片生成已完成并展示给用户。给用户的回复控制在一句话内。"},
+  ];
+  assert.equal((await f.request("/api/chat",{stream:false,chatMode:"standard",tools,messages})).status,200);
+  assert.deepEqual(f.calls.at(-1).tools.map(t=>t.function.name), ["create_document"]);
+  messages.push({role:"user",content:"换个视觉风格再做一张海报"});
+  assert.equal((await f.request("/api/chat",{stream:false,chatMode:"standard",tools,messages})).status,200);
+  assert.equal(f.calls.at(-1).tools[0].function.name,"image_generate");
+});
