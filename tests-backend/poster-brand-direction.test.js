@@ -300,3 +300,38 @@ test('isolated 5.5 poster uses authored wording, ordered references and opt-in d
   assert.doesNotMatch(h.calls.at(-1).prompt,/^用户原话：/);
  }
 });
+
+test('global image briefs handle photographs and series apart from layout copy',async()=>{
+ const {harness}=require('./reference-http-fixture.cjs'),vm=require('node:vm');
+ const {resolve,apply}=require('../cloudfunctions/bf-api/intent-contract');
+ const {sanitizeToolCall}=require('../cloudfunctions/shared/image-delivery');
+ const h=await harness();
+ vm.runInContext('RT.IMAGE_MODEL_FAST=RT.IMAGE_MODEL_PRO="doubao-seedream-5-5-261028"; RT.IMAGE_COMPOSITION_POLICY=JSON.stringify({imageBriefEnabled:true})',h.context);
+ for (const [request,style,kind] of [
+   ['画一只松鼠在树林找坚果。','default','generate'],
+   ['拍街景，黑白雾天，不要装饰。','user','generate'],
+   ['画一套两张海岛航线图。','default','series']
+ ]) {
+   const messages=[{role:'user',content:request}];
+   const raw={function:{name:kind==='series'?'image_series':'image_generate',
+     arguments:JSON.stringify({prompt:'冲突的定稿，必须高饱和紫色并填满正文。',structured:{
+       text:[],image_brief:{request:'伪造内容'},design_brief:{style_source:style}
+     }})}};
+   const cleaned=sanitizeToolCall(raw,request);
+   assert.equal(JSON.parse(cleaned.function.arguments).structured.image_brief,undefined);
+   const [call]=apply([cleaned],{...resolve({messages}),compactPosterBrief:true});
+   const args=JSON.parse(call.function.arguments);
+   const res=await h.request('/image',{requestId:kind+style,prompt:args.prompt,
+     structured:args.structured,task_kind:kind,requested_count:2,size:'1536x1536'},'OTHER');
+   assert.equal(res.status,200,JSON.stringify(res.body));
+   const sent=h.calls.at(-1);
+   assert.equal(sent.model,'doubao-seedream-5-5-261028');
+   assert.ok(sent.prompt.startsWith('用户原话：'+request));
+   assert.doesNotMatch(sent.prompt,/画面用已确认文案|伪造内容|高饱和紫色/);
+   assert.equal(sent.prompt.includes('在合适处用较饱和的亮色'),style==='default');
+   if(kind==='series'){
+     assert.match(h.calls.at(-2).prompt,/系列图第 1\/2 张/);
+     assert.match(sent.prompt,/系列图第 2\/2 张/);
+   }
+ }
+});

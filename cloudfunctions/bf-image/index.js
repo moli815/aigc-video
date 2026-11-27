@@ -468,6 +468,7 @@ async function runSeriesChild(opts) {
   }
   const r = await generate({
     prompt: seriesPrompt(prompt, index, total),
+    seriesDirection: seriesPrompt('', index, total),
     image, size, structured, renderIntent, aspectRatio,
     layerDecomposition: false,
     taskKind: "generate",          // 子任务一律按单图生成，路由走 generate 规则
@@ -1443,7 +1444,7 @@ function sanitizeLayerOptions(raw) {
   return Object.keys(out).length ? out : null;
 }
 
-async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, layerOptions, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles, accountId,deadlineAt,repairNativeCopy=false }) {
+async function generate({ prompt, image, size, structured, renderIntent, aspectRatio, layerDecomposition, layerOptions, taskKind, qualityTier, model, requestedCount, textMode, referenceRoles, accountId,deadlineAt,repairNativeCopy=false,seriesDirection='' }) {
   // 从上游响应提取真实用量。定义在函数内部，保证单独加载 generate 的调用方
   // （测试、隔离评估）不需要额外注入这个依赖。
   const providerUsageOf = j => {
@@ -1553,8 +1554,13 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
     try{protection=await protectedAssetCompositionOf().prepare({plan:workflowPlan,image,owner:accountId,structured,authorization:reqStore.getStore()?.memberAuthorization,deferGarbledText:repairNativeCopy});}
     catch(e){logStage("protected_asset_preflight_failed",{code:e?.code||"ASSET_UNAVAILABLE"});return {ok:false,code:422,error:"IMAGE_ASSET_UNAVAILABLE",msg:"这次需要的原始素材尚未完整读取，尚未生成或扣费，请重新选择原图后再试。"};}
   }
+  const compactPrompt = /^doubao-seedream-5-5(?:-|$)/.test(selectedModel) && !verbatim && !reformat && !workflowPlan
+    && !repairNativeCopy && !layerDecomposition && !exactPrint && textMode !== 'overlay'
+    && (!taskKind || ['generate', 'reference'].includes(taskKind))
+    && posterDelivery.compactBriefEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
+    ? posterDelivery.compileCompactBrief({structured,density:nativePoster,image,referenceRoles}) : null;
   let composition=null;
-  if(!verbatim && accountId && (!workflowPlan?.native || exactPrint) && !reformat && !repairNativeCopy && (!nativePoster || workflowPlan?.catalog)){
+  if(!verbatim && !compactPrompt && accountId && (!workflowPlan?.native || exactPrint) && !reformat && !repairNativeCopy && (!nativePoster || workflowPlan?.catalog)){
     try{composition=workflowPlan?.protectUI?await commercialCompositionOf().prepareProduct(printInput,RT.IMAGE_COMPOSITION_POLICY,protection):await commercialCompositionOf().prepare(printInput,RT.IMAGE_COMPOSITION_POLICY);}
     catch(e){
       logStage("image_composition_preflight_failed",{reason:e?.code||"COMPOSITION_UNAVAILABLE"});
@@ -1616,10 +1622,9 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
   const visualOnly = composition && (exactPrint || workflowPlan?.catalog);
-  const compactPrompt = nativePoster && !verbatim && !composition && !reformat && !workflowPlan
-    && posterDelivery.compactBriefEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
-    ? posterDelivery.compileCompactBrief({structured,density:nativePoster,image,referenceRoles}) : null;
-  const preparedPrompt = verbatim ?? compactPrompt ?? (visualOnly ? basePrompt : reformat?.prompt);
+  const localSlots = taskKind === 'edit' && typeof structured?.local_edit_slots === 'string' ? structured.local_edit_slots : '';
+  const directPrompt = verbatim && localSlots ? verbatim + "\n\n附件编号对应：" + localSlots + "。原话中的编号指原附件。" : verbatim;
+  const preparedPrompt = directPrompt ?? (compactPrompt ? compactPrompt + seriesDirection : null) ?? (visualOnly ? basePrompt : reformat?.prompt);
   const finalPrompt = preparedPrompt ?? (multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
       "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : ""));

@@ -120,24 +120,26 @@ function exactCopyRequested(request) {
     && /(?:逐字|一字不差|原样)(?:照写|印刷|照印|排印|印上|印在(?:海报|画面|图)上|上图|呈现|保留(?:全部|所有)?(?:文案|文字))|(?:文案|正文|文字)(?:必须|需要|要求)?一字不差/u.test(clause));
 }
 
-const COMPACT_PLANNER_GUIDANCE = '先确定要做的新海报和真实图片用途。看本轮原图，按附件顺序填写来源，历史图用已有召回。根据原话标注style_source：用户明确样式为user，明确沿用图片风格为reference，同项目确认过的风格为context，其余为default。只把确实需要在画面呈现的已确认内容放进structured.text，采用最新更正，保留品牌、型号、数字、电话和各项用途。把风格和定稿分开，避免擅自固定配色、画布和区块。';
+const COMPACT_PLANNER_GUIDANCE = '按本轮原话判断是生成、重绘还是局部编辑，并确定真实素材用途。明确局部编辑只确定底图和原件，位置、动作、保留范围原样执行。看本轮原图，按附件顺序填写来源，历史图用已有召回。根据原话标注style_source：用户明确样式为user，明确沿用图片风格为reference，同项目确认过的风格为context，其余为default。只把确实需要在画面呈现的已确认内容放进structured.text，采用最新更正，保留品牌、型号、数字、电话和各项用途。把风格和定稿分开，避免擅自固定配色、画布和区块。';
+const COMPACT_ART_DEFAULT = '默认视觉：按主题选择明快、有对比的用色，在合适处用较饱和的亮色建立焦点，用相关环境和细节形成层次，保留必要留白。';
 const COMPACT_DEFAULT = '默认视觉：选贴合主题的明亮高饱和色，层级紧凑；把场景延伸进背景，用相关实景细节、图标或流程图丰富画面。构图由你决定。';
 
 function compactBriefEnabled(raw, owner) {
   if (typeof owner !== 'string' || !owner) return false;
   try {
     const policy = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(policy?.compactPosterAccounts) && policy.compactPosterAccounts.includes(owner);
+    return policy?.imageBriefEnabled === true ||
+      (Array.isArray(policy?.compactPosterAccounts) && policy.compactPosterAccounts.includes(owner));
   } catch { return false; }
 }
 
 function compactBriefFor(args, intent, referenceRedesign) {
   if (!intent.compactPosterBrief) return null;
-  const styleSource = userDesignOf(intent.userText) ? 'user' : args.structured?.design_brief?.style_source;
-  if (!['user','reference','context','default'].includes(styleSource)
+  const styleSource = userDesignOf(intent.userText) ? 'user' : args.structured?.design_brief?.style_source || 'unspecified';
+  if (!['user','reference','context','default','unspecified'].includes(styleSource)
       || referenceRedesign || intent.currentImageCount > 6 || args.library_refs?.length
-      || args.structured?.image_references || args.structured?.print_catalog
-      || exactCopyRequested(intent.userText) || intent.userText.length > 640
+      || args.structured?.image_references || args.structured?.print_catalog || args.structured?.preserve_assets?.length
+      || exactCopyRequested(intent.userText) || !intent.userText.trim() || intent.userText.length > 1400
       || /(?:logo|商标|标志)[^，。；\n]{0,12}(?:原样|像素级|不能改|不要重画|禁止重绘)|原样(?:使用|保留)?[^，。；\n]{0,8}(?:logo|商标|标志)/i.test(intent.userText)) return null;
   const slots = args.source === 'attached' ? args.source_indexes || [args.source_index || 1] : [];
   if (slots.some(index => !Number.isInteger(index) || index < 1 || index > intent.currentImageCount)) return null;
@@ -145,11 +147,11 @@ function compactBriefFor(args, intent, referenceRedesign) {
 }
 
 function compileCompactBrief({ structured, density, image, referenceRoles }) {
-  const brief = structured?.poster_delivery?.compact_brief;
-  if (!brief || typeof brief.request !== 'string' || !brief.request.trim() || brief.request.length > 640
+  const brief = structured?.image_brief ?? structured?.poster_delivery?.compact_brief;
+  if (!brief || typeof brief.request !== 'string' || !brief.request.trim() || brief.request.length > 1400
       || !Array.isArray(brief.slots) || new Set(brief.slots).size !== brief.slots.length
       || brief.slots.some(slot => !Number.isInteger(slot) || slot < 1 || slot > 6)
-      || !['user','reference','context','default'].includes(brief.style_source)) return null;
+      || !['user','reference','context','default','unspecified'].includes(brief.style_source)) return null;
   const count = Array.isArray(image) ? image.length : image ? 1 : 0;
   if (brief.slots.length !== count || (count > 1 && referenceRoles?.length !== count)) return null;
 
@@ -166,23 +168,24 @@ function compileCompactBrief({ structured, density, image, referenceRoles }) {
     ? require('./image-style-reference').compileStyleReference(structured.style_reference,referenceRoles) : '';
   const noDefaults = density==='sparse' || userDesignOf(brief.request) ||
     brief.style_source!=='default' || structured.style_reference?.scope==='visual_language';
+  const context = structured.design_brief?.grounded_context;
   return [
     '用户原话：'+brief.request,
     refs.length ? refs.join('；')+'。' : '',
     contextualStyle ? '同项目已确认的视觉方向：'+contextualStyle : referenceStyle,
-    '画面用已确认文案：'+copy.join('、')+'。',
-    noDefaults ? '' : COMPACT_DEFAULT,
+    typeof context === 'string' && context.trim() ? '本轮用到的已确认信息：'+context.trim().slice(0,500) : '',
+    copy.length ? '画面用已确认文案：'+copy.join('、')+'。' : '',
+    noDefaults ? '' : density || copy.length ? COMPACT_DEFAULT : COMPACT_ART_DEFAULT,
   ].filter(Boolean).join('\n');
 }
 
-function mark(structured, userText, { referenceRedesign = false, compactBrief = null } = {}) {
+function mark(structured, userText, { referenceRedesign = false } = {}) {
   const request=String(userText||'').trim();
   const userDirection=userDesignOf(request);
   return { ...structured, poster_delivery: { version: 1, density: sparseRequested(request) ? 'sparse' : 'dense',
     ...(userDirection ? {user_direction:userDirection}: {}),
     ...(exactCopyRequested(request) ? {exact_copy:true}: {}),
-    ...(referenceRedesign ? {reference_redesign:true}: {}),
-    ...(compactBrief ? {compact_brief:compactBrief}: {}) } };
+    ...(referenceRedesign ? {reference_redesign:true}: {}) } };
 }
 
 function modeFor({ structured, prompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel }) {

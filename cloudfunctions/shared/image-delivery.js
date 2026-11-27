@@ -116,6 +116,8 @@ function sanitizeToolCall(call, userText, observe = () => {}) {
   args.structured = fitTextScene(result.structured);
   // The planning model cannot opt a normal user into verbatim transport.
   delete args.structured.verbatim_prompt;
+  delete args.structured.image_brief;
+  delete args.structured.local_edit_slots;
   delete args.structured.catalog_logo_slot;
   if (args.structured.poster_delivery?.compact_brief) {
     args.structured.poster_delivery = {...args.structured.poster_delivery};

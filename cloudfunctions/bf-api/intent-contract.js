@@ -217,6 +217,62 @@ function hasContact(blocks, contact) {
   return blocks.some(b => String((b && b.text) || "").replace(/\D/g, "").includes(digits));
 }
 
+function preciseEdit(args, intent) {
+  const text = intent.userText;
+  const action = /删除|删掉|去掉|移除|擦掉|去除|添加|加上|补上|放上|放一个|替换|换掉|移到|挪到|改为|改成|改一下|调亮|调暗|加深|变浅/;
+  const region = /[左右][上下]角|[左右上下](?:边|侧|方|半部)|旁边|中间|中央|顶部|底部|(?:第[一二三四五六七八九十\d]+|前[两三四几])(?:行|段|个)/;
+  const limited = /(?:只|仅)(?:要|需|需改|改|修改)?\s*.{0,14}(?:删除|删掉|去掉|移除|擦掉|去除|添加|加上|补上|放上|放一个|替换|换掉|移到|挪到|改为|改成|调亮|调暗|加深|变浅)/;
+  const preserves = /保留|保持|别动|不动|不(?:做)?改动|不要(?:改|动|删)|其他照旧|其余照旧/;
+  if (typeof text !== 'string' || !action.test(text) || !(region.test(text) || (limited.test(text) && preserves.test(text)))
+      || /^(?:请|帮我|给我|现在|想要|直接|\s)*(?:生成|创作|制作|画|做)(?:一张|一幅|一套|一组|新)|整张(?:图|海报)?(?:重画|重做|重绘|换风格)|整体(?:重绘|改版|换风格)|重新排版|换(?:个|成).{0,8}(?:风格|画风)/.test(text)
+      || require('./shared/poster-reformat').ratioOf(normalizeDirection(text))
+      || args.structured?.preserve_assets?.length || args.structured?.image_references) return false;
+
+  const count = intent.currentImageCount;
+  const last = /刚才生成|刚生成|上一张(?:生成|成图)|上一次生成|上次生成|先前生成|刚才那张/.test(text);
+  const attached = args.source === 'attached' || /这张图|本轮上传|我(?:发|上传)的图/.test(text);
+  if (!count && (args.source === 'last' || intent.generatedPreview)) {
+    args.source = 'last';
+    delete args.source_index;
+    delete args.source_indexes;
+    delete args.reference_roles;
+  } else if (count === 1 && (attached || !intent.generatedPreview) && !last && args.source !== 'both') {
+    args.source = 'attached';
+    args.source_index = 1;
+    delete args.source_indexes;
+    delete args.reference_roles;
+  } else if (count > 1 && args.source === 'attached') {
+    // Explicit attachment numbers belong to the user's upload order.
+    const slots = args.source_indexes || [args.source_index || 1];
+    const numberedImage = /(?:把|将|在|给)(?:第([一二三四五六七八1-8])张(?:图片|照片|图)?|图([一二三四五六七八1-8]))(?=的|[左右上下]|里|内|中|上|底图)/.exec(text);
+    if (numberedImage) {
+      const n = numberedImage[1] || numberedImage[2];
+      const base = Number(n) || '一二三四五六七八'.indexOf(n) + 1;
+      if (base > count) return false;
+      if (slots[0] !== base) {
+        const rolesBySlot = new Map(slots.map((slot, index) => [slot, args.reference_roles?.[index]]));
+        const nextSlots = [base, ...slots.slice(1).filter(slot => slot !== base)];
+        args.source_indexes = nextSlots;
+        args.reference_roles = nextSlots.map((slot, index) => index === 0 ? '底图' : rolesBySlot.get(slot) || '参考素材');
+        delete args.source_index;
+      }
+    }
+    const finalSlots = args.source_indexes || slots;
+    const hasOrdinal = /图[一二三四五六七八九十\d]|第[一二三四五六七八九十\d]+张/.test(text);
+    if (hasOrdinal && finalSlots.some((slot, index) => slot !== index + 1)) {
+      const references = finalSlots.map((slot, index) => '输入槽位' + (index + 1) + '对应原附件' + slot).join('，');
+      args.structured = { ...args.structured, local_edit_slots: references };
+    }
+  } else return false;
+
+  const { routing, local_edit_slots } = args.structured || {};
+  args.prompt = text.length <= 1400 ? text : '按用户本轮局部编辑原话执行。';
+  args.structured = { text: [], routing, verbatim_prompt: text, local_edit_slots };
+  delete args.aspect_ratio;
+  delete args.text_mode;
+  return true;
+}
+
 /**
  * 对生图 tool_calls 做确定性校正。
  * @param {Array} calls
@@ -322,6 +378,15 @@ function apply(calls, intent, observe) {
       touched.push({tool: fn.name, verbatim: true});
       return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };
     }
+    const canEdit = fn.name === 'image_edit' ||
+      (fn.name === 'image_generate' && (intent.generatedPreview || count > 0));
+    if (canEdit && preciseEdit(args, intent)) {
+      delete args.use_entire_catalog;
+      delete args.print_catalog_originals;
+      delete args.render_intent;
+      touched.push({tool: 'image_edit', localEditFromUser: true});
+      return { ...call, function: { ...fn, name: 'image_edit', arguments: JSON.stringify(args) } };
+    }
     const referenceText = require('./reference-text');
     const originalIndex = args.source === 'attached' && referenceText.restylesReference(intent.userText)
       ? referenceText.sourceImageIndex(intent.userText, count) : null;
@@ -346,7 +411,7 @@ function apply(calls, intent, observe) {
     }
     if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     if (nativePoster) {
-      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign,compactBrief:posterDelivery.compactBriefFor(args,intent,referenceRedesign)});
+      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign});
       changed = { posterDelivery: true, copyRows: blocks.length };
     }
     // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组
@@ -405,23 +470,7 @@ function apply(calls, intent, observe) {
       if (requestedAspect) args.aspect_ratio = requestedAspect;
       else delete args.aspect_ratio; // the transport supplies the real source dimensions
       changed = { ...changed, editCanvas: requestedAspect || 'source' };
-      const localRemoval = /(?:只|仅)(?:需|要)?(?:删除|删掉|去掉|移除|擦掉|去除)/.test(intent.userText)
-        && /[左右][上下]角|(?:标题|日期|标识|Logo)(?:的)?(?:右侧|左侧|上方|下方|旁边)/i.test(intent.userText);
-      const useLast = intent.generatedPreview && !intent.currentImageCount
-        && /刚才生成|刚生成|上一张生成|上一次生成|上次生成|先前生成/.test(intent.userText);
-      if (localRemoval && (args.source==='last'||useLast) && !args.structured?.preserve_assets?.length
-          && !args.structured?.image_references && !requestedAspect && intent.userText.length<=1400) {
-        // The requested position and exceptions are already explicit. A
-        // planner may guess the wrong corner or accidentally expand a deletion.
-        args.prompt = intent.userText;
-        args.source = 'last';
-        delete args.source_index;
-        delete args.source_indexes;
-        delete args.reference_roles;
-        args.structured = {text:[],routing:args.structured?.routing};
-        blocks = [];
-        changed.localEditFromUser = true;
-      }
+
     }
 
     const originalCanvas=intent.roles?.poster?.size;
@@ -461,6 +510,13 @@ function apply(calls, intent, observe) {
       changed.contact = { added: intent.contact };
     }
 
+    if (fn.name === 'image_generate' || fn.name === 'image_series') {
+      const brief = posterDelivery.compactBriefFor(args, intent, referenceRedesign);
+      if (brief) {
+        args.structured = { ...args.structured, image_brief: brief };
+        changed = { ...changed, imageBrief: true };
+      }
+    }
     if (!changed) return call;
     touched.push({ tool: fn.name, ...changed });
     return { ...call, function: { ...fn, arguments: JSON.stringify(args) } };

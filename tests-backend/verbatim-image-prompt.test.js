@@ -246,3 +246,28 @@ test('an explicit localized removal preserves the author’s position and keep i
  const unbound=JSON.parse(intent.apply([wrong],r)[0].function.arguments);
  assert.equal(unbound.source,'attached');
 });
+
+test('clear edits use authored instructions across photos, illustrations and layouts', () => {
+ const refs=['https://fixture.myqcloud.com/first.png','https://fixture.myqcloud.com/second.png'];
+ for (const [user, urls, name, expectedSlot] of [
+   ['照片右侧的路牌擦掉，保留树枝和倒影。', refs.slice(0,1), 'image_edit', 1],
+   ['请把图二的右下角圆点改为橙色，图标本体保持原样。', refs, 'image_edit', 2],
+   ['把这张图左上方的文字替换成“周末见”，其余不动。', refs.slice(0,1), 'image_generate', 1],
+ ]) {
+   const messages=[{role:'user',content:[{type:'text',text:user},
+     ...urls.map(url=>({type:'image_url',image_url:{url}}))]}];
+   const [out]=intent.apply([{function:{name,arguments:JSON.stringify({
+     prompt:'删掉左侧全部内容，重绘标题和橙线',source:'attached',source_index:1,
+     aspect_ratio:'4:3',structured:{text:[{key:'t',role:'title',text:'计划稿'}],design_plan:{layout_id:'split-vertical'}}
+   })}}],intent.resolve({messages}));
+   assert.equal(out.function.name,'image_edit');
+   const args=JSON.parse(out.function.arguments);
+   assert.equal(args.prompt,user);
+   assert.equal(args.structured.verbatim_prompt,user);
+   assert.deepEqual(args.structured.text,[]);
+   assert.equal(args.structured.design_plan,undefined);
+   assert.equal(args.aspect_ratio,undefined);
+   assert.equal(args.source_indexes?.[0] ?? args.source_index,expectedSlot);
+   if(expectedSlot===2)assert.equal(args.structured.local_edit_slots,'输入槽位1对应原附件2');
+ }
+});

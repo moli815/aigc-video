@@ -2888,14 +2888,15 @@ async function handleChat(req, res) {
     recalled: seriesReferences.issuedCount, ready: seriesReferences.readyCount });
   const posterBrand=require('./poster-brand-guidance');
   let ownedPosterBrand=null;
-  if(Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')){
+  if(Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate' ||
+    (compactPosterPilot && t?.function?.name==='image_series'))){
     try{
       ownedPosterBrand=await posterBrand.preparePosterBrand({db,owner:auth.sub,policy:RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,
         referenceStore:imageReferenceStore,text:imageUserText,hasCurrentImages:require('./reference-text').currentImageParts(body.messages).length>0});
     }catch(e){logSafe({tag:"poster_brand_lookup_unavailable",requestId:currentRequestId()});}
     if(verbatimPrompt){
       messages=[...messages,{role:"system",content:"本轮用户提供了原样生图的成稿。只确定工具、画布和实际素材，不重新创作文案或设计，不向用户复述。服务端会把成稿原文交给图片模型。"}];
-    }else if(posterPlanner){
+    }else if(posterPlanner || compactPosterPilot){
       messages=[...messages,{role:"system",content:(compactPosterPilot?posterDelivery.COMPACT_PLANNER_GUIDANCE:posterDelivery.PLANNER_GUIDANCE)+(ownedPosterBrand?"\n公司确认的Logo原件由服务端放入成品。留一个与构图协调、对比清晰、不挡正文的品牌区，不重画Logo。":"")}];
     }
   }

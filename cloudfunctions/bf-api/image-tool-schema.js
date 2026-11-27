@@ -12,8 +12,10 @@ function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommer
  if(!Array.isArray(tools))return tools;
  return tools.map(tool=>{
   const fn=tool?.function,properties=fn?.parameters?.properties;
-  if(!["image_generate","image_edit"].includes(fn?.name)||!properties?.structured)return tool;
-  const structured=properties.structured;
+  if(!properties || !["image_generate","image_edit","image_series"].includes(fn?.name))return tool;
+  const plannedSeries = compactPosterBrief && fn.name === "image_series";
+  if (!properties.structured && !plannedSeries) return tool;
+  const structured=properties.structured || {type:"object"};
    const designBrief=commercial&&fn.name==="image_generate"&&!workflow&&!nativeCommercial?{
    artwork_prompt:{type:"string",description:"独立无字视觉素材简报：相关物理主体、人物、环境、材质、光线与风格，不包含整张海报布局、正文、数字或Logo字样。"},
    design_brief:{type:"object",description:"内部设计简报，非画面正文；将必要上下文带入任务。",properties:{
@@ -26,10 +28,16 @@ function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommer
   };
    if (fn.name === "image_generate" && (nativeCommercial || posterPlanner)) {
      reinforced.properties.design_brief={type:"object",additionalProperties:false,description:"本轮可执行设计简报。未指定时默认内容充实、图文表达多样；明确极简/短文案等要求优先。按资料选择表达形式，不固定三栏、巨幅截图或某种色板。",properties:{purpose:{type:"string",enum:["action_guide","advertisement","product_explainer","brand_identity","illustration","other"]},audience:{type:"string",maxLength:200},goal:{type:"string",maxLength:400},visual_approach:{type:"string",maxLength:400},information_density:{type:"string",enum:["dense","balanced","sparse"]},density_source:{type:"string",enum:["current_user","context","default"]},visual_map:{type:"array",maxItems:16,items:{type:"object",additionalProperties:false,properties:{form:{type:"string",enum:require("./shared/image-design-brief").FORMS},text_keys:{type:"array",items:{type:"string"}},expression:{type:"string",maxLength:120}},required:["form","text_keys","expression"]}}},required:["purpose","audience","goal","visual_approach","information_density","density_source","visual_map"]};
-     if (compactPosterBrief) reinforced.properties.design_brief.properties.style_source={
-       type:"string",enum:["user","reference","context","default"],description:"先判断用户本轮是否指定画风、颜色、信息密度、装饰或版式，明确则填 user。明确借用参考或同项目确认的视觉风格填 reference 或 context；未指定并由模型自由设计才填 default。"
-     };
      if (nativeCommercial) reinforced.required=[...new Set([...reinforced.required,"design_brief"])];
+   }
+   if (compactPosterBrief && (fn.name === "image_generate" || plannedSeries)) {
+     const brief = reinforced.properties.design_brief ??= {type:"object",properties:{}};
+     brief.properties.style_source = {
+       type:"string",enum:["user","reference","context","default"],description:"用户明确指定画风、颜色、密度、装饰或版式填 user；明确沿用参考或同项目视觉方向填 reference 或 context；只在用户交由模型设计时填 default。"
+     };
+     brief.properties.grounded_context = {
+       type:"string",maxLength:500,description:"可选。仅写完成本次任务还需要的、已由用户确认的前文信息。不要重复本轮要求，也不要放入布局指令或无关记忆。"
+     };
    }
    if(nativeCommercial){delete reinforced.properties.design_plan;delete reinforced.properties.print_style;
     reinforced.properties.style_reference={type:"object",additionalProperties:false,description:"仅在用户提供参考图时填写。最新风格优先；visual_language分析真实视觉语言，information_structure只借信息组织不沿用旧颜色/字体/光效。reference_roles须有且仅有一张风格参考，产品原件角色不变。",properties:{scope:{type:"string",enum:["visual_language","information_structure"]},palette:{type:"array",minItems:2,maxItems:5,items:{type:"string",pattern:"^#[0-9A-Fa-f]{6}$"}},typography:{type:"string",maxLength:160},graphic_language:{type:"string",maxLength:160},image_integration:{type:"string",maxLength:160},density:{type:"string",maxLength:160}},required:["scope","density"]};}
