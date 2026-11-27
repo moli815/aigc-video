@@ -266,6 +266,7 @@ test('isolated 5.5 poster uses authored wording, ordered references and opt-in d
    ['normal','','default',true],
    ['explicit','用黑白银灰、低饱和，不加装饰。','user',false],
    ['explicit-fallback','做单色，不加装饰。','default',false],
+   ['explicit-without-model-field','银灰杂志风。',undefined,false],
    ['described-by-planner','给它一种肃静质感。','user',false]
  ]){
   const user='照刚才说的做一张海报，照片和 Logo 都用上。'+detail;

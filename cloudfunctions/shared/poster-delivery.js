@@ -132,8 +132,9 @@ function compactBriefEnabled(raw, owner) {
 }
 
 function compactBriefFor(args, intent, referenceRedesign) {
-  const styleSource = args.structured?.design_brief?.style_source;
-  if (!intent.compactPosterBrief || !['user','reference','context','default'].includes(styleSource)
+  if (!intent.compactPosterBrief) return null;
+  const styleSource = userDesignOf(intent.userText) ? 'user' : args.structured?.design_brief?.style_source;
+  if (!['user','reference','context','default'].includes(styleSource)
       || referenceRedesign || intent.currentImageCount > 6 || args.library_refs?.length
       || args.structured?.image_references || args.structured?.print_catalog
       || exactCopyRequested(intent.userText) || intent.userText.length > 640

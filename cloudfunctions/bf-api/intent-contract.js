@@ -401,6 +401,17 @@ function apply(calls, intent, observe) {
       if (requestedAspect) args.aspect_ratio = requestedAspect;
       else delete args.aspect_ratio; // the transport supplies the real source dimensions
       changed = { ...changed, editCanvas: requestedAspect || 'source' };
+      const localRemoval = /(?:只|仅)(?:需|要)?(?:删除|删掉|去掉|移除|擦掉|去除)/.test(intent.userText)
+        && /[左右][上下]角|(?:标题|日期|标识|Logo)(?:的)?(?:右侧|左侧|上方|下方|旁边)/i.test(intent.userText);
+      if (localRemoval && args.source==='last' && !args.structured?.preserve_assets?.length
+          && !args.structured?.image_references && !requestedAspect && intent.userText.length<=1400) {
+        // The requested position and exceptions are already explicit. A
+        // planner may guess the wrong corner or accidentally expand a deletion.
+        args.prompt = intent.userText;
+        args.structured = {text:[],routing:args.structured?.routing};
+        blocks = [];
+        changed.localEditFromUser = true;
+      }
     }
 
     const originalCanvas=intent.roles?.poster?.size;

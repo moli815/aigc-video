@@ -222,3 +222,14 @@ test('four to eight explicit inputs stay compatible with independent-image and s
  assert.equal(make(4,'只用第四张。').use_entire_catalog,false);
  assert.equal(make(8,'把这四张图做成海报。').use_entire_catalog,false);
 });
+
+test('an explicit localized removal preserves the author’s position and keep instruction',()=>{
+ const user='请只删掉刚才生成的海报右上角这两行宣传语：“让园区用电”和“更可靠 更绿色 更高效”。短橙色线、Logo、标题和其他文字保持原样。';
+ const call={function:{name:'image_edit',arguments:JSON.stringify({source:'last',prompt:'删掉左上角的说明，包括短橙色线。',structured:{text:[{role:'title',key:'replacement',text:'新标题'}]}})}};
+ const r=intent.resolve({messages:[{role:'user',content:user}]});
+ const args=JSON.parse(intent.apply([call],r)[0].function.arguments);
+ assert.equal(args.prompt,user);
+ assert.equal(args.source,'last');
+ assert.deepEqual(args.structured.text,[]);
+ assert.equal(args.aspect_ratio,undefined);
+});
