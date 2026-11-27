@@ -248,3 +248,54 @@ test('a smaller photo or larger square Logo is never assigned a role from its ge
  assert.equal(guard.classify(photos,'图一是原海报，把它重绘并加上图二的Logo').poster,photos[0]);
  assert.equal(guard.classify([photos[1]],'在海报上加上这个Logo').logo,photos[1]);
 });
+
+test('isolated 5.5 poster uses authored wording, ordered references and opt-in defaults',async()=>{
+ const {harness}=require('./reference-http-fixture.cjs'),vm=require('node:vm');
+ const {resolve,apply}=require('../cloudfunctions/bf-api/intent-contract');
+ const {sanitizeToolCall}=require('../cloudfunctions/shared/image-delivery');
+ const refs=['https://fixture.myqcloud.com/cabinet.png','https://fixture.myqcloud.com/logo.png'];
+ const rows=[{key:'t',role:'title',text:'园区储能联合运维'},{key:'p',role:'body',text:'额定容量 240 kWh'},
+   ...['负荷核验','现场勘查','接入测试','交付培训','巡检维护','运营复盘'].map((text,i)=>({key:'s'+i,role:'body',text})),
+   {key:'c',role:'contact',text:'400-620-7319'}];
+ const protectedArgs={source:'attached',source_indexes:[1,2],structured:{text:rows,design_brief:{style_source:'default'}}};
+ const protectedIntent={currentImageCount:2,compactPosterBrief:true,userText:'做一张海报，Logo 原样保留。'};
+ assert.equal(poster.compactBriefFor(protectedArgs,protectedIntent,false),null);
+ const h=await harness();
+ vm.runInContext('RT.IMAGE_MODEL_FAST=RT.IMAGE_MODEL_PRO="doubao-seedream-5-5-261028"; RT.IMAGE_COMPOSITION_POLICY=JSON.stringify({compactPosterAccounts:["A"]})',h.context);
+ for(const [name,detail,source,expectsDefault] of [
+   ['normal','','default',true],
+   ['explicit','用黑白银灰、低饱和，不加装饰。','user',false],
+   ['explicit-fallback','做单色，不加装饰。','default',false],
+   ['described-by-planner','给它一种肃静质感。','user',false]
+ ]){
+  const user='照刚才说的做一张海报，照片和 Logo 都用上。'+detail;
+  const messages=[{role:'user',content:[{type:'text',text:user},
+    ...refs.map(url=>({type:'image_url',image_url:{url}}))]}];
+  const raw={function:{name:'image_generate',arguments:JSON.stringify({prompt:'旧规划强制紫色霓虹，仅用来验证拦截。',source:'attached',
+   source_indexes:[1,2],reference_roles:['设备实拍参考','Logo原件'],structured:{text:rows,design_brief:{style_source:source},
+   poster_delivery:{compact_brief:{request:'模型捏造的用户原话'}}}})}};
+  const cleaned=sanitizeToolCall(raw,user);
+  assert.equal(JSON.parse(cleaned.function.arguments).structured.poster_delivery.compact_brief,undefined);
+  const intent={...resolve({messages}),compactPosterBrief:true};
+  const [finalized]=apply([cleaned],intent);
+  const args=JSON.parse(finalized.function.arguments);
+  const payload={requestId:name,prompt:args.prompt,structured:args.structured,reference_roles:args.reference_roles,
+   image:refs,task_kind:'reference',size:'1536x2048'};
+  const response=await h.request('/image',payload);
+  assert.equal(response.status,200,JSON.stringify(response.body));
+  const actual=h.calls.at(-1);
+  assert.deepEqual(actual.image,refs);
+  assert.ok(actual.prompt.startsWith('用户原话：'+user+'\n'));
+  assert.match(actual.prompt,/图1=设备实拍参考.*图2=Logo原件/);
+  assert.equal(actual.prompt.includes('明亮高饱和色'),expectsDefault);
+  assert.doesNotMatch(actual.prompt,/旧规划强制紫色|模型捏造|必须重新设计整张/);
+  for(const {text} of rows) assert.equal(actual.prompt.split('“'+text+'”').length,2);
+  const replay=await h.request('/image',payload);
+  assert.equal(replay.status,200);
+  assert.equal(replay.body.cost,0);
+  assert.equal(h.calls.at(-1),actual);
+  const ordinary=await h.request('/image',{...payload,requestId:name+'-off'},'OTHER');
+  assert.equal(ordinary.status,200);
+  assert.doesNotMatch(h.calls.at(-1).prompt,/^用户原话：/);
+ }
+});

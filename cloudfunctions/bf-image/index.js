@@ -1616,7 +1616,10 @@ async function generate({ prompt, image, size, structured, renderIntent, aspectR
   const needsNoText = overlayMode;
   // 多图输入必须显式编号：否则两张图到了模型也会被搞混（10-28 人物合成事故）
   const visualOnly = composition && (exactPrint || workflowPlan?.catalog);
-  const preparedPrompt = verbatim ?? (visualOnly ? basePrompt : reformat?.prompt);
+  const compactPrompt = nativePoster && !verbatim && !composition && !reformat && !workflowPlan
+    && posterDelivery.compactBriefEnabled(RT.IMAGE_COMPOSITION_POLICY,accountId)
+    ? posterDelivery.compileCompactBrief({structured,density:nativePoster,image,referenceRoles}) : null;
+  const preparedPrompt = verbatim ?? compactPrompt ?? (visualOnly ? basePrompt : reformat?.prompt);
   const finalPrompt = preparedPrompt ?? (multiImageContract(image, referenceRoles, taskKind, workflowPlan, !!scopedReference)
     + basePrompt + (needsNoText ? NO_TEXT_CONSTRAINTS : "") + taskPolicy + (composition&&composition.engine!=="overlay"&&composition.designEngine!=="product_v2"?
       "\n【当前仅绘制视觉素材层】最终成品由服务器按用户画布排版；当前只生成"+(composition.manifest.artwork?.aspectRatio||"3:1")+"的相关真实场景/插画/业务图解，主体横向完整展开，不制作整张海报布局。所有标题、正文、数据、品牌名称和电话由服务器排版一次。不要绘制文字、数字、字母、伪文字、文本卡片或空白文字框，不复刻参考图原有文字。" : ""));

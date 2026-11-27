@@ -342,7 +342,7 @@ function apply(calls, intent, observe) {
     }
     if (observe) observe({ tag: "intent_apply_entry", tool: fn.name, hasIntent: !!intent, hasAny: !!(intent && intent.hasAny), promptChars: args.prompt ? String(args.prompt).length : 0, blocks: blocks ? blocks.length : 0, structuredKeys: args.structured && typeof args.structured === "object" ? Object.keys(args.structured).join(",") : "" });
     if (nativePoster) {
-      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign});
+      args.structured = posterDelivery.mark({ ...args.structured, text: blocks }, intent.userText,{referenceRedesign,compactBrief:posterDelivery.compactBriefFor(args,intent,referenceRedesign)});
       changed = { posterDelivery: true, copyRows: blocks.length };
     }
     // 字符串形态的文案解析成数组后写回，下游（文字层 / 排版）只认数组

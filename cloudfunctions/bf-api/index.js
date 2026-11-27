@@ -2863,6 +2863,7 @@ async function handleChat(req, res) {
   const workflow = require("./shared/image-workflow");
   const posterDelivery=require('./shared/poster-delivery');
   const verbatimPrompt = require('./shared/verbatim-image-prompt').fromMessages(body.messages);
+  const compactPosterPilot = posterDelivery.compactBriefEnabled(RUNTIME.IMAGE_COMPOSITION_POLICY,auth.sub);
   const inferredPoster=isCommercialTask(messages,imageUserText)&&
     posterDelivery.posterRequested('',latestUserText(messages.filter(m=>m?.role==='user').slice(0,-1)));
   const posterPlanner=Array.isArray(body.tools)&&body.tools.some(t=>t?.function?.name==='image_generate')&&
@@ -2895,7 +2896,7 @@ async function handleChat(req, res) {
     if(verbatimPrompt){
       messages=[...messages,{role:"system",content:"本轮用户提供了原样生图的成稿。只确定工具、画布和实际素材，不重新创作文案或设计，不向用户复述。服务端会把成稿原文交给图片模型。"}];
     }else if(posterPlanner){
-      messages=[...messages,{role:"system",content:posterDelivery.PLANNER_GUIDANCE+(ownedPosterBrand?"\n公司确认的Logo原件由服务端放入成品。留一个与构图协调、对比清晰、不挡正文的品牌区，不重画Logo。":"")}];
+      messages=[...messages,{role:"system",content:(compactPosterPilot?posterDelivery.COMPACT_PLANNER_GUIDANCE:posterDelivery.PLANNER_GUIDANCE)+(ownedPosterBrand?"\n公司确认的Logo原件由服务端放入成品。留一个与构图协调、对比清晰、不挡正文的品牌区，不重画Logo。":"")}];
     }
   }
   const beforeLegacyBrand = messages;
@@ -2934,6 +2935,7 @@ async function handleChat(req, res) {
   const memoryTexts = await loadMemoryTexts(auth.sub);
   const intent = intentContract.resolve({ messages, memories: memoryTexts });
   intent.verbatim = verbatimPrompt;
+  intent.compactPosterBrief = compactPosterPilot;
   if (referenceLines.length) intent.referenceLines = referenceLines;
   // 交付要求：自动识别附件角色，把「不许拉伸/不许占位/不许重复/Logo 用原件」等写成约束
   const rg = require("./requirement-guard");
@@ -3056,7 +3058,7 @@ async function handleChat(req, res) {
     model: tier.model,
     stream: wantStream,
   });
-  if (upstreamBody.tools) upstreamBody.tools = verbatimPrompt ? singleReferences.tools : withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner });
+  if (upstreamBody.tools) upstreamBody.tools = verbatimPrompt ? singleReferences.tools : withImageToolSchema(singleReferences.tools, { commercial: isCommercialTask(messages, imageUserText), workflow: workflowActive,nativeCommercial:nativeCommercialActive,posterPlanner,compactPosterBrief:intent.compactPosterBrief });
   if (imageDelivered && Array.isArray(upstreamBody.tools)) {
     upstreamBody.tools = upstreamBody.tools.filter(tool => !RASTER.has(tool?.function?.name));
     if (!upstreamBody.tools.length) delete upstreamBody.tools;

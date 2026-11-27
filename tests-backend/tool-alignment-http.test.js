@@ -176,3 +176,17 @@ test("attachment planning sees the pixels at the selected model, including the h
   assert.equal(f.charges.at(-1).meta.model,up.model);
  }
 });
+
+test('only the named internal account receives the shorter style planning schema',async()=>{
+ const f=await fixture();
+ const tool={type:'function',function:{name:'image_generate',parameters:{properties:{structured:{type:'object',properties:{}}}}}};
+ const messages=[{role:'user',content:'做一张园区储能海报，黑白银灰风格。'}];
+ for(const owner of ['fixture-owner','different-account']){
+  f.rt.IMAGE_COMPOSITION_POLICY=JSON.stringify({compactPosterAccounts:[owner]});
+  assert.equal((await f.request('/api/chat',{stream:false,chatMode:'standard',tools:[tool],messages})).status,200);
+  const sent=f.calls.at(-1);
+  const styleProperty=sent.tools[0].function.parameters.properties.structured.properties.design_brief.properties.style_source;
+  assert.equal(Boolean(styleProperty),owner==='fixture-owner');
+  assert.equal(sent.messages.some(m=>m.role==='system'&&m.content.includes('根据原话标注style_source')),owner==='fixture-owner');
+ }
+});

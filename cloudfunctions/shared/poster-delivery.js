@@ -6,7 +6,7 @@ const POSTER = /海报|招贴|宣传图|活动展架|易拉宝|宣传单|价目�
 const LOCAL_CHANGE = /只(?:需|要)?(?:改|加|换|删)(?:动|修|除)?(?:其中|局部|一下|这个|那块)?(?:logo|标识|二维码|错字|电话|标题|背景|底色|文案|价格|水印|一处)|只改局部|其余.{0,6}(?:不变|别动)/i;
 const SPARSE = /极简|少字|只(?:写|印|放)(?:一个)?(?:主)?标题|大面积留白|纯(?:白|黑|色)(?:底|背景)/;
 const NO_COPY = /不要(?:任何)?(?:文字|文案)|无字(?:底图|海报|背景图)|不(?:写|印|要)(?:任何)?字/;
-const DESIGN_WORDS = /风格|版式|布局|构图|画风|配色|色调|插画|手绘|水彩|极简|留白|复古|摄影|杂志|色(?:底|背景)|(?:换成|改成|改为|换为|做成|采用|用)[^，。！？；\n]{1,24}风(?:的)?(?=[，。！？；\s]|并|同时|$)|(?:不要|别|不用|不加|禁用|不做).{0,8}(?:图标|卡片|文字|装饰|渐变|照片|纯色|背景)/;
+const DESIGN_WORDS = /风格|版式|布局|构图|画风|配色|色调|插画|手绘|水彩|极简|留白|复古|摄影|杂志|低饱和|黑白灰|黑白银灰|水墨|单色|纯色|色(?:底|背景)|(?:换成|改成|改为|换为|做成|采用|用)[^，。！？；\n]{1,24}风(?:的)?(?=[，。！？；\s]|并|同时|$)|(?:不要|别|不用|不加|禁用|不做).{0,8}(?:图标|卡片|文字|装饰|渐变|照片|纯色|背景)/;
 const DELEGATED_DESIGN = /^(?:(?:画面)?(?:的)?(?:风格|版式|排版|布局|构图|配色|色调)[与和、及]?)+(?:由你|交给你|让你|你)?(?:来|自己|自行|自由|随意|看着|灵活|按内容|根据内容)*(?:决定|定|设计|选择|选|安排|发挥|调整|来)?(?:就好|即可|就行)?$/;
 const ROLES = new Set(['title', 'subtitle', 'label', 'body', 'contact', 'footer']);
 const LEGACY_COMPILED = /(?:^|\n)以下文字逐字照写、不得改动；画面不出现其它文字、伪字或乱码：/;
@@ -120,13 +120,68 @@ function exactCopyRequested(request) {
     && /(?:逐字|一字不差|原样)(?:照写|印刷|照印|排印|印上|印在(?:海报|画面|图)上|上图|呈现|保留(?:全部|所有)?(?:文案|文字))|(?:文案|正文|文字)(?:必须|需要|要求)?一字不差/u.test(clause));
 }
 
-function mark(structured, userText, { referenceRedesign = false } = {}) {
+const COMPACT_PLANNER_GUIDANCE = '先确定要做的新海报和真实图片用途。看本轮原图，按附件顺序填写来源，历史图用已有召回。根据原话标注style_source：用户明确样式为user，明确沿用图片风格为reference，同项目确认过的风格为context，其余为default。只把确实需要在画面呈现的已确认内容放进structured.text，采用最新更正，保留品牌、型号、数字、电话和各项用途。把风格和定稿分开，避免擅自固定配色、画布和区块。';
+const COMPACT_DEFAULT = '默认视觉：选贴合主题的明亮高饱和色，层级紧凑；把场景延伸进背景，用相关实景细节、图标或流程图丰富画面。构图由你决定。';
+
+function compactBriefEnabled(raw, owner) {
+  if (typeof owner !== 'string' || !owner) return false;
+  try {
+    const policy = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(policy?.compactPosterAccounts) && policy.compactPosterAccounts.includes(owner);
+  } catch { return false; }
+}
+
+function compactBriefFor(args, intent, referenceRedesign) {
+  const styleSource = args.structured?.design_brief?.style_source;
+  if (!intent.compactPosterBrief || !['user','reference','context','default'].includes(styleSource)
+      || referenceRedesign || intent.currentImageCount > 6 || args.library_refs?.length
+      || args.structured?.image_references || args.structured?.print_catalog
+      || exactCopyRequested(intent.userText) || intent.userText.length > 640
+      || /(?:logo|商标|标志)[^，。；\n]{0,12}(?:原样|像素级|不能改|不要重画|禁止重绘)|原样(?:使用|保留)?[^，。；\n]{0,8}(?:logo|商标|标志)/i.test(intent.userText)) return null;
+  const slots = args.source === 'attached' ? args.source_indexes || [args.source_index || 1] : [];
+  if (slots.some(index => !Number.isInteger(index) || index < 1 || index > intent.currentImageCount)) return null;
+  return { request:intent.userText, slots, style_source:styleSource };
+}
+
+function compileCompactBrief({ structured, density, image, referenceRoles }) {
+  const brief = structured?.poster_delivery?.compact_brief;
+  if (!brief || typeof brief.request !== 'string' || !brief.request.trim() || brief.request.length > 640
+      || !Array.isArray(brief.slots) || new Set(brief.slots).size !== brief.slots.length
+      || brief.slots.some(slot => !Number.isInteger(slot) || slot < 1 || slot > 6)
+      || !['user','reference','context','default'].includes(brief.style_source)) return null;
+  const count = Array.isArray(image) ? image.length : image ? 1 : 0;
+  if (brief.slots.length !== count || (count > 1 && referenceRoles?.length !== count)) return null;
+
+  const refs = brief.slots.map((ordinal, i) => {
+    const role = typeof referenceRoles?.[i] === 'string' ? referenceRoles[i].trim().slice(0,24) : '参考图';
+    const original = ordinal === i+1 ? '' : '（原附件'+ordinal+'）';
+    const preserve = /logo|标志|标识/i.test(role) ? '，完整小幅融入' : /设备|产品/.test(role) ? '，保留原件外形' : '';
+    return '图'+(i+1)+original+'='+role+preserve;
+  });
+  const copy = copyOf(structured).filter(row=>typeof row?.text==='string'&&row.text.trim()).map(row=>'“'+row.text+'”');
+  const contextualStyle = brief.style_source==='context' && typeof structured.design_brief?.visual_approach==='string'
+    ? structured.design_brief.visual_approach.trim().slice(0,160) : '';
+  const referenceStyle = brief.style_source==='reference'
+    ? require('./image-style-reference').compileStyleReference(structured.style_reference,referenceRoles) : '';
+  const noDefaults = density==='sparse' || userDesignOf(brief.request) ||
+    brief.style_source!=='default' || structured.style_reference?.scope==='visual_language';
+  return [
+    '用户原话：'+brief.request,
+    refs.length ? refs.join('；')+'。' : '',
+    contextualStyle ? '同项目已确认的视觉方向：'+contextualStyle : referenceStyle,
+    '画面用已确认文案：'+copy.join('、')+'。',
+    noDefaults ? '' : COMPACT_DEFAULT,
+  ].filter(Boolean).join('\n');
+}
+
+function mark(structured, userText, { referenceRedesign = false, compactBrief = null } = {}) {
   const request=String(userText||'').trim();
   const userDirection=userDesignOf(request);
   return { ...structured, poster_delivery: { version: 1, density: sparseRequested(request) ? 'sparse' : 'dense',
     ...(userDirection ? {user_direction:userDirection}: {}),
     ...(exactCopyRequested(request) ? {exact_copy:true}: {}),
-    ...(referenceRedesign ? {reference_redesign:true}: {}) } };
+    ...(referenceRedesign ? {reference_redesign:true}: {}),
+    ...(compactBrief ? {compact_brief:compactBrief}: {}) } };
 }
 
 function modeFor({ structured, prompt, renderIntent, taskKind, textMode, layerDecomposition, selectedModel }) {
@@ -169,4 +224,4 @@ function compile({ visual, structured, density }) {
     .filter(Boolean).join('\n');
 }
 
-module.exports = { PLANNER_GUIDANCE, DEFAULT_COLOR_DIRECTION, posterRequested, nativePoster, normalizeRows, copyOf, mark, modeFor, compile };
+module.exports = { PLANNER_GUIDANCE, COMPACT_PLANNER_GUIDANCE, DEFAULT_COLOR_DIRECTION, posterRequested, nativePoster, normalizeRows, copyOf, mark, modeFor, compile, compactBriefEnabled, compactBriefFor, compileCompactBrief };

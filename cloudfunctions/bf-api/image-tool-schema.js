@@ -8,7 +8,7 @@ const designPlan={type:"object",description:"可执行构图元数据，可选�
  blocks:{type:"array",maxItems:40,items:{type:"object",properties:{text_keys:{type:"array",items:{type:"string"}},kind:{type:"string",enum:["body","metrics","route","timeline","services","checklist"]}},required:["text_keys","kind"]}}
 }};
 const printStyle={type:"object",description:"可选的准确排字配色，严格遵从用户风格；不改变已有composition字符串。",properties:{palette:{type:"object",properties:{background:{type:"string"},ink:{type:"string"},accent:{type:"string"}},required:["background","ink","accent"]}}};
-function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommercial=false,posterPlanner=false}={}){
+function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommercial=false,posterPlanner=false,compactPosterBrief=false}={}){
  if(!Array.isArray(tools))return tools;
  return tools.map(tool=>{
   const fn=tool?.function,properties=fn?.parameters?.properties;
@@ -26,6 +26,9 @@ function withImageToolSchema(tools,{commercial=false,workflow=false,nativeCommer
   };
    if (fn.name === "image_generate" && (nativeCommercial || posterPlanner)) {
      reinforced.properties.design_brief={type:"object",additionalProperties:false,description:"本轮可执行设计简报。未指定时默认内容充实、图文表达多样；明确极简/短文案等要求优先。按资料选择表达形式，不固定三栏、巨幅截图或某种色板。",properties:{purpose:{type:"string",enum:["action_guide","advertisement","product_explainer","brand_identity","illustration","other"]},audience:{type:"string",maxLength:200},goal:{type:"string",maxLength:400},visual_approach:{type:"string",maxLength:400},information_density:{type:"string",enum:["dense","balanced","sparse"]},density_source:{type:"string",enum:["current_user","context","default"]},visual_map:{type:"array",maxItems:16,items:{type:"object",additionalProperties:false,properties:{form:{type:"string",enum:require("./shared/image-design-brief").FORMS},text_keys:{type:"array",items:{type:"string"}},expression:{type:"string",maxLength:120}},required:["form","text_keys","expression"]}}},required:["purpose","audience","goal","visual_approach","information_density","density_source","visual_map"]};
+     if (compactPosterBrief) reinforced.properties.design_brief.properties.style_source={
+       type:"string",enum:["user","reference","context","default"],description:"先判断用户本轮是否指定画风、颜色、信息密度、装饰或版式，明确则填 user。明确借用参考或同项目确认的视觉风格填 reference 或 context；未指定并由模型自由设计才填 default。"
+     };
      if (nativeCommercial) reinforced.required=[...new Set([...reinforced.required,"design_brief"])];
    }
    if(nativeCommercial){delete reinforced.properties.design_plan;delete reinforced.properties.print_style;

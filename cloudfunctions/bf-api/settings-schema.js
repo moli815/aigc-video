@@ -293,6 +293,7 @@ function validateValue(key, raw, spec, meta) {
     try { parsed = JSON.parse(sv); } catch { return { ok: false, reason: `${m.title || spec.label} 不是合法 JSON` }; }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, reason: `${m.title || spec.label} 必须是 JSON 对象` };
     if(key==="IMAGE_COMPOSITION_POLICY"){
+      if(Object.hasOwn(parsed,"compactPosterAccounts")&&(!Array.isArray(parsed.compactPosterAccounts)||parsed.compactPosterAccounts.length>100||parsed.compactPosterAccounts.some(x=>typeof x!=="string"||!x||x==="*"||x.length>128)))return {ok:false,reason:"精简海报灰度账号必须是最多100项的明确账号数组"};
       if(Object.hasOwn(parsed,"workflowVersion")&&parsed.workflowVersion!==2)return {ok:false,reason:"新图片流程版本只能为2；移除workflowVersion可回到旧流程"};
       if(Object.hasOwn(parsed,"workflowAccountIds")&&(!Array.isArray(parsed.workflowAccountIds)||parsed.workflowAccountIds.length>100||parsed.workflowAccountIds.some(x=>typeof x!=="string"||!x||x.length>128)))return {ok:false,reason:"新图片流程灰度账号必须是最多100项的账号数组，不影响原准确排字accountIds"};
     }
