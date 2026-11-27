@@ -31,3 +31,11 @@ IPA 2026112702 已通过 iPhone 自动验收及分发包校验，适用于 iOS/i
 - 原野长句曾被 30 字上限过滤。候选允许单行最多 1000 字，保留原有项目体量控制。视觉模型产生的转录仍有误字风险，原始图像和用户明确指定的文案优先。
 - 旧模板与新版 prompt 均会在多处表达风格优先级。候选让改版约束只保护未要求改动的标题、栏目、产品、品牌和文字，对用户指定的更新或留白由本轮决定。取消单独的「丰富」词触发，避免用户说「不要丰富装饰」时又要求添加装饰。回放覆盖竖版重排后的热线更新及保留旧文。
 - iPhone 已完整通过。iPad 同轮覆盖升级步骤成功，随后定向测试因组合任务达到超时被取消。相同客户端源码的单独复跑见 [45935070690](https://github.com/moli815/aigc-video/actions/runs/45935070690)。候选回退至 9200e67e，不需要重新出包。
+
+
+## 2026-11-27 11:45 北京时间　完成 IPA 定向复测
+
+IPA 2026112702 的 iPad 单独复跑通过 58 项，0 失败。覆盖 Logo 合成参数、原图选择、生成上下文和导出。覆盖升级步骤已由此前作业验证。样张指标、制作平台的保真参考和未上线范围见本轮验收。
+- 同一稿件像素亮度参考值，范围 0 至 255。贴标版平均 40，双图共同设计版平均 188，ChatGPT 基准平均 76。ChatGPT 样张使用较深底色并以大面积高对比蓝青光线、标题和配图强化视觉焦点。平均亮度只描述这几张样张的明暗，审美需同时看层次、分区和内容可读性。
+- OpenAI 图像编辑指南建议把改动区域与需要保留的属性明确告知模型。Photoshop 的链接智能对象用原资产做成可调整的图层。可复用的方向是由模型设计合适位置，原文件承担需要精确保真的品牌像素。需要独立验证生成后的落位和文字保留，避免将自动贴标的视觉品质标成已验收。没有引入第三方代码、许可证或运行时。[OpenAI 编辑指南](https://developers.openai.com/api/docs/guides/image-prompting) · [Adobe 原素材图层](https://helpx.adobe.com/photoshop/desktop/create-open-import-images/import-files/place-a-file-in-photoshop.html)
+- [IPA 构建和 iPhone 检查](https://github.com/moli815/aigc-video/actions/runs/45929765549) · [iPad 覆盖升级步骤](https://github.com/moli815/aigc-video/actions/runs/45930486916) · [iPad 58 项复跑](https://github.com/moli815/aigc-video/actions/runs/45935070690)。重绘源码候选仍待多主题成图，生产为已验证回读的标题与双参考补丁。此条只补充验证，回滚点沿用前条。
