@@ -36,7 +36,7 @@ async function authorizeImageExecution(req, { enabled, quotaExhausted }) {
   } } };
   const quota = await quotaExhausted(req);
   const denial = quotaDenial(quota);
-  return denial ? { ok: false, denial } : { ok: true, quota };
+  return denial ? { ok: false, denial, replayOnly: denial.body.error === "POOL_EXHAUSTED" } : { ok: true, quota };
 }
 
 module.exports = { capabilityEnabled, quotaDenial, authorizeImageExecution };

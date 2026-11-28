@@ -3,7 +3,7 @@ const { documentOf } = require("./document-store");
 
 // A request ID identifies a paid operation, not a five-minute response cache.
 // Elapsed wall time never proves that an upstream operation failed or was free.
-async function claimImageJob({ db, key, rid, accountId, referenceFingerprint,copyFingerprint, now = Date.now() }) {
+async function claimImageJob({ db, key, rid, accountId, referenceFingerprint,copyFingerprint, replayOnly = false, now = Date.now() }) {
   if(referenceFingerprint!==undefined&&!/^[a-f0-9]{64}$/.test(referenceFingerprint))return {state:'unavailable'};
   if(copyFingerprint!==undefined&&!/^[a-f0-9]{64}$/.test(copyFingerprint))return {state:'unavailable'};
   try {
@@ -15,6 +15,12 @@ async function claimImageJob({ db, key, rid, accountId, referenceFingerprint,cop
       if(row&&(row.copyFingerprint!==undefined||copyFingerprint!==undefined)&&row.copyFingerprint!==copyFingerprint&&!(row.state==='done'&&copyFingerprint===undefined))return{state:'conflict'};
       if (row && row.state === "done") return { state: "done", url: row.url,
         kind: row.kind || "", result: row.result || null, model: row.model || "", asset: row.asset || null };
+      if (replayOnly) {
+        if (row?.state === "processing" || row?.state === "uncertain") {
+          return { state: "busy", confirming: row.state === "uncertain" };
+        }
+        return { state: "unclaimed" };
+      }
       if(row?.state==='copy_rejected')return{state:'copy_rejected'};
       if(copyFingerprint&&row?.copyInput)return{state:'resume_copy',copyInput:row.copyInput};
       if (row && row.state !== "failed") return { state: "busy", confirming: row.state === "uncertain" };

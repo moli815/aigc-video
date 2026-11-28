@@ -452,7 +452,7 @@ async function runSeriesChild(opts) {
   }
   const image = source.image;
   let imageBudgetId;
-  if(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1){
+  if(usesImageBudgetReservations()){
     imageBudgetId='single_budget_'+idemKey(subRid,accountId);
     const amountCny=worstSeriesUnitPrice(resolved,Array.isArray(image)?image.length:image?1:0);
     const reserved=await require('./image-cost-budget').child({db:getDb(),accountId,key:imageBudgetId,parentKeys:[parentRid,'series_budget_'+idemKey(parentRid,accountId)],amountCny,capCny:reqStore.getStore()?.quotaCapCny});
@@ -549,10 +549,14 @@ async function activeReservedCny(accountId,breakdown=false,excludeKey='') {
   }
 }
 
+function usesImageBudgetReservations() {
+  return Number(RT.IMAGE_PRICE_MULTIPLIER) === 1 || reqStore.getStore()?.costBudgetPolicy?.version === 1;
+}
+
 async function reserveQuota(taskId, accountId, amountCny, capCny) {
   if (!(Number(amountCny) > 0)) return false;
   await ensureCollection(RESERVE_COLL);
-  if(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1){
+  if(usesImageBudgetReservations()){
     const r=await require('./image-cost-budget').reserve({db:getDb(),accountId,key:taskId,amountCny,capCny,kind:'series',enabled:true});
     return r.state==='reserved';
   }
@@ -1075,11 +1079,11 @@ function normalizeRid(raw) {
   return "srv-" + Date.now().toString(36) + "-" + crypto.randomBytes(5).toString("hex");
 }
 
-async function claimIdem(rid, accountId, referenceFingerprint,copyFingerprint) {
+async function claimIdem(rid, accountId, referenceFingerprint, copyFingerprint, replayOnly = false) {
   const id = normalizeRid(rid);
   const key = idemKey(id, accountId);
   const db = getDb();
-  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId, referenceFingerprint,copyFingerprint });
+  const claim = await require("./shared/image-job-claim").claimImageJob({ db, key, rid: id, accountId, referenceFingerprint, copyFingerprint, replayOnly });
   if (claim.state === "done" && claim.asset) {
     try {
       const signed = await require("./shared/asset-store").createAssetStore({ db, app: __APP }).sign(accountId, [claim.asset.id]);
@@ -1871,7 +1875,7 @@ const server = http.createServer(async (req, res) => {
     if (!auth) return send(401, { ok: false, code: 401, error: "UNAUTHORIZED", msg: "请重新登录" });
 
     const gate = await paidImageGate(req);
-    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    if (!gate.ok && !gate.replayOnly) return send(gate.denial.status, gate.denial.body);
     const q = gate.quota;
 
     const body = (await readBody(req)) || {};
@@ -1910,6 +1914,8 @@ const server = http.createServer(async (req, res) => {
       }
       return send(200, Object.assign(seriesTaskPayload(existing), { idempotent: true, ms: Date.now() - tStart }));
     }
+
+    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
 
     let referenceInput = { referenceManifest: null, referenceFingerprint: "" };
     try {
@@ -2019,6 +2025,8 @@ const server = http.createServer(async (req, res) => {
       return send(200, Object.assign(seriesTaskPayload(task), { step: idx, reused: true, ms: Date.now() - tStep }));
     }
 
+    // The child transfers its share of this owned reservation in a transaction.
+    if (usesImageBudgetReservations()) reqStore.getStore().excludedReservationId = taskId;
     // A durable task is not a bypass around current membership/quota state.
     // Cache/idempotent reads above remain available without a new paid call.
     const gate = await paidImageGate(req);
@@ -2196,7 +2204,7 @@ const server = http.createServer(async (req, res) => {
     const copyEnabled=!body.structured?.print_catalog && require('./shared/native-copy-policy').eligible(RT.IMAGE_COMPOSITION_POLICY,auth.sub,body);
     if(copyEnabled&&reqStore.getStore())reqStore.getStore().excludedReservationId=require('./native-copy-budget').keyOf(auth.sub,body.requestId);
     const gate = await paidImageGate(req);
-    if (!gate.ok) return send(gate.denial.status, gate.denial.body);
+    if (!gate.ok && !gate.replayOnly) return send(gate.denial.status, gate.denial.body);
     const q = gate.quota;
 
     const prompt = String(body.prompt || "").trim();
@@ -2230,7 +2238,7 @@ const server = http.createServer(async (req, res) => {
       }catch(e){return send(422,{ok:false,error:"IMAGE_REFERENCE_UNAVAILABLE",msg:"本次产品图册或品牌原件无法核对，请重新选择素材。本次未开始生成。"});}
     }
     const copyFingerprint=copyEnabled?nativeCopyFingerprint(body,mixedInput?.referenceFingerprint):undefined;
-    const claim = await claimIdem(rid, auth.sub, catalogFingerprint || mixedInput?.referenceFingerprint,copyFingerprint);
+    const claim = await claimIdem(rid, auth.sub, catalogFingerprint || mixedInput?.referenceFingerprint, copyFingerprint, gate.replayOnly);
     if(claim.state==='conflict')return send(409,{ok:false,error:'IMAGE_REFERENCE_CONFLICT',msg:'这次任务使用的素材已确定，请新建任务来更换素材。'});
     if (claim.state === "done") {
       if (reqStore.getStore()) reqStore.getStore().businessRequestId = rid;
@@ -2254,6 +2262,7 @@ const server = http.createServer(async (req, res) => {
         msg: claim.confirming ? "上一次生成的结果仍在确认中，请稍后查看，暂时不要重复提交。" : "同一张图还在生成中，请稍候再试", retryAfterSec: 30,
       });
     }
+    if (!gate.ok && claim.state !== "unavailable") return send(gate.denial.status, gate.denial.body);
     if(claim.state==='copy_rejected')return send(422,{ok:false,error:'IMAGE_TEXT_REVIEW_REQUIRED',msg:'这次图片的文字与原始资料未能通过复核，请调整需求后重新提交；本次未扣图片额度。'});
     if (!["new","resume_copy"].includes(claim.state)) return send(503, { ok: false, error: "STORAGE_UNAVAILABLE",
       msg: "暂时无法确认这次生成的状态，尚未重复生成，请稍后重试。" });
@@ -2316,7 +2325,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const budgetId='series_budget_'+idemKey(rid,auth.sub);
-      const budget=await require('./image-cost-budget').reserve({db:getDb(),accountId:auth.sub,key:budgetId,amountCny:unitWorst*n,capCny:q.capCny,kind:'series',enabled:Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1});
+      const budget=await require('./image-cost-budget').reserve({db:getDb(),accountId:auth.sub,key:budgetId,amountCny:unitWorst*n,capCny:q.capCny,kind:'series',enabled:usesImageBudgetReservations()});
       if(!['reserved','inactive'].includes(budget.state)){await abortIdem(rid,auth.sub,'quota_insufficient');return send(429,{ok:false,error:'POOL_EXHAUSTED'});}
       const items = [];
       const tSeries = Date.now();
@@ -2390,7 +2399,7 @@ const server = http.createServer(async (req, res) => {
     }
     if(copyInput)nativeReservationId=copyInput.nativeReservationId;
     let imageBudgetId;
-    if(!copyEnabled&&(Number(RT.IMAGE_PRICE_MULTIPLIER)===1||reqStore.getStore()?.costBudgetPolicy?.version===1)){
+    if(!copyEnabled&&(usesImageBudgetReservations())){
       const selected=selectImageRoute({taskKind,qualityTier,prompt:body.prompt,image:body.image,structured:body.structured,textMode:body.text_mode});
       const worst=upstreamCostOf({size:resolveSize(body.size,aspectRatio),model:selected.model||RT.IMAGE_MODEL,inputImages:Array.isArray(body.image)?body.image.length:body.image?1:0,layerDecomposition:body.layer_decomposition===true})*(body.layer_decomposition===true?17:1);
       const key='single_budget_'+idemKey(rid,auth.sub);
@@ -2476,16 +2485,7 @@ const server = http.createServer(async (req, res) => {
         sub: auth.sub, taskKind, qualityTier, model: usedModel,
         reason: out.routeReason || "", retried,
       });
-      // 2026-11-22「保数字」校验：出图后确认规格/价格/克数真的落在画面上。
-      // 线上问题：契约写「栗子泥 40 克」，模型画成「香甜栗子奶油，绵软细腻」——
-      // 字形对了但硬参数被改写成卖点，客户要的规格等于没上画面。
-      // 这里只做诊断（转录 → 归一化子串比对），失败一律 fail-open，绝不影响出图。
-      // ── 出图后审计（2026-11-22 第 18 轮）───────────────────────────────
-      // 两件事：① 数字/规格有没有真的印上去；② 结构有没有硬伤。
-      // 提示词能把上限推高，但压不住下限——同一段需求，模型有时六卡齐全、电话清楚，
-      // 有时只画三张卡还把电话整个省掉。用户看到的是后者，就会来报错。
-      // 所以结构项一旦命中硬伤（标题/电话/署名/过半产品名缺失），就重跑一次取更好的那张；
-      // 说明被润色这类软问题不重跑，重跑也未必更好，不值得多花一份成本。
+      // The result has already been committed. Text review can report omissions only.
       let numberAudit = null;
       try {
         const auditMode = String(RT.NUMBER_AUDIT_MODE || "report").toLowerCase();
@@ -2502,9 +2502,8 @@ const server = http.createServer(async (req, res) => {
 
         const auditTokens = auditMode === "off" ? [] : sa.tokensOf(sources);
         const structItems = structMode === "off" ? null : sa.structuralOf(sources);
-        if (!auditTokens.length) logStage("poster_number_audit_skipped", { reason: "no_tokens", promptLen: String(body.prompt || "").length });
-
-        if (!out.composition?.copyHash && (auditTokens.length || structItems)) {
+        const hasStructuralText = structItems && (structItems.title || structItems.contact || structItems.footer || structItems.names.length);
+        if (!out.composition?.copyHash && (auditTokens.length || hasStructuralText)) {
           // nativeVisionConfig 读 bf_config/runtime（视觉模型只配在 bf-api）；
           // bf-image 侧补了同名环境变量，这里回退一次，避免校验因配置位置不同而永久跳过。
           let visionCfg = null;
@@ -2518,15 +2517,14 @@ const server = http.createServer(async (req, res) => {
             logStage("poster_number_audit_vision_fallback", { reason: String(cfgErr && (cfgErr.code || cfgErr.message)).slice(0, 60), model: envModel });
           }
 
-          const ocrOnce = async url => sa.transcribe({ cfg: visionCfg, imageUrl: url, timeoutMs: 20000 });
-          let ocr = await ocrOnce(out.url);
+          const ocr = await sa.transcribe({ cfg: visionCfg, imageUrl: out.url, timeoutMs: 20000 });
           if (ocr) {
             if (auditTokens.length) {
               numberAudit = sa.check(auditTokens, ocr);
               logStage("poster_number_audit", { checked: numberAudit.checked, missing: numberAudit.missing.slice(0, 8), tokens: auditTokens.slice(0, 6), ocrChars: ocr.length });
             }
-            if (structItems) {
-              let structAudit = sa.checkStructural(structItems, ocr);
+            if (hasStructuralText || (structItems && numberAudit?.missing?.length)) {
+              const structAudit = sa.checkStructural(structItems, ocr);
               // 卡数不能只看产品名：模型会把「隐形矫正」这类词写进右侧服务列表或流程条，
               // OCR 一样能读到，于是产品名判定「齐全」，实际上卡片少画两张（2026-11-22 实测）。
               // 价格只出现在卡片里，所以「缺 2 个以上价格」才是卡数不足的可靠信号。
@@ -2535,49 +2533,8 @@ const server = http.createServer(async (req, res) => {
               if (priceLost.length >= 2 && !structAudit.missing.some(m => m.kind === "prices")) {
                 structAudit.missing.push({ kind: "prices", value: priceLost.join("、"), lost: priceLost.length });
               }
-              // 编号重复：六阶段被排成 S1/S2/S3/S3/S4/S5 时，条目实际少了一个。
-              // 这种场景往往没有价格（课程表），价格判据抓不到，只能靠编号自己暴露。
-              try {
-                const codes = sa.numberingOf(sources);
-                const dupCodes = sa.checkNumbering(codes, ocr);
-                if (dupCodes.length && !structAudit.missing.some(m => m.kind === "numbering")) {
-                  structAudit.missing.push({ kind: "numbering", value: dupCodes.join("、"), dup: dupCodes.length });
-                }
-              } catch {}
-              if (structAudit.missing.length && !out.composition && !require("./shared/verbatim-image-prompt").original(body.structured)) {
+              if (structAudit.missing.length) {
                 logStage("poster_struct_audit", { missing: structAudit.missing.map(m => m.kind), detail: structAudit.missing.slice(0, 3) });
-                // 只重跑一次：硬伤命中的比例不高，多跑一次的收益远大于让用户拿到废图。
-                const hint = "【必填项】上一版漏掉了下面这些内容，这一版必须全部出现、不许省略：" +
-                  structAudit.missing.map(m => m.value || m.kind).join("；") + "。\n";
-                let second = null;
-                try {
-                  second = await generate({
-                    prompt: hint + String(body.prompt || ""),
-                    image: body.image, size: body.size, structured: body.structured,
-                    renderIntent, aspectRatio, layerDecomposition: body.layer_decomposition === true,
-                    layerOptions: sanitizeLayerOptions(body.layer_decomposition_options),
-                    taskKind, qualityTier, requestedCount,
-                    textMode: String(body.text_mode || ""),
-                    referenceRoles: body.reference_roles,
-                    accountId: auth.sub,
-                  });
-                } catch (e2) {
-                  logStage("poster_struct_retry_failed", { reason: String((e2 && (e2.code || e2.message)) || "").slice(0, 80) });
-                }
-                if (second && second.ok && second.url) {
-                  const ocr2 = await ocrOnce(second.url).catch(() => "");
-                  const audit2 = ocr2 ? sa.checkStructural(structItems, ocr2) : { missing: [] };
-                  if (audit2.missing.length < structAudit.missing.length) {
-                    out = second;
-                    structAudit = audit2;
-                    if (auditTokens.length && ocr2) numberAudit = sa.check(auditTokens, ocr2);
-                    logStage("poster_struct_retry_kept", { before: structAudit.missing.length, after: audit2.missing.length });
-                  } else {
-                    logStage("poster_struct_retry_discarded", { still: audit2.missing.map(m => m.kind) });
-                  }
-                } else {
-                  logStage("poster_struct_retry_no_result", { ok: !!(second && second.ok) });
-                }
               }
             }
           } else {
