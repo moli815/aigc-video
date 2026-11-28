@@ -4944,8 +4944,7 @@ async function handleToolEvent(req, res) {
 const handleFoundation = require("./domains/foundation").createFoundationHandler({
   requireMember, readJsonBody, syncV2, eventService, assetStore, sendJson, sendError, logSafe, currentRequestId,
   afterSync:async(owner,records,result)=>{
-    if(!require("./shared/image-workflow").enabled(RUNTIME.IMAGE_COMPOSITION_POLICY,owner)
-      &&!require("./poster-brand-guidance").brandEnabled(RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,owner))return;
+    if(!require("./poster-brand-guidance").indexesCompanyImages(RUNTIME.IMAGE_COMPOSITION_POLICY,RUNTIME.IMAGE_MIXED_REFERENCES_POLICY,owner))return;
     await require("./account-context").createImageMemoryIndexer({db,assetStore,syncService:syncV2,
       observe:fields=>logSafe({tag:"account_image_memory",requestId:currentRequestId(),...fields})})(owner,records,result);
   },

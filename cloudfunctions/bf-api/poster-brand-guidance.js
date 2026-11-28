@@ -13,6 +13,10 @@ function brandEnabled(policy,owner){
   const options=typeof policy==="string"?JSON.parse(policy):policy;
   return options.posterBrand===true;
 }
+function indexesCompanyImages(composition,mixed,owner){
+  return require('./shared/image-workflow').enabled(composition,owner)||brandEnabled(mixed,owner)
+    ||(mixedReferencesEnabled(mixed,owner)&&require('./shared/poster-delivery').compactBriefEnabled(composition,owner));
+}
 function requestedBrand(text){
   return /(?:我们公司|自己公司|我们品牌|本公司|公司(?:自己的)?(?:logo|标志|标识))/i.test(text)
     && !/(?:不要|不用|不需要|无|去掉|去除|删掉|省略|别).{0,12}(?:logo|标识|标志|品牌)/i.test(text)
@@ -46,7 +50,12 @@ function currentImageNeedsCompanyLogo(messages){
   const own=/(?:我们(?:的|公司|企业|品牌)?|本公司|公司|企业|品牌)\s*的?\s*(?:logo|标志|标识|商标)/iu;
   const use=/(?:加|用|放|带|补|配|展示|保留)[^。；;\n]{0,55}(?:logo|标识|标志|商标)/iu;
   const excluded=/(?:不要|不用|不必|不加|不需要|移除|去掉|别用)[^。；;\n]{0,16}(?:logo|标识|标志|商标|历史|这张图)|联名|合作方|合作伙伴的|他们的|客户的|对方的|(?:之前|上一张|上次|刚才|刚生成)的?(?:底图|海报|成图)|(?:这是|这张是|图一是|附件是)[^，。；;\n]{0,16}(?:logo|标识|商标)/iu;
-  return own.test(text)&&use.test(text)&&!excluded.test(text);
+  // The single upload can itself be the logo; it is not necessarily the canvas.
+  const currentLogo=/(?:这(?:个|张|份)|(?:本轮|本次|这次|刚刚?|刚才|新)(?:上传|发来|发给你)|附件(?:中|里)?)(?:的)?\s*(?:(?:我们|我)(?:的)?)?(?:公司|企业|品牌)?的?\s*(?:新版?|新)?\s*(?:logo|标识|标志|商标)/iu;
+  const previousLogo=/(?:以前|之前|上次|历史|先前|原先)[^，,。；;\n]{0,16}(?:logo|标识|标志|商标)/iu;
+  const base=/(?:这[张幅个]|本[轮次]|当前|上传的)\s*(?:的)?[^，,。；;\n]{0,10}(?:图|海报|照片)/u;
+  return own.test(text)&&use.test(text)&&!excluded.test(text)&&!currentLogo.test(text)
+    &&(base.test(text)||previousLogo.test(text));
 }
 
 function bindCurrentWithLogo(args,logo){
@@ -83,13 +92,19 @@ async function lookupCompanyLogo({db,owner,referenceStore,fileIds=[],unique=fals
   });
   if(unique&&matches.length>10)return null;
   matches.splice(10);
-  const messages=await Promise.all(matches.map(({messageId})=>col.doc(syncRecordKey(owner,"message",messageId)).get().then(documentOf)));
-  const {preferred,bindings}=planImageMemory({owner,messages:messages.filter(Boolean),files:matches.map(x=>x.row)});
+  const declarations=[...new Set(matches.map(m=>m.messageId))];
+  const [indexedMessages,recent]=await Promise.all([
+    Promise.all(declarations.map(id=>col.doc(syncRecordKey(owner,"message",id)).get().then(documentOf))),
+    unique&&matches.length<files.length ? col.where({accountId:owner,kind:"message"}).orderBy("revision","desc").limit(100).get() : null
+  ]);
+  const messages=new Map();
+  for(const row of [...indexedMessages,...(recent?.data||[])])if(row)messages.set(row.refId,row);
+  const {preferred,bindings}=planImageMemory({owner,messages:[...messages.values()],files});
   const brand=preferred.company_logo;
   if(!brand||unique&&new Set(bindings.filter(b=>b.role==="company_logo").map(b=>b.asset.id)).size!==1)return null;
   const ref=await referenceStore.prepare(owner,{version:1,mode:"replace",items:[{kind:"library",id:brand.fileId,role:BRAND_ROLE}]});
   return ref.references[0]?.asset.id===brand.asset.id ? brand:null;
 }
 
-module.exports={BRAND_ROLE,brandEnabled,requestedBrand,anchorFor,addBrand,preparePosterBrand,currentImageNeedsCompanyLogo,bindCurrentWithLogo,lookupCompanyLogo};
+module.exports={BRAND_ROLE,brandEnabled,indexesCompanyImages,requestedBrand,anchorFor,addBrand,preparePosterBrand,currentImageNeedsCompanyLogo,bindCurrentWithLogo,lookupCompanyLogo};
 

@@ -15,11 +15,15 @@ async function prepareSingleReferenceGuidance({messages,tools,owner,referenceSto
  const brand=require('./poster-brand-guidance');
  const mixedLogo=bindCompanyLogo && db && brand.currentImageNeedsCompanyLogo(messages);
  const turn=mixedLogo?messages.slice(messages.findLastIndex(m=>m?.role==='user'&&!isHistoryPreview(m))+1):[];
- const recallCalls=new Set(turn.flatMap(m=>m.role==='assistant'?(m.tool_calls||[]).filter(c=>c.function?.name==='recall_history').map(c=>c.id):[]));
- const recalled=turn.some(m=>m.role==='tool'&&recallCalls.has(m.tool_call_id));
- const targeted=recalledIds(turn).filter(id=>ids.includes(id));
+ const imageSearches=new Set();
+ for(const m of turn)if(m.role==='assistant')for(const c of m.tool_calls||[]){
+  if(c.function?.name!=='recall_history')continue;
+  try{if(JSON.parse(c.function.arguments).include_images===true)imageSearches.add(c.id);}catch{}
+ }
+ const issued=recalledIds(turn),targeted=issued.filter(id=>ids.includes(id));
+ const recalled=issued.length>0||turn.some(m=>m.role==='tool'&&imageSearches.has(m.tool_call_id));
  let lookupFailed=false;
- const logo=mixedLogo ? await brand.lookupCompanyLogo({db,owner,referenceStore,fileIds:targeted,unique:true}).catch(()=>{lookupFailed=true;return null;}) : null;
+ const logo=mixedLogo&&(!recalled||targeted.length>0) ? await brand.lookupCompanyLogo({db,owner,referenceStore,fileIds:targeted,unique:true}).catch(()=>{lookupFailed=true;return null;}) : null;
  if(logo&&!ids.includes(logo.fileId))ids.push(logo.fileId);
  const allowed=new Set(ids);
  const required=enforceRequested?require('./poster-reference-readiness').requiredHistoricalSources(messages,allowed):[];

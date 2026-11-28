@@ -24,3 +24,23 @@ test("latest explicit original is preferred, rather than the latest unrelated im
  const p=m.planImageMemory({owner:"a",files:[f2,file()],messages:[message(),msg2]});assert.equal(p.preferred.company_logo.fileId,other);assert.equal(p.bindings.length,2);
 });
 test("missing owner fails closed",()=>assert.throws(()=>m.planImageMemory({owner:"",messages:[],files:[]}),/OWNER_REQUIRED/));
+
+test("a role cannot cross an attachment ordinal, even when separated by just a comma or a space",()=>{
+ const first={...file({id:other}),refId:other};
+ for(const separator of ["，",","," ","；","。\n",""]){
+  const msg=message({attachmentIds:other+","+id,text:"图一是产品图"+separator+"图二是我们公司的 Logo。"});
+  const result=m.planImageMemory({owner:"a",files:[first,file()],messages:[msg]});
+  assert.deepEqual(result.bindings.map(b=>b.fileId),[id]);
+ }
+ const pair=message({attachmentIds:other+","+id,text:"图一是我们的平台界面截图，图二是我们公司的Logo。"});
+ const result=m.planImageMemory({owner:"a",files:[first,file()],messages:[pair]});
+ assert.equal(result.preferred.company_logo.fileId,id);assert.equal(result.preferred.platform_ui.fileId,other);
+});
+test("ordinals retain empty slots and accept explicit roles beyond the first six uploads",()=>{
+ const ids=Array.from({length:13},(_,i)=>i===12?id:other);
+ for(const declaration of ["第十三张是我们公司的Logo","附件13：我们公司的Logo","图13是我们的Logo"]){
+  assert.equal(m.selectedId({attachmentIds:ids.join(","),text:declaration},"company_logo"),id);
+ }
+ assert.equal(m.selectedId({attachmentIds:"bad,"+id,text:"图一是我们的Logo"},"company_logo"),null);
+ assert.equal(m.selectedId({attachmentIds:id,text:"这是我们的Logo，用在图一的页脚"},"company_logo"),id);
+});

@@ -1,5 +1,5 @@
 "use strict";
-const {payload,planImageMemory}=require("./account-image-memory");
+const {payload,planImageMemory,declaredImages}=require("./account-image-memory");
 const {syncRecordKey}=require("./shared/sync-identifiers"),{documentOf}=require("./shared/document-store");
 const MARK="【账号长期资料索引v2】";
 const textOf=m=>typeof m?.content==="string"?m.content:Array.isArray(m?.content)?m.content.filter(x=>x?.type==="text").map(x=>x.text||"").join("\n"):"";
@@ -59,11 +59,21 @@ async function injectAccountContext(messages,{db,owner,enabled,observe=()=>{}}){
 }
 function createImageMemoryIndexer({db,assetStore,syncService,observe=()=>{}}){return async function afterPush(owner,records,result){
  const accepted=(result.acknowledged||[]).filter(r=>!r.discarded&&["message","file"].includes(r.kind));if(!accepted.length)return;
- const messages=accepted.filter(r=>r.kind==="message").map(r=>({...r,accountId:owner})),arrivals=accepted.filter(r=>r.kind==="file");
- // Delayed file upload: inspect a bounded, account-only recent page. No global
- // newest-file fallback and no full-account scan on every sync request.
- if(arrivals.length){const recent=(await db.collection("bf_sync_v2").where({accountId:owner,kind:"message"}).orderBy("revision","desc").limit(100).get()).data||[];messages.push(...recent);}
- const ids=new Set(arrivals.map(r=>r.refId));for(const r of messages){const p=payload(r,owner,"message");if(p?.role==="user"&&/这是|这张是|图[一二三四五六1-6]是/.test(p.text||""))for(const id of String(p.attachmentIds||"").split(","))if(/^[a-f0-9-]{36}$/i.test(id.trim()))ids.add(id.trim().toUpperCase());}
+ const messages=accepted.filter(r=>r.kind==="message").map(r=>({...r,accountId:owner}));
+ const ids=new Set();
+ for(const row of messages){
+  const message=payload(row,owner,"message");
+  if(message?.role==="user")for(const {id} of declaredImages(message))ids.add(id);
+ }
+ const arriving=new Set(accepted.filter(r=>r.kind==="file"&&payload({...r,accountId:owner},owner,"file")?.categoryRaw==="image").map(r=>r.refId));
+ if(arriving.size){
+  const recent=(await db.collection("bf_sync_v2").where({accountId:owner,kind:"message"}).orderBy("revision","desc").limit(100).get()).data||[];
+  for(const row of recent){
+   const message=payload(row,owner,"message");if(message?.role!=="user")continue;
+   const matches=declaredImages(message).filter(({id})=>arriving.has(id));
+   if(matches.length){messages.push(row);for(const {id} of matches)ids.add(id);}
+  }
+ }
  if(!ids.size||ids.size>25)return;
  const files=(await Promise.all([...ids].map(async id=>documentOf(await db.collection("bf_sync_v2").doc(syncRecordKey(owner,"file",id)).get())))).filter(Boolean);
  const plan=planImageMemory({owner,messages,files});if(!plan.mutations.length)return;

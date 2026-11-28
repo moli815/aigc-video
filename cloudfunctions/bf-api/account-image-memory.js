@@ -19,23 +19,43 @@ function explicitRole(text){
  if(/(?:我们|本公司).*(?:管理平台|综合平台|一体化平台|平台首页|平台界面|数据大屏)/.test(s)&&/首页|界面|截图|大屏/.test(s))return "platform_ui";
  return null;
 }
-function idsOf(raw){return typeof raw==="string"?raw.split(",").map(x=>x.trim().toUpperCase()).filter(x=>UUID.test(x)):[];}
+// Resolve each declaration against its own slot in the original upload order.
+function declaredImages(message){
+ const ids=typeof message.attachmentIds==="string"?message.attachmentIds.split(",").map(x=>x.trim().toUpperCase()):[];
+ const text=String(message.text||"");
+ if(!ids.length||/不要记|别记/.test(text))return [];
+ const slots=[...text.matchAll(/(?:图|附件)\s*(\d+|[一二三四五六七八九十]+)|第\s*(\d+|[一二三四五六七八九十]+)\s*张(?:图)?/gu)];
+ const standalone=explicitRole(text.slice(0,slots[0]?.index));
+ if(!slots.length||ids.length===1&&standalone){
+  const role=standalone;
+  return role&&ids.length===1&&UUID.test(ids[0])?[{id:ids[0],role}]:[];
+ }
+ const numerals="一 二 三 四 五 六 七 八 九 十 十一 十二 十三 十四 十五 十六 十七 十八 十九 二十".split(" ");
+ const byId=new Map();
+ for(const [i,slot] of slots.entries()){
+  const number=slot[1]||slot[2],index=/^\d+$/.test(number)?Number(number):numerals.indexOf(number)+1;
+  const id=ids[index-1];if(!id||!UUID.test(id))continue;
+  const clause=text.slice(slot.index+slot[0].length,slots[i+1]?.index).split(/[，,。；;！!\n]/u,1)[0].trim();
+  const declaration=/^(?:是|为|[：:])\s*(.+)$/u.exec(clause);
+  const role=declaration&&explicitRole("这是"+declaration[1]);
+  if(role)byId.set(id,byId.has(id)&&byId.get(id)!==role?null:role);
+ }
+ return [...byId].filter(([,role])=>role).map(([id,role])=>({id,role}));
+}
 function selectedId(message,role){
- const ids=idsOf(message.attachmentIds);if(ids.length===1)return ids[0];
- // Multi-image introductions require an explicit ordinal bound to this role.
- const target=role==="company_logo"?"(?:logo|标识|标志|商标)":"(?:平台|界面|大屏)";
- const hits=[...String(message.text||"").matchAll(new RegExp("图([一二三四五六1-6])[^。；;\\n]{0,45}"+target,"gi"))];
- if(hits.length!==1)return null;
- const n="一二三四五六".indexOf(hits[0][1])+1||Number(hits[0][1]);return ids[n-1]||null;
+ const hits=declaredImages(message).filter(item=>item.role===role);
+ return hits.length===1?hits[0].id:null;
 }
 function planImageMemory({owner,messages,files}){
  if(typeof owner!=="string"||!owner)throw Error("MEMORY_OWNER_REQUIRED");
  const originals=new Map(files.map(r=>[r.refId?.toUpperCase(),{row:r,file:payload(r,owner,"file")}]).filter(([,v])=>v.file?.categoryRaw==="image"&&v.file.asset?.id));
  const bindings=[];
  for(const row of messages){const p=payload(row,owner,"message");if(!p||p.role!=="user"||typeof p.text!=="string")continue;
-  const role=explicitRole(p.text);if(!role)continue;const id=selectedId(p,role),entry=originals.get(id);if(!entry)continue;
   if(!Number.isFinite(p.createdAt)||p.createdAt<=0)continue;
-  bindings.push({role,fileId:id,asset:entry.file.asset,messageId:p.id.toUpperCase(),conversationId:p.conversationId,at:p.createdAt});
+  for(const {id,role} of declaredImages(p)){
+   const entry=originals.get(id);if(!entry)continue;
+   bindings.push({role,fileId:id,asset:entry.file.asset,messageId:p.id.toUpperCase(),conversationId:p.conversationId,at:p.createdAt});
+  }
  }
  const chosen=new Map();for(const b of bindings.sort((a,b)=>b.at-a.at||a.messageId.localeCompare(b.messageId)))if(!chosen.has(b.fileId))chosen.set(b.fileId,b);
  const mutations=[];
@@ -70,4 +90,4 @@ async function repairImageMemory({db,owner,assetStore,syncService,dryRun=true}){
  }
  return {...plan,dryRun,results,scanned:{messages:messages.rows.length,files:files.rows.length}};
 }
-module.exports={TAG,payload,explicitRole,selectedId,planImageMemory,repairImageMemory,loadRows};
+module.exports={TAG,payload,explicitRole,declaredImages,selectedId,planImageMemory,repairImageMemory,loadRows};
